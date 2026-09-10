@@ -1,0 +1,16 @@
+{
+  "name": "eap",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Enterprise Agent Platform — pnpm workspace monorepo",
+  "packageManager": "pnpm@11.21.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
+  }
+}

@@ -1,0 +1,12 @@
+packages:
+  - apps/frontend
+  - packages/api-contract
+
+allowBuilds:
+  esbuild: true
+  sharp: true
+  unrs-resolver: true
+
+overrides:
+  postcss: 8.5.28
+  sharp: 0.35.4
