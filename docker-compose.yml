@@ -136,8 +136,19 @@ services:
         condition: service_healthy
       weaviate:
         condition: service_healthy
+    # Gotcha: this probe checks Redis reachability, not worker liveness — a
+    # hung Celery process still reads healthy. The prior
+    # `celery -A app.celery inspect ping` was dropped because it always fails
+    # here (`mingle: all alone`, exit 125) even when the worker is fine.
+    # Worker process death is covered by `restart: unless-stopped`.
     healthcheck:
-      test: ["CMD-SHELL", "celery -A app.celery inspect ping -d celery@$$HOSTNAME || exit 1"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os, redis; redis.from_url(os.environ['CELERY_BROKER_URL']).ping()",
+        ]
       interval: 30s
       timeout: 10s
       start_period: 60s
