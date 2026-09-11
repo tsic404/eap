@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.config import Settings, get_settings
+from app.dify_console import DifyConsoleClient
 from app.errors import register_exception_handlers
 from app.health import router as health_router
 from app.logging_conf import configure_logging, get_logger
@@ -28,9 +29,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     configure_logging(level=settings.log_level, json_output=settings.log_json)
     log.info("startup", app_env=settings.app_env, version=settings.app_version)
+    dify_console = DifyConsoleClient(settings)
+    app.state.dify_console = dify_console
+    await dify_console.startup()
     try:
         yield
     finally:
+        await dify_console.shutdown()
         log.info("shutdown")
 
 
