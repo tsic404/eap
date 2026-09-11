@@ -10,10 +10,12 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -75,11 +77,22 @@ class AgentRegistry(Base):
     daily_stats: Mapped[list[AgentDailyStat]] = relationship(
         back_populates="agent", cascade="all, delete-orphan", lazy="selectin"
     )
-    run_logs: Mapped[list[RunLog]] = relationship(back_populates="agent", lazy="selectin")
+    run_logs: Mapped[list[RunLog]] = relationship(
+        back_populates="agent", foreign_keys="RunLog.agent_id", lazy="selectin"
+    )
 
     __table_args__ = (
         Index("ix_agent_registry_tenant_id", "tenant_id"),
         Index("ix_agent_registry_tenant_status", "tenant_id", "status"),
+        # Anchor for composite FKs: enables child tables to reference an agent
+        # scoped to the same tenant via (tenant_id, agent_id).
+        UniqueConstraint("tenant_id", "agent_id", name="uq_agent_registry_tenant_agent_id"),
+        # Enforce that created_by belongs to the same tenant as the agent.
+        ForeignKeyConstraint(
+            ["tenant_id", "created_by"],
+            ["users.tenant_id", "users.id"],
+            name="fk_agent_registry_tenant_created_by_users",
+        ),
         CheckConstraint(
             "type IN ('chat', 'workflow', 'agent', 'data')", name="ck_agent_registry_type"
         ),

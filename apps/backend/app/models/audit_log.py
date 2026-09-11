@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, ForeignKeyConstraint, Index, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -34,4 +34,12 @@ class AuditLog(Base):
 
     tenant: Mapped[Tenant] = relationship(back_populates="audit_logs")
 
-    __table_args__ = (Index("ix_audit_logs_tenant_created_at", "tenant_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_audit_logs_tenant_created_at", "tenant_id", "created_at"),
+        # Same-tenant integrity: user must belong to this audit entry's tenant.
+        ForeignKeyConstraint(
+            ["tenant_id", "user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_audit_logs_tenant_user_id_users",
+        ),
+    )

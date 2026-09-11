@@ -4,7 +4,17 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -53,6 +63,14 @@ class ToolRegistry(Base):
 
     __table_args__ = (
         Index("ix_tool_registry_tenant_id", "tenant_id"),
+        # Same-tenant integrity for tenant-scoped tools (skipped for global
+        # tools where tenant_id IS NULL): created_by must belong to the tool's
+        # tenant.
+        ForeignKeyConstraint(
+            ["tenant_id", "created_by"],
+            ["users.tenant_id", "users.id"],
+            name="fk_tool_registry_tenant_created_by_users",
+        ),
         CheckConstraint(
             "risk_level IN ('low', 'medium', 'high')", name="ck_tool_registry_risk_level"
         ),

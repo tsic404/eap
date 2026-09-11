@@ -38,11 +38,25 @@ jobs:
         run: pnpm -r build
 
   backend:
-    name: Backend (lint / typecheck / test / build)
+    name: Backend (lint / typecheck / test / migration / build)
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: apps/backend
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: eap
+          POSTGRES_PASSWORD: eap_password
+          POSTGRES_DB: eap
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U eap -d eap"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -61,6 +75,51 @@ jobs:
 
       - name: Test
         run: pytest
+
+      - name: Migration smoke test (upgrade → downgrade)
+        env:
+          DATABASE_URL: postgresql+asyncpg://eap:eap_password@localhost:5432/eap
+        run: |
+          alembic upgrade head
+          python - <<'PY'
+          import asyncio
+
+          from sqlalchemy import text
+          from sqlalchemy.ext.asyncio import create_async_engine
+
+          COMPOSITE_FKS = {
+              "fk_agent_registry_tenant_created_by_users",
+              "fk_tool_registry_tenant_created_by_users",
+              "fk_tasks_tenant_creator_id_users",
+              "fk_tasks_tenant_assignee_id_users",
+              "fk_user_memories_tenant_user_id_users",
+              "fk_audit_logs_tenant_user_id_users",
+              "fk_run_logs_tenant_agent_id_agent_registry",
+              "fk_run_logs_tenant_user_id_users",
+          }
+
+          async def main() -> None:
+              engine = create_async_engine(
+                  "postgresql+asyncpg://eap:eap_password@localhost:5432/eap"
+              )
+              async with engine.connect() as conn:
+                  rows = (
+                      await conn.execute(
+                          text(
+                              "SELECT constraint_name FROM "
+                              "information_schema.table_constraints "
+                              "WHERE constraint_type = 'FOREIGN KEY'"
+                          )
+                      )
+                  ).scalars().all()
+                  missing = COMPOSITE_FKS - set(rows)
+                  assert not missing, f"missing composite FKs: {sorted(missing)}"
+              await engine.dispose()
+
+          asyncio.run(main())
+          PY
+          alembic downgrade base
+          alembic upgrade head
 
       - name: Build
         run: pip wheel . --no-deps --wheel-dir dist
