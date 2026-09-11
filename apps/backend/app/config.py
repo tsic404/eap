@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     dify_api_base_url: str = "http://localhost:5001"
     dify_api_key: str = ""
+    # Dify Console API (admin/owner) credentials — used by DifyConsoleClient to
+    # obtain a session cookie for app / dataset / model / API-key management.
+    dify_console_email: str = ""
+    dify_console_password: str = ""
 
     # OIDC / SSO
     oidc_issuer: str = ""
