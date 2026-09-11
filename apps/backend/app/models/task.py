@@ -4,7 +4,17 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -51,6 +61,18 @@ class Task(Base):
 
     __table_args__ = (
         Index("ix_tasks_tenant_assignee_status", "tenant_id", "assignee_id", "status"),
+        # Same-tenant integrity: creator and assignee must belong to this
+        # task's tenant (guards against cross-tenant references).
+        ForeignKeyConstraint(
+            ["tenant_id", "creator_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_tasks_tenant_creator_id_users",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "assignee_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_tasks_tenant_assignee_id_users",
+        ),
         CheckConstraint(
             "status IN ('pending', 'approved', 'rejected', 'executing', 'completed', "
             "'failed', 'cancelled')",

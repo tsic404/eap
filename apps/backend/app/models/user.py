@@ -55,13 +55,21 @@ class User(Base):
         back_populates="assignee", foreign_keys="Task.assignee_id", lazy="selectin"
     )
     user_memories: Mapped[list[UserMemory]] = relationship(
-        back_populates="user", cascade="all, delete-orphan", lazy="selectin"
+        back_populates="user",
+        foreign_keys="UserMemory.user_id",
+        cascade="all, delete-orphan",
+        lazy="selectin",
     )
-    run_logs: Mapped[list[RunLog]] = relationship(back_populates="user", lazy="selectin")
+    run_logs: Mapped[list[RunLog]] = relationship(
+        back_populates="user", foreign_keys="RunLog.user_id", lazy="selectin"
+    )
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "sso_sub", name="uq_users_tenant_sso_sub"),
         UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),
+        # Anchor for composite FKs: enables child tables to reference a user
+        # scoped to the same tenant via (tenant_id, user_id).
+        UniqueConstraint("tenant_id", "id", name="uq_users_tenant_id_id"),
         Index("ix_users_tenant_id", "tenant_id"),
         CheckConstraint(
             "role IN ('platform_admin', 'agent_admin', 'knowledge_admin', 'auditor', 'employee')",

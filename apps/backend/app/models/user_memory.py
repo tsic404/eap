@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -51,11 +52,17 @@ class UserMemory(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
-    user: Mapped[User] = relationship(back_populates="user_memories")
+    user: Mapped[User] = relationship(back_populates="user_memories", foreign_keys=[user_id])
     tenant: Mapped[Tenant] = relationship(back_populates="user_memories")
 
     __table_args__ = (
         Index("ix_user_memories_user_tenant", "user_id", "tenant_id"),
+        # Same-tenant integrity: user must belong to this memory's tenant.
+        ForeignKeyConstraint(
+            ["tenant_id", "user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_user_memories_tenant_user_id_users",
+        ),
         CheckConstraint(
             "importance >= 0 AND importance <= 1 AND access_count >= 0",
             name="ck_user_memories_ranges",

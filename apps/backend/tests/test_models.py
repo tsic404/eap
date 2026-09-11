@@ -47,10 +47,11 @@ def test_user_memory_embedding_is_pgvector_1536() -> None:
 @pytest.mark.parametrize(
     ("table", "expected"),
     [
-        ("users", {"uq_users_tenant_sso_sub", "uq_users_tenant_email"}),
+        ("users", {"uq_users_tenant_sso_sub", "uq_users_tenant_email", "uq_users_tenant_id_id"}),
         ("tenants", {"uq_tenants_slug"}),
         ("refresh_tokens", {"uq_refresh_tokens_token_hash"}),
         ("run_logs", {"uq_run_logs_trace_id"}),
+        ("agent_registry", {"uq_agent_registry_tenant_agent_id"}),
     ],
 )
 def test_unique_constraints(table: str, expected: set[str]) -> None:
@@ -70,6 +71,43 @@ def test_foreign_keys_wired() -> None:
     assert "tenants.id" in {fk.target_fullname for fk in tables["users"].foreign_keys}
     assert "tenants.id" in {fk.target_fullname for fk in tables["agent_registry"].foreign_keys}
     assert "users.id" in {fk.target_fullname for fk in tables["tasks"].foreign_keys}
+
+
+def test_tenant_scoped_composite_foreign_keys() -> None:
+    """Same-tenant integrity: child rows must reference parent entities in the
+    same tenant via (tenant_id, <ref>) composite foreign keys (§5.2).
+
+    NULL semantics (PostgreSQL MATCH SIMPLE, the default): if any composite-key
+    component is NULL the constraint is not checked. So global tools in
+    ``tool_registry`` (``tenant_id IS NULL``) bypass the check, as do rows with
+    a nullable reference such as ``tasks.assignee_id`` or ``audit_logs.user_id``.
+    """
+    from sqlalchemy import ForeignKeyConstraint
+
+    tables = Base.metadata.tables
+    expected: list[tuple[str, str, str, str]] = [
+        # (table, fk_name, referred_table, second referred column)
+        ("agent_registry", "fk_agent_registry_tenant_created_by_users", "users", "users.id"),
+        ("tool_registry", "fk_tool_registry_tenant_created_by_users", "users", "users.id"),
+        ("tasks", "fk_tasks_tenant_creator_id_users", "users", "users.id"),
+        ("tasks", "fk_tasks_tenant_assignee_id_users", "users", "users.id"),
+        ("user_memories", "fk_user_memories_tenant_user_id_users", "users", "users.id"),
+        ("audit_logs", "fk_audit_logs_tenant_user_id_users", "users", "users.id"),
+        (
+            "run_logs",
+            "fk_run_logs_tenant_agent_id_agent_registry",
+            "agent_registry",
+            "agent_registry.agent_id",
+        ),
+        ("run_logs", "fk_run_logs_tenant_user_id_users", "users", "users.id"),
+    ]
+    for table, fk_name, referred_table, second_target in expected:
+        constraint = next(c for c in tables[table].constraints if c.name == fk_name)
+        assert isinstance(constraint, ForeignKeyConstraint)
+        elements = constraint.elements
+        assert len(elements) == 2
+        assert elements[0].target_fullname == f"{referred_table}.tenant_id"
+        assert elements[1].target_fullname == second_target
 
 
 def test_check_constraints_present() -> None:

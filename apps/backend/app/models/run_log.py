@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -54,10 +55,11 @@ class RunLog(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-
     tenant: Mapped[Tenant] = relationship(back_populates="run_logs")
-    agent: Mapped[AgentRegistry] = relationship(back_populates="run_logs")
-    user: Mapped[User] = relationship(back_populates="run_logs")
+    agent: Mapped[AgentRegistry] = relationship(
+        back_populates="run_logs", foreign_keys=[agent_id]
+    )
+    user: Mapped[User] = relationship(back_populates="run_logs", foreign_keys=[user_id])
     steps: Mapped[list[TraceStep]] = relationship(
         back_populates="log", cascade="all, delete-orphan", lazy="selectin"
     )
@@ -67,9 +69,20 @@ class RunLog(Base):
     tool_calls: Mapped[list[TraceToolCall]] = relationship(
         back_populates="log", cascade="all, delete-orphan", lazy="selectin"
     )
-
     __table_args__ = (
         Index("ix_run_logs_tenant_created_at", "tenant_id", "created_at"),
+        # Same-tenant integrity: agent and user must belong to this run log's
+        # tenant (guards against cross-tenant references).
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            ["agent_registry.tenant_id", "agent_registry.agent_id"],
+            name="fk_run_logs_tenant_agent_id_agent_registry",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_run_logs_tenant_user_id_users",
+        ),
         CheckConstraint(
             "status IN ('success', 'failed', 'running', 'blocked')", name="ck_run_logs_status"
         ),
