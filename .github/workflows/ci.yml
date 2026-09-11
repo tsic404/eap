@@ -84,3 +84,85 @@ jobs:
             --add-host frontend:127.0.0.1 \
             -v "$PWD/deploy/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro" \
             nginx:1.27-alpine nginx -t
+  # Real Docker Engine only. ubuntu-latest ships dockerd, whereas the local
+  # dev env is a podman shim that cannot substantiate the "no regression under
+  # Docker" acceptance. Brings up dify-worker plus its depends_on (postgres,
+  # redis, weaviate) — the minimal set that exercises the worker's redis-side
+  # probe. Full-stack `docker compose up` is intentionally not used here: it
+  # would rebuild frontend/backend (already covered by their own jobs) and race
+  # two concurrent `flask upgrade-db` runs (api + worker both migrate).
+  dify-worker-healthcheck:
+    name: Dify worker healthcheck (real Docker Engine)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DIFY_SECRET_KEY: ci-worker-healthcheck-only
+      WEAVIATE_API_KEY: ci-worker-healthcheck-only
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start dify-worker stack (postgres, redis, weaviate, dify-worker)
+        run: docker compose up -d dify-worker
+
+      - name: Assert dify-worker HEALTHCHECK healthy
+        run: |
+          container="$(docker compose ps -q dify-worker)"
+          for _ in $(seq 1 30); do
+            status="$(docker inspect --format '{{.State.Health.Status}}' "$container")"
+            if [ "$status" = "healthy" ]; then
+              echo "dify-worker HEALTHCHECK healthy"
+              exit 0
+            fi
+            echo "status=${status}; waiting..."
+            sleep 10
+          done
+          docker inspect --format '{{json .State.Health}}' "$container"
+          echo "::error::dify-worker did not become healthy"
+          exit 1
+
+      - name: Stop redis -> dify-worker goes down
+        run: |
+          # On real Docker, stopping redis makes the worker's main process
+          # (celery) exit, and `restart: unless-stopped` then crash-loops:
+          # each restart runs `flask upgrade-db`, whose redis-backed migration
+          # lock (`db_migration_lock.py` -> `redis.lock.Lock`) cannot be
+          # acquired while redis is down, so the worker never reaches the
+          # healthcheck's "unhealthy" state — it restarts until redis returns.
+          # Pass condition ties the outage to a concrete signal: the
+          # healthcheck flips to "unhealthy", or RestartCount rises above its
+          # pre-stop value (main process exited). A bare "not healthy" is too
+          # weak — it would also accept an unrelated "starting" with no restart.
+          container="$(docker compose ps -q dify-worker)"
+          restarts_before="$(docker inspect --format '{{.RestartCount}}' "$container")"
+          docker compose stop redis
+          for _ in $(seq 1 30); do
+            status="$(docker inspect --format '{{.State.Health.Status}}' "$container")"
+            restarts="$(docker inspect --format '{{.RestartCount}}' "$container")"
+            echo "health=${status} restarts=${restarts} (before=${restarts_before}); waiting..."
+            if [ "$status" = "unhealthy" ] || [ "$restarts" -gt "$restarts_before" ]; then
+              echo "dify-worker went down after redis stopped (health=${status}, restarts=${restarts})"
+              exit 0
+            fi
+            sleep 10
+          done
+          docker inspect --format '{{json .State}}' "$container"
+          docker logs --tail 40 "$container" 2>&1 || true
+          echo "::error::dify-worker remained healthy after redis stopped"
+          exit 1
+
+      - name: Start redis -> dify-worker recovers to healthy
+        run: |
+          docker compose start redis
+          container="$(docker compose ps -q dify-worker)"
+          for _ in $(seq 1 40); do
+            status="$(docker inspect --format '{{.State.Health.Status}}' "$container")"
+            echo "health=${status}; waiting..."
+            if [ "$status" = "healthy" ]; then
+              echo "dify-worker recovered to healthy"
+              exit 0
+            fi
+            sleep 10
+          done
+          docker inspect --format '{{json .State.Health}}' "$container"
+          echo "::error::dify-worker did not recover to healthy"
+          exit 1
