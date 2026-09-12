@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from app.config import Settings, get_settings
 from app.dify_console import DifyConsoleClient
 from app.errors import register_exception_handlers
+from app.events.audit import register_audit_log_handler
 from app.health import router as health_router
 from app.logging_conf import configure_logging, get_logger
 from app.middleware.request_context import RequestContextMiddleware
@@ -62,8 +63,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(CORSMiddleware, allowed_origins=settings.cors_allowed_origins)
     app.add_middleware(HelmetMiddleware)
     app.add_middleware(RequestContextMiddleware)
-
     register_exception_handlers(app)
+    register_audit_log_handler()
     app.include_router(health_router)
 
     return app
