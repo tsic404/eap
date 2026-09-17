@@ -44,7 +44,6 @@ class AgentRegistry(Base):
     description: Mapped[str | None] = mapped_column(Text)
     type: Mapped[str] = mapped_column(String(50), default="chat", nullable=False)
     category: Mapped[str | None] = mapped_column(String(100))
-    visibility: Mapped[str] = mapped_column(String(50), default="department", nullable=False)
     icon: Mapped[str | None] = mapped_column(String(50), default="🤖")
     tags: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="draft", nullable=False)
