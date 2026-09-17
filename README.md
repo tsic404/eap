@@ -57,3 +57,7 @@ uvicorn app.main:app --reload --port 3001
 ## CI
 
 GitHub Actions 在 PR 上运行 `lint` + `typecheck` + `test` + `build`（前端与后端两个 job）。
+
+## 数据库迁移与部署
+
+schema 变更通过 Alembic 管理（`apps/backend/alembic/`）。迁移脚本的部署注意事项——含 NOT VALID → VALIDATE 两阶段外键的窗口期说明——见 [`deploy/migrations.md`](deploy/migrations.md)。
