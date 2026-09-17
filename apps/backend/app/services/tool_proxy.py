@@ -30,7 +30,8 @@ logger = structlog.get_logger(__name__)
 _RETRYABLE_STATUS_CODES = frozenset({502, 503, 504})
 
 # Field-name substrings whose values are masked (case-insensitive). Covers the
-# common PII/credential fields named in the scope: 身份证/手机号/银行卡号/密码.
+# common PII/credential fields named in the scope: 身份证/手机号/银行卡号/密码/
+# 邮箱/邮件, plus specific name keys.
 _PII_KEY_SUBSTRINGS = (
     "password",
     "passwd",
@@ -42,6 +43,15 @@ _PII_KEY_SUBSTRINGS = (
     "idcard",
     "phone",
     "mobile",
+    "email",
+    "mail",
+    "first_name",
+    "last_name",
+    "full_name",
+    "display_name",
+    "user_name",
+    "contact_name",
+    "real_name",
     "bank_card",
     "bankcard",
     "card_no",
@@ -52,6 +62,10 @@ _PII_KEY_SUBSTRINGS = (
     "银行卡",
     "密码",
 )
+
+# Keys masked only on exact match — bare "name" as a substring would also hit
+# filename/hostname/table_name operational metadata.
+_PII_EXACT_KEYS = frozenset({"name"})
 
 
 @dataclass
@@ -79,6 +93,7 @@ _PII_TEXT_PATTERNS = (
     re.compile(r"1[3-9]\d{9}"),  # CN mobile (11 digits)
     re.compile(r"\d{17}[\dXx]"),  # CN id card (18 digits)
     re.compile(r"\d{16,19}"),  # bank/card number
+    re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),  # email
 )
 
 
@@ -86,7 +101,7 @@ def mask_pii(data: Any) -> Any:
     """Recursively replace PII values with ``"***"``.
 
     Structured data is masked by key name; free-text strings are masked by
-    pattern (mobile / id-card / bank-card numbers).
+    pattern (mobile / id-card / bank-card / email).
     """
     if isinstance(data, dict):
         return {
@@ -105,7 +120,9 @@ def mask_pii(data: Any) -> Any:
 
 def _is_pii_key(key: str) -> bool:
     normalized = key.lower()
-    return any(sub in normalized for sub in _PII_KEY_SUBSTRINGS)
+    return normalized in _PII_EXACT_KEYS or any(
+        sub in normalized for sub in _PII_KEY_SUBSTRINGS
+    )
 
 
 AuthInjector = Callable[[ToolRegistry], dict[str, str]]
