@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, Mock
 
 import httpx
@@ -293,6 +294,24 @@ async def test_execute_high_risk_keeps_real_params_in_approval_task() -> None:
     task = session.add.call_args.args[0]
     # The task row is the approver's decision payload — real values, unmasked.
     assert task.payload["params"] == {"phone": "13800138000", "name": "张三"}
+
+
+@pytest.mark.asyncio
+async def test_execute_high_risk_sets_24h_approval_expiry() -> None:
+    session = _make_session()
+    service = ToolService(
+        session,
+        ToolProxy(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"ok": True}))),
+    )
+    before = datetime.now(UTC)
+
+    await service.execute(_make_tool(risk_level="high"), {}, requester=_make_user())
+
+    task = session.add.call_args.args[0]
+    after = datetime.now(UTC)
+    # UC-26-4: pending approval auto-cancels after 24h — pin the timeout contract.
+    assert task.expires_at is not None
+    assert before + timedelta(hours=24) <= task.expires_at <= after + timedelta(hours=24)
 
 
 @pytest.mark.asyncio
