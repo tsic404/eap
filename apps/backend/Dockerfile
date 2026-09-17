@@ -13,9 +13,16 @@ WORKDIR /app
 COPY --from=base /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=base /usr/local/bin /usr/local/bin
 COPY app ./app
+# Alembic needs its config and script tree in the image to run migrations at
+# container start (see docker-entrypoint.sh).
+COPY alembic.ini ./
+COPY alembic ./alembic
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 3001
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=5 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:3001/api/health/live')"
 
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3001"]
