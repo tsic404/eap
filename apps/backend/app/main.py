@@ -12,6 +12,7 @@ from app.auth.refresh import RefreshService
 from app.auth.routes import router as auth_router
 from app.auth.state_store import OidcStateStore
 from app.config import Settings, get_settings
+from app.db import async_session_factory
 from app.dify_console import DifyConsoleClient
 from app.errors import register_exception_handlers
 from app.events.audit import register_audit_log_handler
@@ -29,7 +30,9 @@ from app.middleware.security import (
 )
 from app.middleware.transform import TransformMiddleware
 from app.rate_limit import RedisTokenBucket
+from app.routers.tasks import router as tasks_router
 from app.routers.tools import router as tools_router
+from app.services.task_reconcile import create_scheduler
 from app.services.tool_proxy import ToolProxy
 
 log = get_logger(__name__)
@@ -52,9 +55,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.oidc = oidc
     app.state.state_store = OidcStateStore(redis)
     app.state.refresh_service = RefreshService(settings)
+    app.state.task_reconcile_scheduler.start()
     try:
         yield
     finally:
+        app.state.task_reconcile_scheduler.shutdown(wait=False)
         await oidc.close()
         await redis.aclose()
         await dify_console.shutdown()
@@ -76,6 +81,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.rate_limiter = RedisTokenBucket(settings.redis_url)
     app.state.tool_proxy = ToolProxy()
+    app.state.task_reconcile_scheduler = create_scheduler(async_session_factory)
     # add_middleware prepends, so the LAST added here is the OUTERMOST stage.
     # Execution order: RequestContext → Helmet → CORS → JWT → Tenant → RateLimit
     # → Roles → Transform → router. RequestContext wraps everything for access
@@ -94,6 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(auth_router)
     app.include_router(tools_router)
+    app.include_router(tasks_router)
 
     register_db_pool_metrics()
     register_rq_metrics(settings.redis_url)

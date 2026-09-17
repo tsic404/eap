@@ -9,6 +9,11 @@ from app.events.knowledge import (
     KB_CREATED_EVENT,
     KB_DELETED_EVENT,
 )
+from app.events.task import (
+    TASK_STATUS_CHANGED_EVENT,
+    TaskStatusChangedEvent,
+    emit_task_status_changed,
+)
 
 __all__ = [
     "AUDIT_LOG_EVENT",
@@ -19,6 +24,9 @@ __all__ = [
     "EventBus",
     "KB_CREATED_EVENT",
     "KB_DELETED_EVENT",
+    "TASK_STATUS_CHANGED_EVENT",
+    "TaskStatusChangedEvent",
     "bus",
     "emit_audit_log",
+    "emit_task_status_changed",
 ]
