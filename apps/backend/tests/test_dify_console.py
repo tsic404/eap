@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 from collections.abc import Callable
+from typing import Any
 
 import httpx
 import pytest
@@ -14,6 +15,7 @@ from app.config import Settings
 from app.dify_console import (
     CreateAppParams,
     CreateDatasetParams,
+    CreateDocumentParams,
     DifyConsoleClient,
     DifyConsoleError,
     ModelConfig,
@@ -362,3 +364,115 @@ async def test_refresh_session_forces_relogin() -> None:
 
     await client._refresh_session()  # scheduled refresh must actually re-login
     assert login_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_upload_file_sends_multipart_and_returns_file_id() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/console/api/login":
+            return _login_response()
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["content_type"] = request.headers.get("content-type", "")
+        captured["body"] = request.content
+        return httpx.Response(201, json={"id": "file-1", "name": "report.pdf", "size": 9})
+
+    client, _ = _make_client(handler)
+    file_record = await client.upload_file("report.pdf", b"%PDF-1.7", mimetype="application/pdf")
+
+    assert file_record["id"] == "file-1"
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/console/api/files/upload"
+    assert captured["content_type"].startswith("multipart/form-data; boundary=")
+    body = captured["body"]
+    assert isinstance(body, bytes)
+    assert b'name="file"' in body
+    assert b'filename="report.pdf"' in body
+    assert b"%PDF-1.7" in body
+    assert b'name="source"' in body
+    assert b"datasets" in body
+
+
+@pytest.mark.asyncio
+async def test_create_document_sends_data_source_payload() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/console/api/login":
+            return _login_response()
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["body"] = _json_body(request)
+        return httpx.Response(200, json={"documents": [{"id": "doc-1"}]})
+
+    client, _ = _make_client(handler)
+    result = await client.create_document(
+        "ds-1", CreateDocumentParams(name="report.pdf", file_ids=["file-1"])
+    )
+
+    assert result["documents"][0]["id"] == "doc-1"
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/console/api/datasets/ds-1/documents"
+    assert captured["body"]["name"] == "report.pdf"
+    assert captured["body"]["indexing_technique"] == "high_quality"
+    assert captured["body"]["data_source"] == {
+        "info_list": {
+            "data_source_type": "upload_file",
+            "file_info_list": {"file_ids": ["file-1"]},
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_documents_hits_endpoint_with_pagination() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/console/api/login":
+            return _login_response()
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["query"] = dict(request.url.params)
+        return httpx.Response(200, json={"data": [{"id": "doc-1"}]})
+
+    client, _ = _make_client(handler)
+    result = await client.list_documents("ds-1", page=2, limit=10)
+
+    assert result["data"][0]["id"] == "doc-1"
+    assert captured["method"] == "GET"
+    assert captured["path"] == "/console/api/datasets/ds-1/documents"
+    assert captured["query"] == {"page": "2", "limit": "10"}
+
+
+@pytest.mark.asyncio
+async def test_get_document_indexing_status_hits_endpoint() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/console/api/login":
+            return _login_response()
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        return httpx.Response(200, json={"id": "doc-1", "indexing_status": "completed"})
+
+    client, _ = _make_client(handler)
+    status = await client.get_document_indexing_status("ds-1", "doc-1")
+
+    assert status["indexing_status"] == "completed"
+    assert captured["method"] == "GET"
+    assert captured["path"] == "/console/api/datasets/ds-1/documents/doc-1/indexing-status"
+
+
+@pytest.mark.asyncio
+async def test_document_endpoint_propagates_error_status() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/console/api/login":
+            return _login_response()
+        return httpx.Response(404, json={"message": "not found"})
+
+    client, _ = _make_client(handler)
+    with pytest.raises(DifyConsoleError) as exc_info:
+        await client.get_document_indexing_status("ds-1", "doc-1")
+    assert exc_info.value.status_code == 404

@@ -108,6 +108,24 @@ class CreateDatasetParams(BaseModel):
     provider: str | None = None
 
 
+class CreateDocumentParams(BaseModel):
+    """Payload for ``POST /console/api/datasets/<id>/documents`` (Dify 1.17.0).
+
+    Dify 1.17.0 splits document upload into two steps: the raw file is first
+    uploaded via ``POST /console/api/files/upload`` (multipart), then this
+    payload references the returned file id in ``data_source`` and triggers
+    document creation + async indexing. ``indexing_technique`` is mandatory in
+    the Dify payload (the dataset may not have inherited one yet).
+    """
+
+    name: str
+    file_ids: list[str]
+    indexing_technique: str = "high_quality"
+    doc_form: str = "text_model"
+    doc_language: str = "English"
+    process_rule: dict[str, Any] | None = None
+
+
 class TestApiToolParams(BaseModel):
     """Payload for ``POST /console/api/workspaces/current/tool-provider/api/test/pre``."""
 
@@ -311,6 +329,8 @@ class DifyConsoleClient:
         *,
         json_body: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        files: dict[str, tuple[str, bytes, str]] | None = None,
+        data: dict[str, str] | None = None,
     ) -> Any:
         client = await self._ensure_client()
         await self._ensure_session()
@@ -319,6 +339,8 @@ class DifyConsoleClient:
             f"{self._base_url}{path}",
             json=json_body,
             params=params,
+            files=files,
+            data=data,
             headers=self._csrf_headers(client),
         )
         # Expired session → re-login once and retry the original request.
@@ -330,6 +352,8 @@ class DifyConsoleClient:
                 f"{self._base_url}{path}",
                 json=json_body,
                 params=params,
+                files=files,
+                data=data,
                 headers=self._csrf_headers(client),
             )
         if response.status_code >= 400:
@@ -375,6 +399,56 @@ class DifyConsoleClient:
 
     async def delete_dataset(self, dataset_id: str) -> None:
         await self._request("DELETE", f"/console/api/datasets/{dataset_id}")
+
+    # ────────── document management ──────────
+
+    async def upload_file(self, filename: str, content: bytes, *, mimetype: str) -> Any:
+        """Upload a raw file, returning Dify's file record (its ``id`` is the file id).
+
+        ``source=datasets`` scopes the upload to knowledge ingestion, which Dify
+        uses to apply the dataset file-size limit and editor permission check.
+        """
+        return await self._request(
+            "POST",
+            "/console/api/files/upload",
+            files={"file": (filename, content, mimetype)},
+            data={"source": "datasets"},
+        )
+
+    async def create_document(self, dataset_id: str, params: CreateDocumentParams) -> Any:
+        """Create + start indexing a document from an already-uploaded file id."""
+        body: dict[str, Any] = {
+            "name": params.name,
+            "indexing_technique": params.indexing_technique,
+            "doc_form": params.doc_form,
+            "doc_language": params.doc_language,
+            "data_source": {
+                "info_list": {
+                    "data_source_type": "upload_file",
+                    "file_info_list": {"file_ids": params.file_ids},
+                }
+            },
+        }
+        if params.process_rule is not None:
+            body["process_rule"] = params.process_rule
+        return await self._request(
+            "POST", f"/console/api/datasets/{dataset_id}/documents", json_body=body
+        )
+
+    async def list_documents(
+        self, dataset_id: str, *, page: int = 1, limit: int = 20
+    ) -> Any:
+        return await self._request(
+            "GET",
+            f"/console/api/datasets/{dataset_id}/documents",
+            params={"page": str(page), "limit": str(limit)},
+        )
+
+    async def get_document_indexing_status(self, dataset_id: str, document_id: str) -> Any:
+        return await self._request(
+            "GET",
+            f"/console/api/datasets/{dataset_id}/documents/{document_id}/indexing-status",
+        )
 
     # ────────── API key management ──────────
 
