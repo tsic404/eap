@@ -16,9 +16,25 @@ migration with no actionable detail. Instead each key is created ``NOT VALID``
 (enforced immediately for new writes, existing rows not yet scanned) and then
 validated in a separate ``ALTER TABLE ... VALIDATE CONSTRAINT`` step. If legacy
 cross-tenant rows exist, the validate step fails naming the exact table and
-constraint; fix the data (see below) and re-run ``alembic upgrade head``.
+constraint. The whole migration runs in a single transaction, so a validation
+failure rolls back *everything* already applied — all eight composite foreign
+keys and the two anchor ``UNIQUE`` constraints — leaving the database cleanly at
+the previous revision ``e04d8bd8d64f`` (no partial constraints remain).
 
-Repairing legacy cross-tenant rows: for each named table, list orphan rows with
+Upgrade SOP for databases with legacy cross-tenant rows
+--------------------------------------------------------
+When ``alembic upgrade head`` fails on a ``VALIDATE CONSTRAINT`` step on a
+populated database, follow this ordered procedure:
+
+1. ``alembic downgrade e04d8bd8d64f`` — normalise to the clean pre-migration
+   baseline (a no-op after the atomic rollback, but makes the starting state
+   explicit).
+2. List and repair the violating rows with the LEFT JOIN queries below; delete
+   or re-map every orphan. Check *all* tables in ``_COMPOSITE_FKS``, not only
+   the one named in the failure, so a later validation step cannot fail again.
+3. ``alembic upgrade head`` — re-apply the constraints and re-validate.
+
+Repairing legacy cross-tenant rows: for each table, list orphan rows with
 ``SELECT * FROM <table> t LEFT JOIN users u ON u.id = t.<ref> AND u.tenant_id =
 t.tenant_id WHERE t.<ref> IS NOT NULL AND u.id IS NULL`` (substitute the
 ``agent_registry`` parent for ``run_logs.agent_id``), then delete or re-map them
