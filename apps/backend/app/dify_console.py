@@ -400,6 +400,18 @@ class DifyConsoleClient:
     async def delete_dataset(self, dataset_id: str) -> None:
         await self._request("DELETE", f"/console/api/datasets/{dataset_id}")
 
+    async def create_dataset_api_key(self) -> Any:
+        """Create a tenant-scoped dataset API key (Dify 1.17.0 ``dataset-*``).
+
+        Returns ``{"id", "type", "token"}``; ``token`` is the bearer used
+        against ``/v1/datasets/<id>/retrieve``.
+        """
+        return await self._request("POST", "/console/api/datasets/api-keys")
+
+    async def get_dataset_api_keys(self) -> Any:
+        """List the tenant's existing dataset API keys (``{"data": [...]}``)."""
+        return await self._request("GET", "/console/api/datasets/api-keys")
+
     # ────────── document management ──────────
 
     async def upload_file(self, filename: str, content: bytes, *, mimetype: str) -> Any:
