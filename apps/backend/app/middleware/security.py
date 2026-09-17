@@ -1,13 +1,9 @@
 """Security middleware: Helmet, CORS whitelist, rate limit, and identity context.
 
 Pipeline order (outermost → innermost) matches the architecture doc §4.2:
-
-    Helmet → CORS → RateLimit → JWT → Tenant → Roles
-
-Enforcement (401/403 on protected routes) is out of scope here and lands in
-TSI-2851 (OIDC/JWT) and TSI-2852 (RBAC). These middlewares establish the
-pipeline and resolve request *context* — the identity they discover is bound to
-the structlog context and exposed on ``request.state`` for downstream use.
+Helmet → CORS → RateLimit → JWT → Tenant → Roles. Route enforcement (401/403)
+lives in the OIDC/JWT and RBAC work; the JWT, tenant, and roles middlewares
+resolve request *context*, bound to structlog and exposed on ``request.state``.
 """
 
 import time
@@ -141,8 +137,7 @@ class RateLimitMiddleware:
     """Per-IP sliding-window rate limiter.
 
     In-memory and therefore per-process — acceptable for the single-worker
-    skeleton. The Redis-backed token bucket (with per-route limits) is the
-    explicit scope of TSI-2867.
+    skeleton. A Redis-backed token bucket (with per-route limits) is planned.
     """
 
     def __init__(self, app: ASGIApp, settings: Settings) -> None:
@@ -210,8 +205,8 @@ class JWTMiddleware:
 
     The signature is always verified (RS256). Without ``jwt_public_key`` no
     token can be authenticated, so identity stays unset rather than trusting an
-    unverified payload. Authorization decisions are the ``get_current_user`` /
-    ``require_roles`` dependencies of TSI-2851/2852.
+    unverified payload. Authorization decisions belong to the OIDC/JWT and RBAC
+    work.
     """
 
     def __init__(self, app: ASGIApp, settings: Settings) -> None:

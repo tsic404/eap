@@ -55,7 +55,7 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
     ]
 
-    # Rate limiting (per-IP sliding window; Redis token bucket lands in TSI-2867).
+    # Rate limiting (per-IP sliding window; Redis token bucket planned later).
     rate_limit_enabled: bool = True
     rate_limit_requests: int = 100
     rate_limit_window_seconds: int = 60
