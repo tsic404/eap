@@ -2,6 +2,7 @@
 
 import { Bell, LogOut, Settings, User } from "lucide-react";
 
+import { useRole } from "@/components/auth/role-context";
 import { Button } from "@/components/ui/button";
 import { Dropdown } from "@/components/ui/dropdown";
 import { WorkspaceSwitcher } from "@/components/layout/workspace-switcher";
@@ -14,10 +15,11 @@ const USER_MENU_ITEMS = [
 
 /** Top application bar: workspace switcher, notifications, user menu. */
 export function Header() {
+  const role = useRole();
   return (
     <header className="flex h-14 items-center gap-3 border-b border-border bg-background px-4">
       <span className="text-sm font-semibold text-foreground">EAP</span>
-      <WorkspaceSwitcher />
+      <WorkspaceSwitcher role={role} />
       <div className="ml-auto flex items-center gap-1">
         <Button variant="ghost" size="sm" className="h-9 w-9 p-0" aria-label="通知">
           <Bell className="h-4 w-4" />

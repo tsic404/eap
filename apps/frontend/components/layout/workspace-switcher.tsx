@@ -5,6 +5,7 @@ import { useState } from "react";
 import { ChevronsUpDown } from "lucide-react";
 
 import { Dropdown } from "@/components/ui/dropdown";
+import { canAccessAdmin, type UserRole } from "@/lib/roles";
 
 const WORKSPACES = [
   { value: "user", label: "用户工作区" },
@@ -12,6 +13,8 @@ const WORKSPACES = [
 ] as const;
 
 export interface WorkspaceSwitcherProps {
+  /** Current user's role; employee sees the user workspace only. */
+  role?: UserRole;
   value?: string;
   defaultValue?: string;
   onChange?: (value: string) => void;
@@ -19,16 +22,20 @@ export interface WorkspaceSwitcherProps {
 
 /** Switches between the user and admin workspaces. */
 export function WorkspaceSwitcher({
+  role = "employee",
   value,
   defaultValue = "user",
   onChange,
 }: WorkspaceSwitcherProps) {
+  const workspaces = WORKSPACES.filter(
+    (workspace) => canAccessAdmin(role) || workspace.value === "user",
+  );
   const [internalValue, setInternalValue] = useState(defaultValue);
   const isControlled = value !== undefined;
   const currentValue = isControlled ? value : internalValue;
   const current =
-    WORKSPACES.find((workspace) => workspace.value === currentValue) ??
-    WORKSPACES[0];
+    workspaces.find((workspace) => workspace.value === currentValue) ??
+    workspaces[0];
 
   const select = (nextValue: string) => {
     if (!isControlled) setInternalValue(nextValue);
@@ -45,7 +52,7 @@ export function WorkspaceSwitcher({
           <ChevronsUpDown className="h-4 w-4 text-muted-foreground" />
         </>
       }
-      items={WORKSPACES.map((workspace) => ({
+      items={workspaces.map((workspace) => ({
         value: workspace.value,
         label: workspace.label,
         onSelect: () => select(workspace.value),
