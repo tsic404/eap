@@ -12,7 +12,7 @@ from app.models.agent import (
 )
 from app.models.audit_log import AuditLog
 from app.models.base import Base
-from app.models.knowledge import KnowledgeBaseRegistry
+from app.models.knowledge import KnowledgeBaseRegistry, KnowledgeDocument
 from app.models.refresh_token import RefreshToken
 from app.models.run_log import RunLog, TraceCitation, TraceStep, TraceToolCall
 from app.models.task import Task
@@ -30,6 +30,7 @@ __all__ = [
     "AuditLog",
     "Base",
     "KnowledgeBaseRegistry",
+    "KnowledgeDocument",
     "RefreshToken",
     "RunLog",
     "Task",

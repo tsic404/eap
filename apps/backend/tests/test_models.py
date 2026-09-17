@@ -14,6 +14,7 @@ EXPECTED_TABLES = {
     "agent_tool_bindings",
     "audit_logs",
     "knowledge_base_registry",
+    "knowledge_documents",
     "refresh_tokens",
     "run_logs",
     "task_outbox_events",
