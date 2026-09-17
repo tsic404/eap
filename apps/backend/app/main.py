@@ -12,6 +12,7 @@ from app.auth.refresh import RefreshService
 from app.auth.routes import router as auth_router
 from app.auth.state_store import OidcStateStore
 from app.config import Settings, get_settings
+from app.controllers.knowledge import router as knowledge_router
 from app.dify_console import DifyConsoleClient
 from app.errors import register_exception_handlers
 from app.events.audit import register_audit_log_handler
@@ -29,6 +30,7 @@ from app.middleware.security import (
 )
 from app.middleware.transform import TransformMiddleware
 from app.rate_limit import RedisTokenBucket
+from app.services.knowledge import KnowledgeService
 
 log = get_logger(__name__)
 
@@ -40,6 +42,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log.info("startup", app_env=settings.app_env, version=settings.app_version)
     dify_console = DifyConsoleClient(settings)
     app.state.dify_console = dify_console
+    app.state.knowledge_service = KnowledgeService(dify_console, settings=settings)
     await dify_console.startup()
 
     # Auth runtime: a shared Redis client (lazy — no connection until first use)
@@ -90,6 +93,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_audit_log_handler()
     app.include_router(health_router)
     app.include_router(auth_router)
+    app.include_router(knowledge_router)
 
     register_db_pool_metrics()
     register_rq_metrics(settings.redis_url)
