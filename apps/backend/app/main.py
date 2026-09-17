@@ -3,9 +3,14 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import redis.asyncio as aioredis
 from fastapi import FastAPI
 from prometheus_fastapi_instrumentator import Instrumentator
 
+from app.auth.oidc import OidcClient
+from app.auth.refresh import RefreshService
+from app.auth.routes import router as auth_router
+from app.auth.state_store import OidcStateStore
 from app.config import Settings, get_settings
 from app.dify_console import DifyConsoleClient
 from app.errors import register_exception_handlers
@@ -36,9 +41,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     dify_console = DifyConsoleClient(settings)
     app.state.dify_console = dify_console
     await dify_console.startup()
+
+    # Auth runtime: a shared Redis client (lazy — no connection until first use)
+    # backs the OIDC state store; the OIDC client owns its httpx transport.
+    redis = aioredis.from_url(settings.redis_url)
+    oidc = OidcClient(settings)
+    app.state.redis = redis
+    app.state.oidc = oidc
+    app.state.state_store = OidcStateStore(redis)
+    app.state.refresh_service = RefreshService(settings)
     try:
         yield
     finally:
+        await oidc.close()
+        await redis.aclose()
         await dify_console.shutdown()
         await app.state.rate_limiter.aclose()
         log.info("shutdown")
@@ -73,6 +89,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_exception_handlers(app)
     register_audit_log_handler()
     app.include_router(health_router)
+    app.include_router(auth_router)
 
     register_db_pool_metrics()
     register_rq_metrics(settings.redis_url)
