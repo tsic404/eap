@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.main import create_app
 from app.middleware.security import RateLimitMiddleware
+from app.rate_limit import InMemoryTokenBucket
 
 
 def test_success_response_wrapped_in_data(client: TestClient) -> None:
@@ -60,8 +61,11 @@ def test_request_id_generated_and_echoed(client: TestClient) -> None:
 
 
 def test_rate_limit_rejects_excess_requests() -> None:
+    # In-memory limiter keeps the test deterministic and free of shared Redis
+    # state; the Redis-backed path is covered in test_rate_limit.py.
     settings = Settings(_env_file=None, rate_limit_requests=1, rate_limit_window_seconds=60)
-    app: FastAPI = create_app(settings=settings)
+    app = FastAPI()
+    app.add_middleware(RateLimitMiddleware, settings=settings, limiter=InMemoryTokenBucket())
 
     @app.get("/api/test/echo")
     def echo() -> dict[str, str]:

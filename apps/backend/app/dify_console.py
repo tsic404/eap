@@ -174,10 +174,11 @@ class DifyConsoleClient:
             return
         try:
             await self.login()
-        except DifyConsoleError:
+        except (DifyConsoleError, httpx.HTTPError):
             # Dify may not be ready yet (compose ordering). Don't crash the app;
-            # the 25-min refresh job and on-demand 401 re-login will recover.
-            log.exception("dify_console_login_failed_at_startup")
+            # the failure is already logged once in _do_login and the 25-min
+            # refresh job and on-demand 401 re-login will recover.
+            pass
         self._start_scheduler()
 
     async def shutdown(self) -> None:
@@ -223,7 +224,8 @@ class DifyConsoleClient:
             await self.login(force=True)
             log.info("dify_console_session_refreshed")
         except (DifyConsoleError, httpx.HTTPError):
-            log.exception("dify_console_session_refresh_failed")
+            # Already logged once in _do_login.
+            pass
         finally:
             if self._refresh_task is asyncio.current_task():
                 self._refresh_task = None
@@ -251,18 +253,40 @@ class DifyConsoleClient:
 
     async def _do_login(self) -> None:
         client = await self._ensure_client()
-        response = await client.post(
-            f"{self._base_url}{_LOGIN_PATH}",
-            json={"email": self._email, "password": _encode_password(self._password)},
-        )
+        try:
+            response = await client.post(
+                f"{self._base_url}{_LOGIN_PATH}",
+                json={"email": self._email, "password": _encode_password(self._password)},
+            )
+        except httpx.HTTPError:
+            self._logged_in = False
+            # Single error log (with traceback) for the whole login-failure path:
+            # callers only pass, never re-log, so one transport error yields one
+            # error entry.
+            log.exception(
+                "dify_console_login_failed",
+                resource="dify_console",
+                reason="transport_error",
+            )
+            raise
         if response.status_code != 200:
             self._logged_in = False
+            log.error(
+                "dify_console_login_failed",
+                resource="dify_console",
+                status_code=response.status_code,
+            )
             raise DifyConsoleError(response.status_code, response.text)
         # The login response sets access_token / refresh_token / csrf_token
         # cookies; httpx's cookie jar stores them and re-sends them on later
         # requests to this origin.
         if client.cookies.get(_ACCESS_TOKEN_COOKIE) is None:
             self._logged_in = False
+            log.error(
+                "dify_console_login_failed",
+                resource="dify_console",
+                reason="missing_access_token",
+            )
             raise DifyConsoleError(
                 response.status_code,
                 "Dify login response is missing the access_token cookie",

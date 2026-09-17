@@ -36,6 +36,29 @@ def _redact_sensitive(_: WrappedLogger, __: str, event_dict: EventDict) -> Event
     return sanitized
 
 
+def _canonicalise_observability_fields(
+    _: WrappedLogger, __: str, event_dict: EventDict
+) -> EventDict:
+    """Normalise every entry to the observability contract (§22.3).
+
+    Each log line carries ``action`` (the event name) plus ``resource``,
+    ``resourceId``, ``tenantId``, ``userId`` and ``duration`` so downstream
+    consumers can rely on a stable schema. Identity/duration context bound as
+    snake_case (``tenant_id`` / ``user_id`` / ``duration_ms``) is promoted to
+    the canonical camelCase names.
+    """
+    event_dict["action"] = event_dict.pop("event", "")
+    if "tenantId" not in event_dict and "tenant_id" in event_dict:
+        event_dict["tenantId"] = event_dict.pop("tenant_id")
+    if "userId" not in event_dict and "user_id" in event_dict:
+        event_dict["userId"] = event_dict.pop("user_id")
+    if "duration" not in event_dict and "duration_ms" in event_dict:
+        event_dict["duration"] = event_dict.pop("duration_ms")
+    for key in ("resource", "resourceId", "tenantId", "userId", "duration"):
+        event_dict.setdefault(key, None)
+    return event_dict
+
+
 def configure_logging(*, level: str = "INFO", json_output: bool = True) -> None:
     """Configure structlog globally. Idempotent — safe to call per-app creation."""
     level_value = getattr(logging, level.upper(), logging.INFO)
@@ -47,6 +70,7 @@ def configure_logging(*, level: str = "INFO", json_output: bool = True) -> None:
 
     processors: Iterable[Processor] = [
         structlog.contextvars.merge_contextvars,
+        _canonicalise_observability_fields,
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.stdlib.add_logger_name,

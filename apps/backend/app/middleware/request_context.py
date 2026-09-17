@@ -40,6 +40,8 @@ class RequestContextMiddleware:
             path=path,
             tenant_id=None,
             user_id=None,
+            resource="http",
+            resourceId=path,
         )
 
         start = time.perf_counter()

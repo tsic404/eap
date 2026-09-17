@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator, Callable
 
 import httpx
@@ -113,6 +114,36 @@ async def test_get_retries_on_502_then_succeeds(monkeypatch: pytest.MonkeyPatch)
         assert calls["n"] == 2
     finally:
         await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_get_502_emits_warn_log(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _freeze_sleep(monkeypatch)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(502, content=b"bad gateway")
+        return httpx.Response(200, json={"ok": True})
+
+    client = _client(handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger="app.services.dify_client"):
+            assert await client.get("/v1/info") == {"ok": True}
+    finally:
+        await client.aclose()
+
+    retry_logs = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if "dify_api_retry" in record.getMessage()
+    ]
+    assert retry_logs
+    assert retry_logs[0]["action"] == "dify_api_retry"
+    assert retry_logs[0]["status_code"] == 502
 
 
 @pytest.mark.asyncio

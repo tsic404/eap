@@ -55,10 +55,17 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
     ]
 
-    # Rate limiting (per-IP sliding window; Redis token bucket planned later).
+    # Rate limiting (Redis token bucket with in-memory fallback). The global
+    # limit is a token bucket: ``rate_limit_requests`` is
+    # the burst capacity and ``rate_limit_window_seconds`` the refill window,
+    # so the default (100 / 1s) is 100 requests per second per client IP.
     rate_limit_enabled: bool = True
     rate_limit_requests: int = 100
-    rate_limit_window_seconds: int = 60
+    rate_limit_window_seconds: int = 1
+    # Per-route limits (tokens per minute).
+    rate_limit_login_per_minute: int = 10
+    rate_limit_conversation_per_minute: int = 20
+    rate_limit_upload_per_minute: int = 10
     # Number of trusted reverse proxies in front of the app. When > 0 the rate
     # limiter reads the client IP from X-Forwarded-For at that hop depth instead
     # of trusting the header's leftmost (spoofable) value.

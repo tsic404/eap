@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from collections.abc import Callable
 
 import httpx
@@ -77,6 +78,28 @@ async def test_login_base64_encodes_password() -> None:
     assert captured["body"]["password"] == base64.b64encode(_PASSWORD.encode("utf-8")).decode(
         "ascii"
     )
+
+
+@pytest.mark.asyncio
+async def test_login_failure_emits_error_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, content=b"internal error")
+
+    client, _ = _make_client(handler)
+    with caplog.at_level(logging.ERROR, logger="app.dify_console"):
+        with pytest.raises(DifyConsoleError):
+            await client.login()
+
+    errors = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if "dify_console_login_failed" in record.getMessage()
+    ]
+    assert errors
+    assert errors[0]["action"] == "dify_console_login_failed"
+    assert errors[0]["status_code"] == 500
 
 
 @pytest.mark.asyncio
