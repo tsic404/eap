@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+import uuid
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 import pytest_asyncio
@@ -11,6 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models  # noqa: F401  # registers every model on Base.metadata
@@ -53,10 +55,38 @@ def _create_tables(conn: object) -> None:
     Base.metadata.create_all(conn, checkfirst=True)  # type: ignore[arg-type]
 
 
+@pytest_asyncio.fixture(scope="session")
+async def test_database_url() -> AsyncIterator[str]:
+    """Provision a process-unique database and drop it at session end.
+
+    Concurrent pytest processes share ``TEST_DATABASE_URL``, so their schema
+    setup and teardown race (two ``create_all`` calls building the same tables
+    simultaneously). Each process instead creates its own throwaway database on
+    the same server, so processes never touch each other's schema or rows.
+    """
+    base_url = make_url(TEST_DATABASE_URL)
+    db_name = f"{base_url.database}_test_{uuid.uuid4().hex[:12]}"
+    isolated_url = base_url.set(database=db_name)
+
+    # CREATE/DROP DATABASE cannot run inside a transaction; AUTOCOMMIT executes
+    # each statement directly against the shared maintenance database.
+    admin_engine = create_async_engine(TEST_DATABASE_URL, isolation_level="AUTOCOMMIT")
+    try:
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+        try:
+            yield isolated_url.render_as_string(hide_password=False)
+        finally:
+            async with admin_engine.connect() as conn:
+                await conn.execute(text(f'DROP DATABASE "{db_name}" WITH (FORCE)'))
+    finally:
+        await admin_engine.dispose()
+
+
 @pytest_asyncio.fixture
-async def session_factory():
+async def session_factory(test_database_url: str):
     """Yield a session factory against an isolated full-schema database."""
-    engine = create_async_engine(TEST_DATABASE_URL)
+    engine = create_async_engine(test_database_url)
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(_drop_tables)

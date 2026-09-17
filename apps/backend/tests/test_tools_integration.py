@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import uuid
 from collections.abc import AsyncIterator
 
 import asyncpg
@@ -24,6 +25,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -39,9 +41,18 @@ from app.services.tool_proxy import ToolProxy
 _ADMIN_DSN = os.environ.get(
     "TEST_DB_ADMIN_DSN", "postgresql://eap:eap_password@localhost:5432/postgres"
 )
-_TEST_DB_NAME = "eap_tools_integration"
 _TEST_DSN = os.environ.get(
-    "TEST_DB_DSN", f"postgresql://eap:eap_password@localhost:5432/{_TEST_DB_NAME}"
+    "TEST_DB_DSN", "postgresql://eap:eap_password@localhost:5432/eap_tools_integration"
+)
+# A process-unique database name so concurrent pytest processes each get their
+# own throwaway database instead of racing CREATE/DROP on a shared name — this
+# holds for the default DSN and an explicit TEST_DB_DSN alike.
+_base_db_name = make_url(_TEST_DSN).database
+if not _base_db_name:
+    raise ValueError("TEST_DB_DSN must include a database name")
+_TEST_DB_NAME = f"{_base_db_name}_{uuid.uuid4().hex[:12]}"
+_TEST_DSN = make_url(_TEST_DSN).set(database=_TEST_DB_NAME).render_as_string(
+    hide_password=False
 )
 _TEST_ASYNC_URL = _TEST_DSN.replace("postgresql://", "postgresql+asyncpg://", 1)
 
