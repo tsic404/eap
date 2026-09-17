@@ -52,18 +52,30 @@ def _freeze_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_mask_pii_masks_sensitive_fields_recursively() -> None:
     data = {
-        "user": {"phone": "13800138000", "id_card": "110101", "name": "张三"},
+        "user": {
+            "phone": "13800138000",
+            "id_card": "110101",
+            "name": "张三",
+            "email": "alice@acme.com",
+            "mail": "bob@acme.com",
+        },
         "items": [{"password": "s3cret"}],
     }
     masked = mask_pii(data)
     assert masked["user"]["phone"] == "***"
     assert masked["user"]["id_card"] == "***"
-    assert masked["user"]["name"] == "张三"
+    assert masked["user"]["name"] == "***"
+    assert masked["user"]["email"] == "***"
+    assert masked["user"]["mail"] == "***"
     assert masked["items"][0]["password"] == "***"
 
 
 def test_mask_pii_masks_free_text_mobile() -> None:
     assert mask_pii("call 13800138000 now") == "call *** now"
+
+
+def test_mask_pii_masks_free_text_email() -> None:
+    assert mask_pii("contact alice@acme.com for help") == "contact *** for help"
 
 
 # -- auth injection ----------------------------------------------------------

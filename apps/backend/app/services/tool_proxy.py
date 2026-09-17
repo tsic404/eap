@@ -30,7 +30,8 @@ logger = structlog.get_logger(__name__)
 _RETRYABLE_STATUS_CODES = frozenset({502, 503, 504})
 
 # Field-name substrings whose values are masked (case-insensitive). Covers the
-# common PII/credential fields named in the scope: 身份证/手机号/银行卡号/密码.
+# common PII/credential fields named in the scope: 身份证/手机号/银行卡号/密码/
+# 邮箱/姓名/邮件.
 _PII_KEY_SUBSTRINGS = (
     "password",
     "passwd",
@@ -42,6 +43,9 @@ _PII_KEY_SUBSTRINGS = (
     "idcard",
     "phone",
     "mobile",
+    "email",
+    "mail",
+    "name",
     "bank_card",
     "bankcard",
     "card_no",
@@ -79,6 +83,7 @@ _PII_TEXT_PATTERNS = (
     re.compile(r"1[3-9]\d{9}"),  # CN mobile (11 digits)
     re.compile(r"\d{17}[\dXx]"),  # CN id card (18 digits)
     re.compile(r"\d{16,19}"),  # bank/card number
+    re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),  # email
 )
 
 
@@ -86,7 +91,7 @@ def mask_pii(data: Any) -> Any:
     """Recursively replace PII values with ``"***"``.
 
     Structured data is masked by key name; free-text strings are masked by
-    pattern (mobile / id-card / bank-card numbers).
+    pattern (mobile / id-card / bank-card / email).
     """
     if isinstance(data, dict):
         return {
