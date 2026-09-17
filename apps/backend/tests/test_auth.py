@@ -350,3 +350,123 @@ async def test_callback_state_replay_returns_400(session_factory) -> None:  # ty
     finally:
         await http.aclose()
         await mock_http.aclose()
+
+
+# ── SSO end-to-end contract regression (UC-01-1 / UC-01-4) ──
+#
+# These assert the HTTP-level contract the frontend relies on, so a regression
+# in the OIDC wiring surfaces here without a real browser. The "Max-Age=900"
+# wording in the original gap conflates two distinct values: ``expiresIn: 900``
+# is the access-token TTL returned in the refresh response BODY, while the
+# refresh cookie itself carries the 30-day refresh TTL (2592000s).
+
+
+def _set_cookie_attrs(response: httpx.Response) -> dict[str, str]:
+    """Parse a response's ``Set-Cookie`` header into a lowercase attribute map.
+
+    Flags without a value (``HttpOnly``) map to ``"true"``; valued attributes
+    keep their raw string. The cookie's name/value are exposed as ``name`` and
+    ``value``.
+    """
+    header = response.headers.get("set-cookie")
+    assert header, "expected a Set-Cookie header"
+    segments = [segment.strip() for segment in header.split(";")]
+    name, _, value = segments[0].partition("=")
+    attrs: dict[str, str] = {"name": name, "value": value}
+    for segment in segments[1:]:
+        key, sep, val = segment.partition("=")
+        attrs[key.lower()] = val if sep else "true"
+    return attrs
+
+
+def _assert_refresh_cookie(attrs: dict[str, str]) -> None:
+    """Assert the refresh-cookie contract the frontend depends on."""
+    assert attrs["name"] == "refresh_token"
+    assert attrs["value"]
+    assert attrs.get("httponly") == "true"
+    assert attrs.get("path") == "/api/auth"
+    assert attrs.get("samesite") == "lax"
+    # 30-day refresh TTL — NOT the 900s access-token TTL (see module note).
+    assert attrs.get("max-age") == "2592000"
+
+
+@pytest.mark.asyncio
+async def test_callback_sets_refresh_cookie_contract(session_factory) -> None:  # type: ignore[no-untyped-def]
+    """Callback issues the refresh cookie with the documented attributes."""
+    idp = _FakeIdP()
+    http, mock_http = await _start_callback_flow(idp, session_factory)
+    try:
+        state, nonce = await _begin_login(http)
+        idp.nonce = nonce
+
+        callback = await http.get(
+            f"/api/auth/callback?code=c1&state={state}", follow_redirects=False
+        )
+        assert callback.status_code == 302, callback.text
+        assert callback.headers["location"] == "/user"
+        _assert_refresh_cookie(_set_cookie_attrs(callback))
+    finally:
+        await http.aclose()
+        await mock_http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_refresh_rotates_cookie_with_contract(session_factory) -> None:  # type: ignore[no-untyped-def]
+    """Refresh mints a fresh cookie (same attributes, new value) + ``expiresIn: 900``."""
+    idp = _FakeIdP()
+    http, mock_http = await _start_callback_flow(idp, session_factory)
+    try:
+        state, nonce = await _begin_login(http)
+        idp.nonce = nonce
+        await http.get(
+            f"/api/auth/callback?code=c1&state={state}", follow_redirects=False
+        )
+        original = http.cookies.get("refresh_token")
+        assert original
+
+        refresh = await http.post("/api/auth/refresh")
+        assert refresh.status_code == 200, refresh.text
+        data = refresh.json()["data"]
+        assert data["expiresIn"] == 900
+        assert data["accessToken"]
+
+        rotated = _set_cookie_attrs(refresh)
+        _assert_refresh_cookie(rotated)
+        assert rotated["value"] != original  # the cookie actually rotated
+    finally:
+        await http.aclose()
+        await mock_http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_logout_revokes_family_and_clears_cookie(session_factory) -> None:  # type: ignore[no-untyped-def]
+    """Logout clears the cookie and revokes the family: the old cookie is dead."""
+    idp = _FakeIdP()
+    http, mock_http = await _start_callback_flow(idp, session_factory)
+    try:
+        state, nonce = await _begin_login(http)
+        idp.nonce = nonce
+        await http.get(
+            f"/api/auth/callback?code=c1&state={state}", follow_redirects=False
+        )
+        await http.post("/api/auth/refresh")
+        active = http.cookies.get("refresh_token")
+        assert active
+
+        logout = await http.post("/api/auth/logout")
+        assert logout.status_code == 200, logout.text
+        clear = _set_cookie_attrs(logout)
+        assert clear["name"] == "refresh_token"
+        assert clear["max-age"] == "0"
+
+        # The revoked family no longer authenticates: replaying the active
+        # cookie after logout yields 401 (TOKEN_REUSE_DETECTED).
+        http.cookies.clear()
+        replay = await http.post(
+            "/api/auth/refresh",
+            headers={"Cookie": f"refresh_token={active}"},
+        )
+        assert replay.status_code == 401, replay.text
+    finally:
+        await http.aclose()
+        await mock_http.aclose()

@@ -1,8 +1,11 @@
 /**
- * Access-token store. The backend owns the token lifecycle: it sets the access
- * token in a JS-readable cookie on login/refresh and clears it on logout. This
- * module caches that cookie in memory so the request interceptor can attach it
- * as a bearer token without parsing cookies on every call.
+ * Access-token store.
+ *
+ * The backend delivers the access token in the `POST /api/auth/refresh` response
+ * body (`data.accessToken`); `http-client.ts` persists it here. It is mirrored
+ * into a JS-readable cookie so the request interceptor can attach it as a
+ * bearer token without a round-trip to memory, and so a rotation performed by
+ * another tab is visible to this one.
  *
  * The cookie (not memory) is the cross-tab source of truth. The refresh guard
  * in `http-client.ts` compares the raw cookie against the in-memory token to
@@ -46,6 +49,11 @@ export function readAccessTokenCookie(): string | null {
 
 export function setAccessToken(token: string | null): void {
   memoryToken = token;
+  if (typeof document !== "undefined") {
+    document.cookie = token
+      ? `${ACCESS_TOKEN_COOKIE}=${encodeURIComponent(token)}; path=/`
+      : `${ACCESS_TOKEN_COOKIE}=; Max-Age=0; path=/`;
+  }
 }
 
 /**

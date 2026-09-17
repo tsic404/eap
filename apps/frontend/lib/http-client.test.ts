@@ -21,7 +21,7 @@ vi.mock("axios", () => ({
 }));
 
 import { refreshAccessToken } from "./http-client";
-import { clearAccessToken, setAccessToken } from "./token-store";
+import { clearAccessToken, readAccessTokenCookie, setAccessToken } from "./token-store";
 
 const COOKIE = "eap_access_token";
 
@@ -59,15 +59,15 @@ afterEach(() => {
 });
 
 describe("refreshAccessToken", () => {
-  it("returns the rotated token read back from the cookie", async () => {
-    postMock.mockImplementationOnce(async () => {
-      setCookie("new-token");
-      return { data: { code: 0, data: { expiresIn: 900 } } };
-    });
+  it("returns the access token from the refresh body and persists it", async () => {
+    postMock.mockImplementationOnce(async () => ({
+      data: { code: 0, data: { accessToken: "new-token", expiresIn: 900 } },
+    }));
 
     const token = await refreshAccessToken();
 
     expect(token).toBe("new-token");
+    expect(readAccessTokenCookie()).toBe("new-token");
     expect(postMock).toHaveBeenCalledTimes(1);
   });
 
@@ -78,8 +78,7 @@ describe("refreshAccessToken", () => {
     const first = refreshAccessToken();
     const second = refreshAccessToken();
 
-    setCookie("rotated");
-    resolve({ data: { code: 0, data: { expiresIn: 900 } } });
+    resolve({ data: { code: 0, data: { accessToken: "rotated", expiresIn: 900 } } });
 
     const [a, b] = await Promise.all([first, second]);
     expect(postMock).toHaveBeenCalledTimes(1);
@@ -108,10 +107,9 @@ describe("refreshAccessToken", () => {
 
 describe("response interceptor", () => {
   it("replays a 401 request after refreshing", async () => {
-    postMock.mockImplementationOnce(async () => {
-      setCookie("fresh-token");
-      return { data: { code: 0, data: { expiresIn: 900 } } };
-    });
+    postMock.mockImplementationOnce(async () => ({
+      data: { code: 0, data: { accessToken: "fresh-token", expiresIn: 900 } },
+    }));
 
     const onRejected = responseUse.mock.calls[0][1];
     const headersSet = vi.fn();
