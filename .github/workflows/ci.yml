@@ -60,12 +60,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.1.0
+        with:
+          enable-cache: true
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: |
+          uv sync --extra dev --locked
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Lint
         run: ruff check .
@@ -123,7 +130,7 @@ jobs:
           alembic upgrade head
 
       - name: Build
-        run: pip wheel . --no-deps --wheel-dir dist
+        run: uv build --wheel
 
   e2e:
     name: E2E (SSO regression)

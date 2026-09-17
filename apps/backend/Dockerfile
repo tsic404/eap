@@ -1,17 +1,25 @@
-FROM python:3.12-slim AS base
+FROM python:3.12-slim AS builder
 ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
 WORKDIR /app
 
+# Standalone uv binary from its official distroless image; pin for reproducibility.
+COPY --from=ghcr.io/astral-sh/uv:0.12.15 /uv /uvx /bin/
+
+# Locked production deps only, layered ahead of the source so this caches.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --locked --no-dev --no-install-project
+
+# Install the project itself (non-editable, so the venv is self-contained).
 COPY . .
-RUN pip install .
+RUN uv sync --locked --no-dev --no-editable
 
 FROM python:3.12-slim AS runtime
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONUNBUFFERED=1 \
+    PATH="/app/.venv/bin:$PATH"
 WORKDIR /app
-COPY --from=base /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=base /usr/local/bin /usr/local/bin
+COPY --from=builder /app/.venv /app/.venv
 COPY app ./app
 # Alembic needs its config and script tree in the image to run migrations at
 # container start (see docker-entrypoint.sh).
