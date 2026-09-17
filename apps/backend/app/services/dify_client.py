@@ -3,6 +3,11 @@
 Wraps the terminal-user Service API endpoints with retry on transient
 502/504 responses, exponential backoff, per-request/stream timeouts, and a
 per-path circuit breaker. See architecture doc §21.1.
+
+Multi-instance limitation (§30.5): the circuit breaker and retry counters are
+per-process state. Running several backend workers gives each worker its own
+view of upstream health — a shared breaker would require moving the state into
+Redis, which is out of scope here.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ import httpx
 import structlog
 
 from app.core.exceptions import DifyApiError
+from app.metrics import DIFY_API_DURATION, DIFY_API_REQUESTS
 
 logger = structlog.get_logger(__name__)
 
@@ -105,6 +111,7 @@ class DifyClientService:
         a failed stream records a circuit failure and raises immediately.
         """
         self._raise_if_circuit_open(path)
+        started = time.perf_counter()
         try:
             async with self._client.stream(
                 "POST",
@@ -121,11 +128,17 @@ class DifyClientService:
                 # Record success only after the body has been fully consumed: a
                 # timeout/transport error mid-stream is a failure, not a success.
                 self._record_success(path)
+                DIFY_API_REQUESTS.labels(path=path, outcome="success").inc()
+                DIFY_API_DURATION.labels(path=path).observe(time.perf_counter() - started)
         except DifyApiError:
             self._record_failure(path)
+            DIFY_API_REQUESTS.labels(path=path, outcome="failure").inc()
+            DIFY_API_DURATION.labels(path=path).observe(time.perf_counter() - started)
             raise
         except httpx.TransportError as exc:
             self._record_failure(path)
+            DIFY_API_REQUESTS.labels(path=path, outcome="failure").inc()
+            DIFY_API_DURATION.labels(path=path).observe(time.perf_counter() - started)
             raise DifyApiError(504, f"Dify stream interrupted: {exc}") from exc
 
     async def aclose(self) -> None:
@@ -139,6 +152,7 @@ class DifyClientService:
         retries: int,
     ) -> dict[str, Any]:
         self._raise_if_circuit_open(path)
+        started = time.perf_counter()
         last_error: Exception | None = None
         for attempt in range(retries + 1):
             try:
@@ -153,17 +167,36 @@ class DifyClientService:
                         parsed = response.json()
                     except json.JSONDecodeError:
                         self._record_failure(path)
+                        DIFY_API_REQUESTS.labels(path=path, outcome="failure").inc()
+                        DIFY_API_DURATION.labels(path=path).observe(
+                            time.perf_counter() - started
+                        )
                         raise DifyApiError(502, "Dify returned a non-JSON response") from None
                     self._record_success(path)
+                    DIFY_API_REQUESTS.labels(path=path, outcome="success").inc()
+                    DIFY_API_DURATION.labels(path=path).observe(
+                        time.perf_counter() - started
+                    )
                     return cast(dict[str, Any], parsed)
                 last_error = DifyApiError(response.status_code, response.text)
                 if response.status_code not in _RETRYABLE_STATUS_CODES:
                     break
+                DIFY_API_REQUESTS.labels(path=path, outcome="retry").inc()
+                logger.warning(
+                    "dify_api_retry",
+                    resource="dify_api",
+                    resourceId=path,
+                    status_code=response.status_code,
+                    attempt=attempt + 1,
+                    retry_in_seconds=2**attempt,
+                )
             if attempt == retries:
                 break
             await asyncio.sleep(2**attempt)
 
         self._record_failure(path)
+        DIFY_API_REQUESTS.labels(path=path, outcome="failure").inc()
+        DIFY_API_DURATION.labels(path=path).observe(time.perf_counter() - started)
         if isinstance(last_error, DifyApiError):
             raise last_error
         raise DifyApiError(504, f"Dify API request failed: {last_error}") from last_error
@@ -173,11 +206,13 @@ class DifyClientService:
         if breaker is None or not breaker.open:
             return
         if time.monotonic() - breaker.opened_at < self.CIRCUIT_RECOVERY_SECONDS:
+            DIFY_API_REQUESTS.labels(path=path, outcome="circuit_open").inc()
             raise DifyApiError(503, "Circuit breaker open for Dify API")
         # Recovery window elapsed → half-open. Admit exactly one trial request:
         # ``open`` stays True and ``half_open`` reserves the trial so concurrent
         # callers are still rejected with 503.
         if breaker.half_open:
+            DIFY_API_REQUESTS.labels(path=path, outcome="circuit_open").inc()
             raise DifyApiError(503, "Circuit breaker open for Dify API")
         breaker.half_open = True
 

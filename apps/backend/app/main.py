@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.config import Settings, get_settings
 from app.dify_console import DifyConsoleClient
@@ -11,6 +12,7 @@ from app.errors import register_exception_handlers
 from app.events.audit import register_audit_log_handler
 from app.health import router as health_router
 from app.logging_conf import configure_logging, get_logger
+from app.metrics import register_db_pool_metrics, register_rq_metrics
 from app.middleware.request_context import RequestContextMiddleware
 from app.middleware.security import (
     CORSMiddleware,
@@ -21,6 +23,7 @@ from app.middleware.security import (
     TenantMiddleware,
 )
 from app.middleware.transform import TransformMiddleware
+from app.rate_limit import RedisTokenBucket
 
 log = get_logger(__name__)
 
@@ -37,6 +40,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await dify_console.shutdown()
+        await app.state.rate_limiter.aclose()
         log.info("shutdown")
 
 
@@ -51,21 +55,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = settings
+    app.state.rate_limiter = RedisTokenBucket(settings.redis_url)
+
     # add_middleware prepends, so the LAST added here is the OUTERMOST stage.
-    # Execution order: RequestContext → Helmet → CORS → RateLimit → JWT →
-    # Tenant → Roles → Transform → router. RequestContext wraps everything for
-    # access logging; Transform is innermost so it wraps handler responses.
+    # Execution order: RequestContext → Helmet → CORS → JWT → Tenant → RateLimit
+    # → Roles → Transform → router. RequestContext wraps everything for access
+    # logging; Transform is innermost so it wraps handler responses. RateLimit
+    # sits after JWT/Tenant so per-user buckets can key on the resolved identity.
     app.add_middleware(TransformMiddleware)
     app.add_middleware(RolesMiddleware)
+    app.add_middleware(RateLimitMiddleware, settings=settings, limiter=app.state.rate_limiter)
     app.add_middleware(TenantMiddleware)
     app.add_middleware(JWTMiddleware, settings=settings)
-    app.add_middleware(RateLimitMiddleware, settings=settings)
     app.add_middleware(CORSMiddleware, allowed_origins=settings.cors_allowed_origins)
     app.add_middleware(HelmetMiddleware)
     app.add_middleware(RequestContextMiddleware)
     register_exception_handlers(app)
     register_audit_log_handler()
     app.include_router(health_router)
+
+    register_db_pool_metrics()
+    register_rq_metrics(settings.redis_url)
+
+    instrumentator = Instrumentator(
+        should_group_status_codes=False,
+        should_ignore_untemplated=True,
+        should_respect_env_var=False,
+        excluded_handlers=["/metrics", "/api/health/.*", "/api/health"],
+    )
+    instrumentator.instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
     return app
 

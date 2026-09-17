@@ -1,12 +1,14 @@
 """Security middleware: Helmet, CORS whitelist, rate limit, and identity context.
 
 Pipeline order (outermost → innermost) matches the architecture doc §4.2:
-Helmet → CORS → RateLimit → JWT → Tenant → Roles. Route enforcement (401/403)
-lives in the OIDC/JWT and RBAC work; the JWT, tenant, and roles middlewares
-resolve request *context*, bound to structlog and exposed on ``request.state``.
+
+    Helmet → CORS → JWT → Tenant → RateLimit → Roles
+
+Route enforcement (401/403) lives in the OIDC/JWT and RBAC work; the JWT,
+tenant, and roles middlewares resolve request *context*, bound to structlog and
+exposed on ``request.state``.
 """
 
-import time
 from collections.abc import Iterable
 from typing import Any, cast
 
@@ -17,6 +19,13 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.config import Settings
 from app.errors import error_response
+from app.rate_limit import (
+    RateLimitRule,
+    RedisTokenBucket,
+    TokenBucket,
+    build_rules,
+    matches_path,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -134,20 +143,25 @@ class CORSMiddleware:
 
 
 class RateLimitMiddleware:
-    """Per-IP sliding-window rate limiter.
+    """Token-bucket rate limiter over Redis (with an in-memory fallback).
 
-    In-memory and therefore per-process — acceptable for the single-worker
-    skeleton. A Redis-backed token bucket (with per-route limits) is planned.
+    Every non-health request is checked against the global per-IP bucket, then
+    against any per-route rule whose path prefix matches. Per-route rules keyed
+    ``per_user`` use the authenticated user id (set by ``JWTMiddleware``, which
+    runs before this stage) and fall back to the client IP when anonymous.
     """
 
-    def __init__(self, app: ASGIApp, settings: Settings) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        settings: Settings,
+        limiter: TokenBucket | None = None,
+    ) -> None:
         self.app = app
         self.enabled = settings.rate_limit_enabled
-        self.limit = settings.rate_limit_requests
-        self.window = settings.rate_limit_window_seconds
         self.trusted_proxy_count = settings.trusted_proxy_count
-        self._hits: dict[str, list[float]] = {}
-        self._last_sweep = 0.0
+        self._limiter = limiter if limiter is not None else RedisTokenBucket(settings.redis_url)
+        self._rules = build_rules(settings)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or not self.enabled:
@@ -160,30 +174,32 @@ class RateLimitMiddleware:
             return
 
         client_ip = self._client_ip(scope)
-        now = time.monotonic()
-        self._sweep(now)
-        cutoff = now - self.window
-        hits = [t for t in self._hits.get(client_ip, ()) if t > cutoff]
-        if len(hits) >= self.limit:
-            self._hits[client_ip] = hits
-            response = error_response(429, "RATE_LIMITED", "Rate limit exceeded")
-            await response(scope, receive, send)
-            return
+        state = scope.setdefault("state", {})
+        user_id = state.get("user_id")
+        for rule in self._rules:
+            if rule.path_prefixes and not matches_path(path, rule.path_prefixes):
+                continue
+            key = self._bucket_key(rule, client_ip, user_id)
+            granted = await self._limiter.acquire(key, rule.capacity, rule.refill_per_second)
+            if not granted:
+                log.warning(
+                    "rate_limited",
+                    resource="rate_limit",
+                    resourceId=rule.name,
+                    client_ip=client_ip,
+                    user_id=user_id,
+                    path=path,
+                )
+                response = error_response(429, "RATE_LIMITED", "Rate limit exceeded")
+                await response(scope, receive, send)
+                return
 
-        hits.append(now)
-        self._hits[client_ip] = hits
         await self.app(scope, receive, send)
 
-    def _sweep(self, now: float) -> None:
-        # Bound memory by periodically dropping clients whose window has fully
-        # expired. Without this, the dict grows without limit across unique IPs.
-        if now - self._last_sweep < self.window:
-            return
-        self._last_sweep = now
-        cutoff = now - self.window
-        for ip, hits in list(self._hits.items()):
-            if not any(t > cutoff for t in hits):
-                del self._hits[ip]
+    @staticmethod
+    def _bucket_key(rule: RateLimitRule, client_ip: str, user_id: str | None) -> str:
+        identity = (user_id or client_ip) if rule.per_user else client_ip
+        return f"ratelimit:{rule.name}:{identity}"
 
     def _client_ip(self, scope: Scope) -> str:
         # Only honour X-Forwarded-For when a known number of trusted proxies sit
