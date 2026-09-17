@@ -26,6 +26,7 @@ import { AdminSidebar } from "@/components/layout/admin-sidebar";
 import { Header } from "@/components/layout/header";
 import { UserSidebar } from "@/components/layout/user-sidebar";
 import { WorkspaceSwitcher } from "@/components/layout/workspace-switcher";
+import { RoleProvider } from "@/components/auth/role-context";
 
 interface AgentRow {
   id: string;
@@ -136,7 +137,9 @@ function Showcase() {
       <Section title="布局组件">
         <div className="flex flex-col gap-3">
           <div className="overflow-hidden rounded-lg border border-border">
-            <Header />
+            <RoleProvider role="platform_admin">
+              <Header />
+            </RoleProvider>
           </div>
           <div className="flex gap-3">
             <div className="overflow-hidden rounded-lg border border-border">
@@ -146,7 +149,7 @@ function Showcase() {
               <AdminSidebar active="dashboard" />
             </div>
             <div className="flex items-start p-4">
-              <WorkspaceSwitcher />
+              <WorkspaceSwitcher role="platform_admin" />
             </div>
           </div>
         </div>
