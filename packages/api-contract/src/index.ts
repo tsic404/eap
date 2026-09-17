@@ -35,6 +35,36 @@ export interface HealthInfoResponse {
   status: "ok";
 }
 
+/**
+ * `POST /api/auth/refresh` response data.
+ *
+ * Rotation mints a fresh access token and returns it here alongside its TTL —
+ * the callback is a 302 redirect with no body, so this is the only channel
+ * through which the browser obtains a Bearer token for `/api/me` and the other
+ * protected APIs. The refresh token itself is delivered exclusively through
+ * the HttpOnly cookie.
+ */
+export interface RefreshResponse {
+  accessToken: string;
+  expiresIn: number;
+}
+
+/** `POST /api/auth/logout` response data. */
+export interface LogoutResponse {
+  message: string;
+}
+
+/** `GET /api/me` response data — the authenticated user's profile. */
+export interface CurrentUser {
+  id: string;
+  tenantId: string;
+  email: string;
+  name: string;
+  role: string;
+  department?: string | null;
+  avatarText?: string | null;
+}
+
 /** Default HTTP error codes shared across the platform. */
 export const ErrorCode = {
   BAD_REQUEST: 400,

@@ -44,9 +44,16 @@ class Settings(BaseSettings):
     oidc_client_secret: str = ""
     oidc_redirect_uri: str = "http://localhost/api/auth/callback"
 
-    # JWT (RS256 key material; empty in the skeleton until OIDC lands)
+    # JWT (RS256 key material; empty until OIDC/SSO is configured)
     jwt_private_key: str = ""
     jwt_public_key: str = ""
+
+    # Refresh-token rotation (architecture §34.1). Access tokens always live 15
+    # minutes (the OIDC spec constant); refresh tokens default to 30 days.
+    refresh_token_ttl_seconds: int = 2592000
+    # The refresh-token cookie is Secure only when the app runs behind HTTPS
+    # (production). Local HTTP development leaves it unset so browsers accept it.
+    cookie_secure: bool = False
 
     # CORS whitelist
     cors_allowed_origins: list[str] = [

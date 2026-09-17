@@ -1,13 +1,73 @@
 """Shared pytest fixtures."""
 
+from __future__ import annotations
+
+import os
 from collections.abc import Iterator
 
 import pytest
+import pytest_asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import app.models  # noqa: F401  # registers every model on Base.metadata
 from app.main import create_app
+from app.models.base import Base
+
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL", "postgresql+asyncpg://eap:eap_password@localhost:5432/eap"
+)
+
+
+class FakeRedis:
+    """In-memory stand-in for the Redis commands the OIDC state store uses."""
+
+    def __init__(self) -> None:
+        self._data: dict[str, str] = {}
+
+    async def set(
+        self, name: str, value: str, *, nx: bool = False, ex: int | None = None
+    ) -> bool | None:
+        if nx and name in self._data:
+            return None
+        self._data[name] = value
+        return True
+
+    async def getdel(self, name: str) -> str | None:
+        return self._data.pop(name, None)
+
+
+def _drop_tables(conn: object) -> None:
+    # Drop everything registered so a database that already carries the full
+    # migrated schema is cleared in dependency order.
+    Base.metadata.drop_all(conn, checkfirst=True)  # type: ignore[arg-type]
+
+
+def _create_tables(conn: object) -> None:
+    # Full schema: the ORM models use `lazy="selectin"` relationships, so loading
+    # a Tenant or User eagerly pulls its relations (agent_registry, user_memories,
+    # …). Those tables must exist or the load raises UndefinedTableError.
+    Base.metadata.create_all(conn, checkfirst=True)  # type: ignore[arg-type]
+
+
+@pytest_asyncio.fixture
+async def session_factory():
+    """Yield a session factory against an isolated full-schema database."""
+    engine = create_async_engine(TEST_DATABASE_URL)
+    async with engine.begin() as conn:
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        await conn.run_sync(_drop_tables)
+        await conn.run_sync(_create_tables)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        yield factory
+    finally:
+        async with engine.begin() as conn:
+            await conn.run_sync(_drop_tables)
+        await engine.dispose()
 
 
 class EchoItem(BaseModel):

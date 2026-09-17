@@ -21,9 +21,19 @@ class RefreshToken(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
+    # Rotation lineage: every token belongs to a family. Login starts a new
+    # family; rotation mints a successor in the same family so that a single
+    # leaked token can be traced to — and revoke — its whole chain.
+    family_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, index=True
+    )
     token_hash: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Why a token stopped being usable: ``rotated`` (normal rotation — subject
+    # to the grace window), ``logout``, or ``reuse`` (family revoked after a
+    # replay). NULL means the token is still active.
+    revoked_reason: Mapped[str | None] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
