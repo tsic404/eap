@@ -3,6 +3,7 @@
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -88,7 +89,12 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def validation_exception_handler(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
-        return error_response(422, "VALIDATION_ERROR", "Request validation failed", exc.errors())
+        # ``exc.errors()`` can carry non-serializable objects (e.g. the raw
+        # ``ValueError`` a field validator raised inside ``ctx.error``); encode
+        # them first so the 422 envelope never 500s on JSON serialization.
+        return error_response(
+            422, "VALIDATION_ERROR", "Request validation failed", jsonable_encoder(exc.errors())
+        )
 
     @app.exception_handler(AuthError)
     async def auth_error_handler(request: Request, exc: AuthError) -> JSONResponse:

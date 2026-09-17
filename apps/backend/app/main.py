@@ -29,6 +29,8 @@ from app.middleware.security import (
 )
 from app.middleware.transform import TransformMiddleware
 from app.rate_limit import RedisTokenBucket
+from app.routers.tools import router as tools_router
+from app.services.tool_proxy import ToolProxy
 
 log = get_logger(__name__)
 
@@ -57,6 +59,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await redis.aclose()
         await dify_console.shutdown()
         await app.state.rate_limiter.aclose()
+        await app.state.tool_proxy.aclose()
         log.info("shutdown")
 
 
@@ -72,7 +75,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
     app.state.rate_limiter = RedisTokenBucket(settings.redis_url)
-
+    app.state.tool_proxy = ToolProxy()
     # add_middleware prepends, so the LAST added here is the OUTERMOST stage.
     # Execution order: RequestContext → Helmet → CORS → JWT → Tenant → RateLimit
     # → Roles → Transform → router. RequestContext wraps everything for access
@@ -90,6 +93,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_audit_log_handler()
     app.include_router(health_router)
     app.include_router(auth_router)
+    app.include_router(tools_router)
 
     register_db_pool_metrics()
     register_rq_metrics(settings.redis_url)
