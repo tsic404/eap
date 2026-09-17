@@ -82,6 +82,33 @@ def test_mask_pii_does_not_mask_operational_name_metadata() -> None:
     assert mask_pii(data) == data
 
 
+def test_mask_pii_masks_card_number_keys() -> None:
+    data = {
+        "card_number": "opaque-value",
+        "card_num": "opaque-value",
+        "card_no": "opaque-value",
+        "cardno": "opaque-value",
+        "bank_card": "opaque-value",
+        "bankcard": "opaque-value",
+    }
+    masked = mask_pii(data)
+    assert masked["card_number"] == "***"
+    assert masked["card_num"] == "***"
+    assert masked["card_no"] == "***"
+    assert masked["cardno"] == "***"
+    assert masked["bank_card"] == "***"
+    assert masked["bankcard"] == "***"
+
+
+def test_mask_pii_does_not_mask_operational_card_metadata() -> None:
+    data = {
+        "table_card_count": 1024,
+        "cardinality": 512,
+        "order_card_no": "ORD-1001",
+    }
+    assert mask_pii(data) == data
+
+
 def test_mask_pii_masks_free_text_mobile() -> None:
     assert mask_pii("call 13800138000 now") == "call *** now"
 

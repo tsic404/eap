@@ -52,10 +52,6 @@ _PII_KEY_SUBSTRINGS = (
     "user_name",
     "contact_name",
     "real_name",
-    "bank_card",
-    "bankcard",
-    "card_no",
-    "cardno",
     "ssn",
     "身份证",
     "手机",
@@ -63,9 +59,18 @@ _PII_KEY_SUBSTRINGS = (
     "密码",
 )
 
-# Keys masked only on exact match — bare "name" as a substring would also hit
-# filename/hostname/table_name operational metadata.
-_PII_EXACT_KEYS = frozenset({"name"})
+# Keys masked only on exact match — bare "name"/"card" as substrings would also
+# hit filename/hostname/table_name and table_card_count/cardinality operational
+# metadata.
+_PII_EXACT_KEYS = frozenset({
+    "name",
+    "bank_card",
+    "bankcard",
+    "card_no",
+    "cardno",
+    "card_number",
+    "card_num",
+})
 
 
 @dataclass
