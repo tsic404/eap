@@ -103,17 +103,18 @@ jobs:
                   "postgresql+asyncpg://eap:eap_password@localhost:5432/eap"
               )
               async with engine.connect() as conn:
-                  rows = (
+                  validated = (
                       await conn.execute(
                           text(
-                              "SELECT constraint_name FROM "
-                              "information_schema.table_constraints "
-                              "WHERE constraint_type = 'FOREIGN KEY'"
+                              "SELECT conname FROM pg_constraint "
+                              "WHERE contype = 'f' AND convalidated = true"
                           )
                       )
                   ).scalars().all()
-                  missing = COMPOSITE_FKS - set(rows)
-                  assert not missing, f"missing composite FKs: {sorted(missing)}"
+                  missing = COMPOSITE_FKS - set(validated)
+                  assert not missing, (
+                      f"composite FKs missing or unvalidated: {sorted(missing)}"
+                  )
               await engine.dispose()
 
           asyncio.run(main())
