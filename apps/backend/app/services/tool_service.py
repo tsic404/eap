@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
@@ -22,6 +23,9 @@ from app.services.tool_proxy import ToolProxy, mask_pii
 log = structlog.get_logger(__name__)
 
 _PLATFORM_ADMIN_ROLE = "platform_admin"
+
+# UC-26-4: a pending approval task auto-cancels after 24h (§14.1 state machine).
+APPROVAL_TIMEOUT = timedelta(hours=24)
 
 
 class ToolService:
@@ -169,6 +173,7 @@ class ToolService:
             title=f"工具审批：{tool.name}",
             priority="high",
             status="pending",
+            expires_at=datetime.now(UTC) + APPROVAL_TIMEOUT,
             payload={
                 "tool_id": tool.tool_id,
                 "tool_name": tool.name,
