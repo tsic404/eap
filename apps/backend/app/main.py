@@ -31,9 +31,11 @@ from app.middleware.security import (
 from app.middleware.transform import TransformMiddleware
 from app.rate_limit import RedisTokenBucket
 from app.routers.agents import router as agents_router
+from app.routers.conversations import router as conversations_router
 from app.routers.knowledge import router as knowledge_router
 from app.routers.tasks import router as tasks_router
 from app.routers.tools import router as tools_router
+from app.services.conversation import ConversationService
 from app.services.knowledge import KnowledgeService
 from app.services.task_reconcile import create_scheduler
 from app.services.tool_proxy import ToolProxy
@@ -49,6 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     dify_console = DifyConsoleClient(settings)
     app.state.dify_console = dify_console
     app.state.knowledge_service = KnowledgeService(dify_console, settings=settings)
+    app.state.conversation_service = ConversationService(settings=settings)
     await dify_console.startup()
 
     # Auth runtime: a shared Redis client (lazy — no connection until first use)
@@ -107,6 +110,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(agents_router)
     app.include_router(knowledge_router)
     app.include_router(tasks_router)
+    app.include_router(conversations_router)
 
     register_db_pool_metrics()
     register_rq_metrics(settings.redis_url)

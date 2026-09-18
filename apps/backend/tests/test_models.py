@@ -13,6 +13,7 @@ EXPECTED_TABLES = {
     "agent_registry",
     "agent_tool_bindings",
     "audit_logs",
+    "conversations",
     "knowledge_base_registry",
     "knowledge_documents",
     "refresh_tokens",
