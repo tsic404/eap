@@ -36,6 +36,19 @@ describe("token-store", () => {
     expect(getAccessToken()).toBeNull();
   });
 
+  it("setAccessToken mirrors the token into the JS-readable cookie", () => {
+    setAccessToken("persisted-token");
+    expect(getAccessToken()).toBe("persisted-token");
+    expect(document.cookie).toContain(`${COOKIE}=persisted-token`);
+  });
+
+  it("setAccessToken(null) clears the cookie as well as the memory cache", () => {
+    setAccessToken("persisted-token");
+    setAccessToken(null);
+    expect(getAccessToken()).toBeNull();
+    expect(document.cookie).toBe("");
+  });
+
   it("treats a malformed percent-encoded cookie as absent", () => {
     document.cookie = `${COOKIE}=%E0%A4%A; path=/`;
     expect(getAccessToken()).toBeNull();

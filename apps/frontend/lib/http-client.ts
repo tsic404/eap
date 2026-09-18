@@ -38,17 +38,23 @@ async function requestRefresh(): Promise<string | null> {
 
   try {
     // Raw axios (not apiClient) so the response interceptor cannot re-enter.
-    await axios.post(`${API_BASE_URL}${API_ROUTES.refresh}`, null, {
+    // The backend returns the rotated access token in the response body
+    // (`{ code, data: { accessToken, expiresIn } }`); the HttpOnly refresh
+    // cookie is rotated separately and is invisible to JavaScript.
+    const response = await axios.post(`${API_BASE_URL}${API_ROUTES.refresh}`, null, {
       withCredentials: true,
     });
+    const fresh = response.data?.data?.accessToken;
+    if (typeof fresh !== "string" || fresh.length === 0) {
+      setAccessToken(null);
+      return null;
+    }
+    setAccessToken(fresh);
+    return fresh;
   } catch {
     setAccessToken(null);
     return null;
   }
-
-  const fresh = readAccessTokenCookie();
-  setAccessToken(fresh);
-  return fresh;
 }
 
 export function refreshAccessToken(): Promise<string | null> {

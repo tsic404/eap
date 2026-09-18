@@ -6,6 +6,11 @@ node_modules/
 .next/
 out/
 
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+
 # TypeScript build output
 dist/
 *.tsbuildinfo
