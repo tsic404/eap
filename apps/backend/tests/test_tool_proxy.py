@@ -59,6 +59,11 @@ def test_mask_pii_masks_sensitive_fields_recursively() -> None:
             "full_name": "张三",
             "email": "alice@acme.com",
             "mail": "bob@acme.com",
+            "user_email": "carol@acme.com",
+            "email_address": "alice-personal",
+            "email_addr": "alice-addr",
+            "mail_address": "bob-personal",
+            "user_email_address": "dave@acme.com",
         },
         "items": [{"password": "s3cret"}],
     }
@@ -69,6 +74,11 @@ def test_mask_pii_masks_sensitive_fields_recursively() -> None:
     assert masked["user"]["full_name"] == "***"
     assert masked["user"]["email"] == "***"
     assert masked["user"]["mail"] == "***"
+    assert masked["user"]["user_email"] == "***"
+    assert masked["user"]["email_address"] == "***"
+    assert masked["user"]["email_addr"] == "***"
+    assert masked["user"]["mail_address"] == "***"
+    assert masked["user"]["user_email_address"] == "***"
     assert masked["items"][0]["password"] == "***"
 
 
@@ -78,6 +88,9 @@ def test_mask_pii_does_not_mask_operational_name_metadata() -> None:
         "hostname": "node-1",
         "table_name": "audit_logs",
         "username": "ops-user",
+        "mailbox": "inbox",
+        "mailer": "smtp",
+        "email_verified": True,
     }
     assert mask_pii(data) == data
 

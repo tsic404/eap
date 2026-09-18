@@ -29,9 +29,8 @@ logger = structlog.get_logger(__name__)
 # Upstream statuses that signal a transient failure worth retrying.
 _RETRYABLE_STATUS_CODES = frozenset({502, 503, 504})
 
-# Field-name substrings whose values are masked (case-insensitive). Covers the
-# common PII/credential fields named in the scope: 身份证/手机号/银行卡号/密码/
-# 邮箱/邮件, plus specific name keys.
+# Field-name substrings whose values are masked (case-insensitive) — credential
+# and PII fields (身份证/手机号/银行卡号/密码) plus specific name keys.
 _PII_KEY_SUBSTRINGS = (
     "password",
     "passwd",
@@ -43,8 +42,6 @@ _PII_KEY_SUBSTRINGS = (
     "idcard",
     "phone",
     "mobile",
-    "email",
-    "mail",
     "first_name",
     "last_name",
     "full_name",
@@ -59,18 +56,38 @@ _PII_KEY_SUBSTRINGS = (
     "密码",
 )
 
-# Keys masked only on exact match — bare "name"/"card" as substrings would also
-# hit filename/hostname/table_name and table_card_count/cardinality operational
+# Keys masked only on exact match — bare "name"/"card"/"email"/"mail" as
+# substrings would also hit filename/hostname/table_name and
+# table_card_count/cardinality/mailbox/mailer/email_verified operational
 # metadata.
-_PII_EXACT_KEYS = frozenset({
-    "name",
-    "bank_card",
-    "bankcard",
-    "card_no",
-    "cardno",
-    "card_number",
-    "card_num",
-})
+_PII_EXACT_KEYS = frozenset(
+    {
+        "name",
+        "bank_card",
+        "bankcard",
+        "card_no",
+        "cardno",
+        "card_number",
+        "card_num",
+        "email",
+        "mail",
+        "email_address",
+        "email_addr",
+        "mail_address",
+        "mail_addr",
+    }
+)
+
+# Composite keys ending in these suffixes stay masked (e.g. user_email,
+# user_email_address, notify_mail) without re-introducing substring hits.
+_PII_KEY_SUFFIXES = (
+    "_email",
+    "_mail",
+    "_email_address",
+    "_email_addr",
+    "_mail_address",
+    "_mail_addr",
+)
 
 
 @dataclass
@@ -125,8 +142,10 @@ def mask_pii(data: Any) -> Any:
 
 def _is_pii_key(key: str) -> bool:
     normalized = key.lower()
-    return normalized in _PII_EXACT_KEYS or any(
-        sub in normalized for sub in _PII_KEY_SUBSTRINGS
+    return (
+        normalized in _PII_EXACT_KEYS
+        or normalized.endswith(_PII_KEY_SUFFIXES)
+        or any(sub in normalized for sub in _PII_KEY_SUBSTRINGS)
     )
 
 
