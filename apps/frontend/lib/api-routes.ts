@@ -19,6 +19,7 @@ export const API_ROUTES = {
   me: "/me",
   agents: "/agents",
   tools: "/tools",
+  knowledgeBases: "/knowledge-bases",
 } as const;
 
 /** Frontend page routes. */
@@ -29,6 +30,11 @@ export const ROUTES = {
   adminHome: "/admin",
   adminAgentsNew: "/admin/agents/new",
   adminAgentDetail: (agentId: string) => `/admin/agents/${agentId}`,
+  adminKnowledge: "/admin/knowledge",
+  adminKnowledgeDetail: (kbId: string) => `/admin/knowledge/${kbId}`,
+  adminTools: "/admin/tools",
+  adminToolsNew: "/admin/tools/new",
+  adminToolDetail: (toolId: string) => `/admin/tools/${toolId}`,
 } as const;
 
 /** Identity provider used by the single SSO login button. */
