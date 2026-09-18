@@ -24,9 +24,7 @@ class RefreshToken(Base):
     # Rotation lineage: every token belongs to a family. Login starts a new
     # family; rotation mints a successor in the same family so that a single
     # leaked token can be traced to — and revoke — its whole chain.
-    family_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False, index=True
-    )
+    family_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     token_hash: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

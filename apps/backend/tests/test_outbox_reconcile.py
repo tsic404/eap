@@ -50,9 +50,7 @@ async def test_reconcile_enqueues_undelivered_and_marks_delivered(session_factor
     captured: list[dict[str, object]] = []
 
     def fake_enqueue(*, task_id: str, outbox_id: str, queue_name: str, payload: dict) -> None:
-        captured.append(
-            {"task_id": task_id, "outbox_id": outbox_id, "queue_name": queue_name}
-        )
+        captured.append({"task_id": task_id, "outbox_id": outbox_id, "queue_name": queue_name})
 
     monkeypatch.setattr("app.services.task_reconcile.enqueue_process_task", fake_enqueue)
 

@@ -32,9 +32,11 @@ from app.models.user import User
 from app.services.tool_proxy import ToolProxy
 
 _KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-_PUBLIC_PEM = _KEY.public_key().public_bytes(
-    serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
-).decode()
+_PUBLIC_PEM = (
+    _KEY.public_key()
+    .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+    .decode()
+)
 
 
 @dataclass(frozen=True)
@@ -115,9 +117,7 @@ async def tool_api(session_factory: Any) -> AsyncIterator[ToolApi]:
         tenant, user = await _create_tenant_user(session, role="agent_admin")
     token = _signed_token(_KEY, user=user, tenant=tenant)
 
-    app = create_app(
-        Settings(_env_file=None, jwt_public_key=_PUBLIC_PEM, rate_limit_enabled=False)
-    )
+    app = create_app(Settings(_env_file=None, jwt_public_key=_PUBLIC_PEM, rate_limit_enabled=False))
 
     async def _real_session() -> AsyncIterator[AsyncSession]:
         async with session_factory() as session:
@@ -255,9 +255,7 @@ async def test_create_tool_requires_agent_admin(tool_api: ToolApi) -> None:
         session.add(employee)
         await session.commit()
 
-    employee_token = _signed_token(
-        tool_api.private_key, user=employee, tenant=tool_api.tenant
-    )
+    employee_token = _signed_token(tool_api.private_key, user=employee, tenant=tool_api.tenant)
 
     resp = await tool_api.client.post(
         "/api/tools",

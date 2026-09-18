@@ -125,9 +125,7 @@ async def publish_agent(
     agent_id: str,
     body: PublishAgentDto,
 ) -> AgentDto:
-    agent = await service.publish(
-        agent_id, body.version, tenant_id=tenant.id, actor_id=user.id
-    )
+    agent = await service.publish(agent_id, body.version, tenant_id=tenant.id, actor_id=user.id)
     return agent_to_dto(agent)
 
 

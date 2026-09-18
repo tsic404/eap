@@ -150,8 +150,7 @@ def mask_pii(data: Any) -> Any:
     """
     if isinstance(data, dict):
         return {
-            key: "***" if _is_pii_key(str(key)) else mask_pii(value)
-            for key, value in data.items()
+            key: "***" if _is_pii_key(str(key)) else mask_pii(value) for key, value in data.items()
         }
     if isinstance(data, list):
         return [mask_pii(item) for item in data]

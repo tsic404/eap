@@ -215,9 +215,7 @@ def test_list_knowledge_bases_returns_items_and_total() -> None:
     service = _service(AsyncMock(), repo=_Repo(_kb(tenant)))
     client, token = _authed_client(service, role="employee", tenant=tenant)
 
-    resp = client.get(
-        "/api/knowledge-bases", headers={"Authorization": f"Bearer {token}"}
-    )
+    resp = client.get("/api/knowledge-bases", headers={"Authorization": f"Bearer {token}"})
 
     assert resp.status_code == 200
     body = resp.json()["data"]

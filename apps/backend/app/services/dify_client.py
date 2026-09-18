@@ -168,15 +168,11 @@ class DifyClientService:
                     except json.JSONDecodeError:
                         self._record_failure(path)
                         DIFY_API_REQUESTS.labels(path=path, outcome="failure").inc()
-                        DIFY_API_DURATION.labels(path=path).observe(
-                            time.perf_counter() - started
-                        )
+                        DIFY_API_DURATION.labels(path=path).observe(time.perf_counter() - started)
                         raise DifyApiError(502, "Dify returned a non-JSON response") from None
                     self._record_success(path)
                     DIFY_API_REQUESTS.labels(path=path, outcome="success").inc()
-                    DIFY_API_DURATION.labels(path=path).observe(
-                        time.perf_counter() - started
-                    )
+                    DIFY_API_DURATION.labels(path=path).observe(time.perf_counter() - started)
                     return cast(dict[str, Any], parsed)
                 last_error = DifyApiError(response.status_code, response.text)
                 if response.status_code not in _RETRYABLE_STATUS_CODES:

@@ -56,9 +56,7 @@ class RunLog(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     tenant: Mapped[Tenant] = relationship(back_populates="run_logs")
-    agent: Mapped[AgentRegistry] = relationship(
-        back_populates="run_logs", foreign_keys=[agent_id]
-    )
+    agent: Mapped[AgentRegistry] = relationship(back_populates="run_logs", foreign_keys=[agent_id])
     user: Mapped[User] = relationship(back_populates="run_logs", foreign_keys=[user_id])
     steps: Mapped[list[TraceStep]] = relationship(
         back_populates="log", cascade="all, delete-orphan", lazy="selectin"

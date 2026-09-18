@@ -61,10 +61,10 @@ async def _resolve_user(
 
     domain = email.rsplit("@", 1)[-1].lower()
     tenants = (
-        await session.execute(
-            select(Tenant).where(func.lower(Tenant.sso_domain) == domain)
-        )
-    ).scalars().all()
+        (await session.execute(select(Tenant).where(func.lower(Tenant.sso_domain) == domain)))
+        .scalars()
+        .all()
+    )
     if not tenants:
         raise AuthError(403, "TENANT_NOT_FOUND", "No tenant matches this SSO domain")
     if len(tenants) > 1:
@@ -112,9 +112,7 @@ async def login(request: Request) -> RedirectResponse:
     state = generate_state()
     nonce = generate_nonce()
     code_verifier = generate_code_verifier()
-    stored = await store.put(
-        state, {"code_verifier": code_verifier, "nonce": nonce}
-    )
+    stored = await store.put(state, {"code_verifier": code_verifier, "nonce": nonce})
     if not stored:
         raise AuthError(500, "STATE_STORE_ERROR", "Failed to store OIDC state")
 

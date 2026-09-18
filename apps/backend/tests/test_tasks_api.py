@@ -170,9 +170,7 @@ def test_approve_returns_200_approved_and_enqueues(monkeypatch):
     session = _make_session(user, tenant, select_task=pending, final_task=approved)
 
     client, token, captured = _make_client(user, tenant, session, monkeypatch)
-    resp = client.post(
-        f"/api/tasks/{pending.id}/approve", json={}, headers=_auth(token)
-    )
+    resp = client.post(f"/api/tasks/{pending.id}/approve", json={}, headers=_auth(token))
 
     assert resp.status_code == 200
     assert resp.json()["data"]["status"] == "approved"
@@ -185,9 +183,7 @@ def test_approve_requires_agent_admin(monkeypatch):
     session = _make_session(user, tenant, select_task=None, final_task=None)
 
     client, token, _ = _make_client(user, tenant, session, monkeypatch)
-    resp = client.post(
-        f"/api/tasks/{uuid.uuid4()}/approve", json={}, headers=_auth(token)
-    )
+    resp = client.post(f"/api/tasks/{uuid.uuid4()}/approve", json={}, headers=_auth(token))
 
     assert resp.status_code == 403
     assert resp.json()["error"]["code"] == "FORBIDDEN"
@@ -200,9 +196,7 @@ def test_approve_invalid_transition_returns_422(monkeypatch):
     session = _make_session(user, tenant, select_task=completed, final_task=completed)
 
     client, token, _ = _make_client(user, tenant, session, monkeypatch)
-    resp = client.post(
-        f"/api/tasks/{completed.id}/approve", json={}, headers=_auth(token)
-    )
+    resp = client.post(f"/api/tasks/{completed.id}/approve", json={}, headers=_auth(token))
 
     assert resp.status_code == 422
     assert resp.json()["error"]["code"] == "INVALID_TRANSITION"

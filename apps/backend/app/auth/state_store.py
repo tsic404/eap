@@ -29,9 +29,7 @@ class OidcStateStore:
     async def put(self, state: str, payload: dict[str, Any]) -> bool:
         """Store ``payload`` under ``state``; False if the key already exists."""
         value = json.dumps(payload)
-        return bool(
-            await self._redis.set(self._key(state), value, nx=True, ex=self.TTL_SECONDS)
-        )
+        return bool(await self._redis.set(self._key(state), value, nx=True, ex=self.TTL_SECONDS))
 
     async def consume(self, state: str) -> dict[str, Any] | None:
         """Atomically read-and-delete ``state``; None if absent or already used."""

@@ -40,9 +40,7 @@ def upgrade() -> None:
     )
     op.execute("UPDATE refresh_tokens SET family_id = gen_random_uuid() WHERE family_id IS NULL")
     op.alter_column("refresh_tokens", "family_id", nullable=False)
-    op.create_index(
-        "ix_refresh_tokens_family_id", "refresh_tokens", ["family_id"], unique=False
-    )
+    op.create_index("ix_refresh_tokens_family_id", "refresh_tokens", ["family_id"], unique=False)
 
 
 def downgrade() -> None:

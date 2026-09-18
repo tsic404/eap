@@ -28,9 +28,7 @@ DIFY_API_DURATION = Histogram(
 
 # SQLAlchemy async engine pool usage. Usage ratio = checkedout / size.
 DB_POOL_SIZE = Gauge("db_pool_size", "Current SQLAlchemy connection-pool size.")
-DB_POOL_CHECKEDOUT = Gauge(
-    "db_pool_checkedout", "Connections currently checked out of the pool."
-)
+DB_POOL_CHECKEDOUT = Gauge("db_pool_checkedout", "Connections currently checked out of the pool.")
 DB_POOL_OVERFLOW = Gauge("db_pool_overflow", "Connections in the pool overflow.")
 
 # RQ queue depth for the audit-log background job. Reads Redis at scrape time;

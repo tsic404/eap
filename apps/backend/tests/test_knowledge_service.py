@@ -202,9 +202,7 @@ async def test_create_creates_dataset_and_emits_event() -> None:
     tenant = _tenant()
     dify = AsyncMock()
     dify.create_dataset.return_value = {"id": "ds-1"}
-    dify.get_dataset_api_keys.return_value = {
-        "data": [{"id": "key-1", "token": "ds-secret"}]
-    }
+    dify.get_dataset_api_keys.return_value = {"data": [{"id": "key-1", "token": "ds-secret"}]}
     events, handler = _collector()
     bus = EventBus()
     bus.subscribe(KB_CREATED_EVENT, handler)
@@ -236,9 +234,7 @@ async def test_create_creates_dataset_api_key_when_none_exists() -> None:
     dify.create_dataset_api_key.return_value = {"id": "key-1", "token": "ds-secret"}
     service = _service(dify, repo=_FakeRepository())
 
-    result = await service.create(
-        AsyncMock(), tenant, CreateKnowledgeBaseDto(name="KB")
-    )
+    result = await service.create(AsyncMock(), tenant, CreateKnowledgeBaseDto(name="KB"))
 
     assert result.kb_id
     dify.get_dataset_api_keys.assert_awaited_once()
@@ -250,9 +246,7 @@ async def test_create_compensates_deletes_dataset_on_commit_failure() -> None:
     tenant = _tenant()
     dify = AsyncMock()
     dify.create_dataset.return_value = {"id": "ds-1"}
-    dify.get_dataset_api_keys.return_value = {
-        "data": [{"id": "key-1", "token": "ds-secret"}]
-    }
+    dify.get_dataset_api_keys.return_value = {"data": [{"id": "key-1", "token": "ds-secret"}]}
     session = AsyncMock()
     session.commit.side_effect = RuntimeError("db down")
     service = _service(dify)
@@ -500,12 +494,8 @@ async def test_retrieval_test_returns_citations_score_and_latency() -> None:
             },
         )
 
-    retriever = DifyClientService(
-        "http://dify.test", "key", transport=httpx.MockTransport(handler)
-    )
-    service = _service(
-        AsyncMock(), repo=_FakeRepository((_kb(tenant),)), retriever=retriever
-    )
+    retriever = DifyClientService("http://dify.test", "key", transport=httpx.MockTransport(handler))
+    service = _service(AsyncMock(), repo=_FakeRepository((_kb(tenant),)), retriever=retriever)
 
     result = await service.retrieval_test(
         AsyncMock(), tenant, "kb-1", RetrieveTestDto(query="what is eap?")
@@ -548,9 +538,7 @@ async def test_retrieval_test_uses_dataset_api_key(monkeypatch: pytest.MonkeyPat
 @pytest.mark.asyncio
 async def test_retrieval_test_rejects_missing_api_key() -> None:
     tenant = _tenant()
-    service = _service(
-        AsyncMock(), repo=_FakeRepository((_kb(tenant, dify_api_key=None),))
-    )
+    service = _service(AsyncMock(), repo=_FakeRepository((_kb(tenant, dify_api_key=None),)))
 
     with pytest.raises(AppError) as exc:
         await service.retrieval_test(AsyncMock(), tenant, "kb-1", RetrieveTestDto(query="q"))

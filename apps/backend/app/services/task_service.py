@@ -108,9 +108,7 @@ class TaskService:
                     and_(Task.created_at == cursor_at, Task.id < cursor_id),
                 )
             )
-        statement = (
-            statement.order_by(Task.created_at.desc(), Task.id.desc()).limit(limit + 1)
-        )
+        statement = statement.order_by(Task.created_at.desc(), Task.id.desc()).limit(limit + 1)
         rows = list((await self.session.execute(statement)).scalars().all())
         items = rows[:limit]
         next_cursor = (
@@ -274,9 +272,7 @@ class TaskService:
     def _is_owner_or_admin(task: Task, actor: User) -> bool:
         """True when ``actor`` may operate on ``task`` (owner, assignee, or admin)."""
         return (
-            actor.role in ADMIN_ROLES
-            or task.creator_id == actor.id
-            or task.assignee_id == actor.id
+            actor.role in ADMIN_ROLES or task.creator_id == actor.id or task.assignee_id == actor.id
         )
 
     @staticmethod
@@ -307,9 +303,7 @@ class TaskService:
                 exc_info=True,
             )
 
-    async def _select_task(
-        self, task_uuid: uuid.UUID, tenant_id: uuid.UUID
-    ) -> Task | None:
+    async def _select_task(self, task_uuid: uuid.UUID, tenant_id: uuid.UUID) -> Task | None:
         result = await self.session.execute(
             select(Task).where(Task.id == task_uuid, Task.tenant_id == tenant_id)
         )

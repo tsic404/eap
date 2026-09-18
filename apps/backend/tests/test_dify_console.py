@@ -509,11 +509,7 @@ async def test_get_dataset_api_keys_hits_endpoint() -> None:
         captured["path"] = request.url.path
         return httpx.Response(
             200,
-            json={
-                "data": [
-                    {"id": "key-1", "type": "dataset", "token": "dataset-secret"}
-                ]
-            },
+            json={"data": [{"id": "key-1", "type": "dataset", "token": "dataset-secret"}]},
         )
 
     client, _ = _make_client(handler)
