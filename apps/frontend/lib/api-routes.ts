@@ -17,12 +17,18 @@ export const API_ROUTES = {
   refresh: "/auth/refresh",
   logout: "/auth/logout",
   me: "/me",
+  agents: "/agents",
+  tools: "/tools",
 } as const;
 
 /** Frontend page routes. */
 export const ROUTES = {
   login: "/login",
   home: "/user",
+  agents: "/user/agents",
+  adminHome: "/admin",
+  adminAgentsNew: "/admin/agents/new",
+  adminAgentDetail: (agentId: string) => `/admin/agents/${agentId}`,
 } as const;
 
 /** Identity provider used by the single SSO login button. */
