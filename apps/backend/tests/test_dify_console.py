@@ -476,3 +476,48 @@ async def test_document_endpoint_propagates_error_status() -> None:
     with pytest.raises(DifyConsoleError) as exc_info:
         await client.get_document_indexing_status("ds-1", "doc-1")
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_create_dataset_api_key_hits_endpoint() -> None:
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/console/api/login":
+            return _login_response()
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        return httpx.Response(
+            200, json={"id": "key-1", "type": "dataset", "token": "dataset-secret"}
+        )
+
+    client, _ = _make_client(handler)
+    key = await client.create_dataset_api_key()
+
+    assert key["token"] == "dataset-secret"
+    assert captured == {"method": "POST", "path": "/console/api/datasets/api-keys"}
+
+
+@pytest.mark.asyncio
+async def test_get_dataset_api_keys_hits_endpoint() -> None:
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/console/api/login":
+            return _login_response()
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "key-1", "type": "dataset", "token": "dataset-secret"}
+                ]
+            },
+        )
+
+    client, _ = _make_client(handler)
+    keys = await client.get_dataset_api_keys()
+
+    assert keys["data"][0]["token"] == "dataset-secret"
+    assert captured == {"method": "GET", "path": "/console/api/datasets/api-keys"}
