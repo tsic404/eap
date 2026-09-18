@@ -59,16 +59,39 @@ _PII_KEY_SUBSTRINGS = (
 # Keys masked only on exact match — bare "name"/"card"/"email"/"mail" as
 # substrings would also hit filename/hostname/table_name and
 # table_card_count/cardinality/mailbox/mailer/email_verified operational
-# metadata.
+# metadata. Card-number keys enumerate singular, plural, and "_count" composite
+# forms per family so variants like card_numbers/card_number_count stay masked
+# without falling back to substring matching.
 _PII_EXACT_KEYS = frozenset(
     {
         "name",
+        # bank-card number family (singular / plural / "_count")
         "bank_card",
+        "bank_cards",
+        "bank_card_count",
+        "bank_cards_count",
         "bankcard",
-        "card_no",
-        "cardno",
+        "bankcards",
+        "bankcard_count",
+        "bankcards_count",
+        # card-number family (singular / plural / "_count")
         "card_number",
+        "card_numbers",
+        "card_number_count",
+        "card_numbers_count",
         "card_num",
+        "card_nums",
+        "card_num_count",
+        "card_nums_count",
+        "card_no",
+        "card_nos",
+        "card_no_count",
+        "card_nos_count",
+        "cardno",
+        "cardnos",
+        "cardno_count",
+        "cardnos_count",
+        # email/mail exact matches
         "email",
         "mail",
         "email_address",

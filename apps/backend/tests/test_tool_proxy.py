@@ -113,11 +113,56 @@ def test_mask_pii_masks_card_number_keys() -> None:
     assert masked["bankcard"] == "***"
 
 
+def test_mask_pii_masks_card_plural_and_composite_variants() -> None:
+    data = {
+        # plural forms
+        "card_numbers": "opaque-value",
+        "card_nums": "opaque-value",
+        "card_nos": "opaque-value",
+        "cardnos": "opaque-value",
+        "bank_cards": "opaque-value",
+        "bankcards": "opaque-value",
+        # singular-base "_count" composites
+        "card_number_count": 3,
+        "card_num_count": 2,
+        "card_no_count": 1,
+        "cardno_count": 1,
+        "bank_card_count": 1,
+        "bankcard_count": 1,
+        # plural-base "_count" composites
+        "card_numbers_count": 3,
+        "card_nums_count": 2,
+        "card_nos_count": 1,
+        "cardnos_count": 1,
+        "bank_cards_count": 1,
+        "bankcards_count": 1,
+    }
+    assert mask_pii(data) == {key: "***" for key in data}
+
+
+def test_mask_pii_card_count_composite_boundary() -> None:
+    # card-number "_count" keys are masked; generic/table count keys are not.
+    data = {
+        "card_number_count": 3,
+        "card_num_count": 2,
+        "card_count": 16,
+        "table_card_count": 1024,
+    }
+    assert mask_pii(data) == {
+        "card_number_count": "***",
+        "card_num_count": "***",
+        "card_count": 16,
+        "table_card_count": 1024,
+    }
+
+
 def test_mask_pii_does_not_mask_operational_card_metadata() -> None:
     data = {
         "table_card_count": 1024,
         "cardinality": 512,
         "order_card_no": "ORD-1001",
+        "card_count": 16,
+        "card_type": "visa",
     }
     assert mask_pii(data) == data
 
