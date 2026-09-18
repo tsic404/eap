@@ -3,6 +3,7 @@ packages:
   - packages/api-contract
 
 allowBuilds:
+  '@sentry/cli': false
   esbuild: true
   sharp: true
   unrs-resolver: true

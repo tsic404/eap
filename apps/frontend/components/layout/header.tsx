@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, LogOut, Settings, User } from "lucide-react";
+import { Bell, LogOut, Menu, Settings, User } from "lucide-react";
 
 import { useAuth } from "@/components/auth/auth-context";
 import { useRole } from "@/components/auth/role-context";
@@ -9,8 +9,13 @@ import { WorkspaceSwitcher } from "@/components/layout/workspace-switcher";
 import { Button } from "@/components/ui/button";
 import { Dropdown, type DropdownItem } from "@/components/ui/dropdown";
 
+export interface HeaderProps {
+  /** Opens the mobile navigation drawer; renders the hamburger when provided. */
+  onMenuToggle?: () => void;
+}
+
 /** Top application bar: logo, breadcrumb, notifications, user menu. */
-export function Header() {
+export function Header({ onMenuToggle }: HeaderProps) {
   const { user, logout } = useAuth();
   const role = useRole();
 
@@ -33,6 +38,17 @@ export function Header() {
 
   return (
     <header className="flex h-14 items-center gap-3 border-b border-border bg-background px-4">
+      {onMenuToggle && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-9 w-9 p-0 md:hidden"
+          aria-label="打开导航"
+          onClick={onMenuToggle}
+        >
+          <Menu className="h-5 w-5" />
+        </Button>
+      )}
       <span className="text-sm font-semibold text-foreground">EAP</span>
       <Breadcrumb />
       <WorkspaceSwitcher role={role} />

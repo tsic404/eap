@@ -4,24 +4,18 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from "lucide-react";
 
+import { subscribeToToasts } from "@/lib/toast-bus";
+import type { ToastOptions, ToastType } from "@/lib/toast-bus";
 import { cn } from "@/lib/utils";
 
 import { Button } from "./button";
-
-export type ToastType = "success" | "error" | "warning" | "info";
-
-export interface ToastOptions {
-  type?: ToastType;
-  title: string;
-  description?: string;
-  duration?: number;
-}
 
 interface ToastItem {
   id: string;
@@ -85,8 +79,14 @@ function ToastCard({
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const idRef = useRef(0);
+  const timersRef = useRef(new Map<string, number>());
 
   const dismiss = useCallback((id: string) => {
+    const timerId = timersRef.current.get(id);
+    if (timerId !== undefined) {
+      window.clearTimeout(timerId);
+      timersRef.current.delete(id);
+    }
     setToasts((prev) => prev.filter((toast) => toast.id !== id));
   }, []);
 
@@ -101,12 +101,27 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         duration: options.duration ?? DEFAULT_DURATION_MS,
       };
       setToasts((prev) => [...prev, item]);
-      window.setTimeout(() => dismiss(id), item.duration);
+      timersRef.current.set(
+        id,
+        window.setTimeout(() => dismiss(id), item.duration),
+      );
     },
     [dismiss],
   );
 
   const value = useMemo(() => ({ toast }), [toast]);
+
+  useEffect(() => subscribeToToasts(toast), [toast]);
+
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      for (const timerId of timers.values()) {
+        window.clearTimeout(timerId);
+      }
+      timers.clear();
+    };
+  }, []);
 
   return (
     <ToastContext.Provider value={value}>
