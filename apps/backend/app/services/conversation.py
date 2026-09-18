@@ -44,12 +44,40 @@ def sse_frame(event: str, data: dict[str, Any]) -> str:
 
 
 class _EventPublisher:
-    """Adapt the EventBus ``emit(name, **payload)`` to the adapter's ``publish(name, payload)``."""
+    """Adapt the EventBus ``emit(name, **payload)`` to the adapter's ``publish(name, payload)``.
 
-    def __init__(self, event_bus: EventBus) -> None:
+    The adapter only knows the Dify-side ids and the message content; the
+    run-log write (consumed from ``conversation.completed``) also needs the
+    agent/user/model context held by this service, so it is merged in here.
+    """
+
+    def __init__(
+        self,
+        event_bus: EventBus,
+        *,
+        agent_id: str,
+        agent_name: str | None,
+        user_name: str,
+        input_text: str,
+        model_name: str | None,
+    ) -> None:
         self._bus = event_bus
+        self._agent_id = agent_id
+        self._agent_name = agent_name
+        self._user_name = user_name
+        self._input = input_text
+        self._model_name = model_name
 
     async def publish(self, event_name: str, payload: dict[str, Any]) -> None:
+        payload.update(
+            {
+                "agentId": self._agent_id,
+                "agentName": self._agent_name,
+                "userName": self._user_name,
+                "input": self._input,
+                "modelName": self._model_name,
+            }
+        )
         await self._bus.emit(event_name, **payload)
 
 
@@ -143,7 +171,16 @@ class ConversationService:
         # that invariant for mypy without a duplicate runtime check.
         client = DifyClientService(self._settings.dify_api_base_url, cast(str, agent.dify_api_key))
         adapter = DifyConversationAdapter(
-            client, MemoryService(session), _EventPublisher(self._bus)
+            client,
+            MemoryService(session),
+            _EventPublisher(
+                self._bus,
+                agent_id=agent.agent_id,
+                agent_name=agent.name,
+                user_name=user.name,
+                input_text=dto.query,
+                model_name=agent.model_name,
+            ),
         )
         files = [f.model_dump() for f in dto.files] if dto.files is not None else None
         try:
