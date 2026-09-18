@@ -276,6 +276,26 @@ async def test_list_returns_paginated_structure_with_total() -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_documents_returns_page_with_total() -> None:
+    tenant = _tenant()
+    dify = AsyncMock()
+    dify.list_documents.return_value = {
+        "data": [
+            {"id": "doc-1", "name": "a.pdf", "indexing_status": "completed"},
+            {"id": "doc-2", "name": "b.pdf", "indexing_status": "indexing"},
+        ],
+        "total": 7,
+    }
+    service = _service(dify, repo=_FakeRepository((_kb(tenant),)))
+
+    page = await service.list_documents(AsyncMock(), tenant, "kb-1", page=1, limit=2)
+
+    assert page.total == 7
+    assert [d.id for d in page.items] == ["doc-1", "doc-2"]
+    assert page.items[0].status == "completed"
+
+
+@pytest.mark.asyncio
 async def test_delete_rejects_bound_kb() -> None:
     tenant = _tenant()
     dify = AsyncMock()

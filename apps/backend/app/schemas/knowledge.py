@@ -50,6 +50,13 @@ class DocumentDto(BaseModel):
     status: DocumentStatus
 
 
+class DocumentPageDto(BaseModel):
+    """Paginated document listing (``items`` + total count from Dify)."""
+
+    items: list[DocumentDto]
+    total: int
+
+
 class DocumentStatusDto(BaseModel):
     """Indexing status of a single document (polled from Dify)."""
 

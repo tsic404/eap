@@ -32,6 +32,7 @@ from app.repositories.knowledge import KnowledgeRepository
 from app.schemas.knowledge import (
     CreateKnowledgeBaseDto,
     DocumentDto,
+    DocumentPageDto,
     DocumentStatus,
     DocumentStatusDto,
     KnowledgeBaseDto,
@@ -223,12 +224,12 @@ class KnowledgeService:
         *,
         page: int,
         limit: int,
-    ) -> list[DocumentDto]:
+    ) -> DocumentPageDto:
         kb = await self._require_kb(session, tenant, kb_id)
         result = await self._dify_console.list_documents(
             kb.dify_dataset_id, page=page, limit=limit
         )
-        return [
+        items = [
             DocumentDto(
                 id=doc["id"],
                 name=doc.get("name") or "",
@@ -236,6 +237,7 @@ class KnowledgeService:
             )
             for doc in result.get("data", [])
         ]
+        return DocumentPageDto(items=items, total=int(result.get("total") or 0))
 
     async def get_document_status(
         self,

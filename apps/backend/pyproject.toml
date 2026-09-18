@@ -15,6 +15,7 @@ dependencies = [
     "prometheus-client>=0.20",
     "prometheus-fastapi-instrumentator>=7.0",
     "pyjwt[crypto]>=2.9",
+    "python-multipart>=0.0.9",
     "redis>=5.0",
     "rq>=2.0",
     "sqlalchemy[asyncio]>=2.0",
