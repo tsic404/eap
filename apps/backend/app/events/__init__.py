@@ -1,5 +1,11 @@
 """Event bus and domain events."""
 
+from app.events.agent import (
+    AGENT_CREATED,
+    AGENT_DELETED,
+    AGENT_OFFLINE,
+    AGENT_PUBLISHED,
+)
 from app.events.audit import AUDIT_LOG_EVENT, AuditLogEvent, emit_audit_log
 from app.events.bus import EventBus, bus
 from app.events.knowledge import (
@@ -11,6 +17,10 @@ from app.events.knowledge import (
 )
 
 __all__ = [
+    "AGENT_CREATED",
+    "AGENT_DELETED",
+    "AGENT_OFFLINE",
+    "AGENT_PUBLISHED",
     "AUDIT_LOG_EVENT",
     "AuditLogEvent",
     "DOCUMENT_INDEXED_EVENT",

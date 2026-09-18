@@ -29,6 +29,7 @@ from app.middleware.security import (
 )
 from app.middleware.transform import TransformMiddleware
 from app.rate_limit import RedisTokenBucket
+from app.routers.agents import router as agents_router
 from app.routers.tools import router as tools_router
 from app.services.tool_proxy import ToolProxy
 
@@ -94,6 +95,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(auth_router)
     app.include_router(tools_router)
+    app.include_router(agents_router)
 
     register_db_pool_metrics()
     register_rq_metrics(settings.redis_url)
