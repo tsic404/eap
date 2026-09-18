@@ -17,9 +17,7 @@ from app.errors import AppError
 # second limit, so the two can never drift.
 MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024
 
-_ALLOWED_EXTENSIONS = frozenset(
-    {"pdf", "docx", "xlsx", "txt", "md", "csv", "json", "html"}
-)
+_ALLOWED_EXTENSIONS = frozenset({"pdf", "docx", "xlsx", "txt", "md", "csv", "json", "html"})
 
 # DOCX/XLSX are ZIP archives: the ``PK\x03\x04`` local-file-header signature
 # sits at byte 0 with no permitted preamble.

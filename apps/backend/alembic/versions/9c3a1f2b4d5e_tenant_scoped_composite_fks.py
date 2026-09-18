@@ -72,22 +72,62 @@ depends_on: str | Sequence[str] | None = None
 
 # (source table, local cols, referent table, remote cols, constraint name)
 _COMPOSITE_FKS: tuple[tuple[str, list[str], str, list[str], str], ...] = (
-    ("agent_registry", ["tenant_id", "created_by"], "users", ["tenant_id", "id"],
-     "fk_agent_registry_tenant_created_by_users"),
-    ("tool_registry", ["tenant_id", "created_by"], "users", ["tenant_id", "id"],
-     "fk_tool_registry_tenant_created_by_users"),
-    ("tasks", ["tenant_id", "creator_id"], "users", ["tenant_id", "id"],
-     "fk_tasks_tenant_creator_id_users"),
-    ("tasks", ["tenant_id", "assignee_id"], "users", ["tenant_id", "id"],
-     "fk_tasks_tenant_assignee_id_users"),
-    ("user_memories", ["tenant_id", "user_id"], "users", ["tenant_id", "id"],
-     "fk_user_memories_tenant_user_id_users"),
-    ("audit_logs", ["tenant_id", "user_id"], "users", ["tenant_id", "id"],
-     "fk_audit_logs_tenant_user_id_users"),
-    ("run_logs", ["tenant_id", "agent_id"], "agent_registry", ["tenant_id", "agent_id"],
-     "fk_run_logs_tenant_agent_id_agent_registry"),
-    ("run_logs", ["tenant_id", "user_id"], "users", ["tenant_id", "id"],
-     "fk_run_logs_tenant_user_id_users"),
+    (
+        "agent_registry",
+        ["tenant_id", "created_by"],
+        "users",
+        ["tenant_id", "id"],
+        "fk_agent_registry_tenant_created_by_users",
+    ),
+    (
+        "tool_registry",
+        ["tenant_id", "created_by"],
+        "users",
+        ["tenant_id", "id"],
+        "fk_tool_registry_tenant_created_by_users",
+    ),
+    (
+        "tasks",
+        ["tenant_id", "creator_id"],
+        "users",
+        ["tenant_id", "id"],
+        "fk_tasks_tenant_creator_id_users",
+    ),
+    (
+        "tasks",
+        ["tenant_id", "assignee_id"],
+        "users",
+        ["tenant_id", "id"],
+        "fk_tasks_tenant_assignee_id_users",
+    ),
+    (
+        "user_memories",
+        ["tenant_id", "user_id"],
+        "users",
+        ["tenant_id", "id"],
+        "fk_user_memories_tenant_user_id_users",
+    ),
+    (
+        "audit_logs",
+        ["tenant_id", "user_id"],
+        "users",
+        ["tenant_id", "id"],
+        "fk_audit_logs_tenant_user_id_users",
+    ),
+    (
+        "run_logs",
+        ["tenant_id", "agent_id"],
+        "agent_registry",
+        ["tenant_id", "agent_id"],
+        "fk_run_logs_tenant_agent_id_agent_registry",
+    ),
+    (
+        "run_logs",
+        ["tenant_id", "user_id"],
+        "users",
+        ["tenant_id", "id"],
+        "fk_run_logs_tenant_user_id_users",
+    ),
 )
 
 
@@ -110,33 +150,21 @@ def upgrade() -> None:
     # cross-tenant rows exist (see module docstring for repair guidance).
     # Identifiers are hardcoded (no string interpolation).
     op.execute(
-        "ALTER TABLE agent_registry VALIDATE CONSTRAINT "
-        "fk_agent_registry_tenant_created_by_users"
+        "ALTER TABLE agent_registry VALIDATE CONSTRAINT fk_agent_registry_tenant_created_by_users"
     )
     op.execute(
-        "ALTER TABLE tool_registry VALIDATE CONSTRAINT "
-        "fk_tool_registry_tenant_created_by_users"
+        "ALTER TABLE tool_registry VALIDATE CONSTRAINT fk_tool_registry_tenant_created_by_users"
     )
+    op.execute("ALTER TABLE tasks VALIDATE CONSTRAINT fk_tasks_tenant_creator_id_users")
+    op.execute("ALTER TABLE tasks VALIDATE CONSTRAINT fk_tasks_tenant_assignee_id_users")
     op.execute(
-        "ALTER TABLE tasks VALIDATE CONSTRAINT fk_tasks_tenant_creator_id_users"
+        "ALTER TABLE user_memories VALIDATE CONSTRAINT fk_user_memories_tenant_user_id_users"
     )
+    op.execute("ALTER TABLE audit_logs VALIDATE CONSTRAINT fk_audit_logs_tenant_user_id_users")
     op.execute(
-        "ALTER TABLE tasks VALIDATE CONSTRAINT fk_tasks_tenant_assignee_id_users"
+        "ALTER TABLE run_logs VALIDATE CONSTRAINT fk_run_logs_tenant_agent_id_agent_registry"
     )
-    op.execute(
-        "ALTER TABLE user_memories VALIDATE CONSTRAINT "
-        "fk_user_memories_tenant_user_id_users"
-    )
-    op.execute(
-        "ALTER TABLE audit_logs VALIDATE CONSTRAINT fk_audit_logs_tenant_user_id_users"
-    )
-    op.execute(
-        "ALTER TABLE run_logs VALIDATE CONSTRAINT "
-        "fk_run_logs_tenant_agent_id_agent_registry"
-    )
-    op.execute(
-        "ALTER TABLE run_logs VALIDATE CONSTRAINT fk_run_logs_tenant_user_id_users"
-    )
+    op.execute("ALTER TABLE run_logs VALIDATE CONSTRAINT fk_run_logs_tenant_user_id_users")
 
 
 def downgrade() -> None:

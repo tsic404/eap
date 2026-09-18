@@ -117,7 +117,6 @@ def test_streaming_response_not_wrapped_or_truncated() -> None:
         assert resp.text == "chunk-onechunk-two"
 
 
-
 def _ident_handler(request: Request) -> dict[str, object]:
     return {
         "user_id": getattr(request.state, "user_id", None),
@@ -143,9 +142,11 @@ def test_jwt_with_public_key_verifies_signature() -> None:
     from cryptography.hazmat.primitives.asymmetric import rsa
 
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    public_pem = private_key.public_key().public_bytes(
-        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
-    ).decode()
+    public_pem = (
+        private_key.public_key()
+        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        .decode()
+    )
     token = pyjwt.encode(
         {"sub": "user-123", "tenantId": "tenant-456", "role": "admin"},
         private_key,

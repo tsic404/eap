@@ -29,9 +29,11 @@ _ISSUER = "https://sso.example.com"
 _CLIENT_ID = "client-123"
 
 _KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-_PUBLIC_PEM = _KEY.public_key().public_bytes(
-    serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
-).decode()
+_PUBLIC_PEM = (
+    _KEY.public_key()
+    .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+    .decode()
+)
 _PRIVATE_PEM = _KEY.private_bytes(
     serialization.Encoding.PEM,
     serialization.PrivateFormat.PKCS8,
@@ -337,14 +339,10 @@ async def test_callback_state_replay_returns_400(session_factory) -> None:  # ty
         state, nonce = await _begin_login(http)
         idp.nonce = nonce
 
-        first = await http.get(
-            f"/api/auth/callback?code=c1&state={state}", follow_redirects=False
-        )
+        first = await http.get(f"/api/auth/callback?code=c1&state={state}", follow_redirects=False)
         assert first.status_code == 302, first.text
 
-        replay = await http.get(
-            f"/api/auth/callback?code=c1&state={state}", follow_redirects=False
-        )
+        replay = await http.get(f"/api/auth/callback?code=c1&state={state}", follow_redirects=False)
         assert replay.status_code == 400, replay.text
         assert replay.json()["error"]["code"] == "INVALID_STATE"
     finally:
@@ -418,9 +416,7 @@ async def test_refresh_rotates_cookie_with_contract(session_factory) -> None:  #
     try:
         state, nonce = await _begin_login(http)
         idp.nonce = nonce
-        await http.get(
-            f"/api/auth/callback?code=c1&state={state}", follow_redirects=False
-        )
+        await http.get(f"/api/auth/callback?code=c1&state={state}", follow_redirects=False)
         original = http.cookies.get("refresh_token")
         assert original
 
@@ -446,9 +442,7 @@ async def test_logout_revokes_family_and_clears_cookie(session_factory) -> None:
     try:
         state, nonce = await _begin_login(http)
         idp.nonce = nonce
-        await http.get(
-            f"/api/auth/callback?code=c1&state={state}", follow_redirects=False
-        )
+        await http.get(f"/api/auth/callback?code=c1&state={state}", follow_redirects=False)
         await http.post("/api/auth/refresh")
         active = http.cookies.get("refresh_token")
         assert active

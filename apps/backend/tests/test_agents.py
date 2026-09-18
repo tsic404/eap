@@ -36,7 +36,9 @@ def _console_mock(*, app_id: str = "dify-app-1", api_token: str = "app-secret-1"
 
 
 async def _seed_tenant_user(
-    session, *, role: str = "agent_admin"  # type: ignore[no-untyped-def]
+    session,
+    *,
+    role: str = "agent_admin",  # type: ignore[no-untyped-def]
 ) -> tuple[Tenant, User]:
     slug = f"acme-{uuid.uuid4().hex[:8]}"
     tenant = Tenant(name="Acme", slug=slug, sso_provider="local", status="active")
@@ -59,9 +61,7 @@ def _make_keypair() -> tuple[rsa.RSAPrivateKey, str]:
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     public_pem = (
         private_key.public_key()
-        .public_bytes(
-            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
-        )
+        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
         .decode()
     )
     return private_key, public_pem
@@ -76,9 +76,7 @@ async def _route_client(session_factory, *, role: str = "agent_admin") -> tuple[
         user_id = user.id
         user_role = user.role
 
-    app = create_app(
-        Settings(_env_file=None, jwt_public_key=public_pem, rate_limit_enabled=False)
-    )
+    app = create_app(Settings(_env_file=None, jwt_public_key=public_pem, rate_limit_enabled=False))
     app.state.dify_console = _console_mock()
 
     async def override_get_session():
@@ -230,14 +228,10 @@ async def test_find_many_is_tenant_scoped(session_factory) -> None:  # type: ign
         tenant_b, _ = await _seed_tenant_user(session, role="agent_admin")
         repo = AgentRepository(session)
         await repo.create(
-            AgentRegistry(
-                agent_id="a-bot", tenant_id=tenant_a.id, dify_app_id="d1", name="A Bot"
-            )
+            AgentRegistry(agent_id="a-bot", tenant_id=tenant_a.id, dify_app_id="d1", name="A Bot")
         )
         await repo.create(
-            AgentRegistry(
-                agent_id="b-bot", tenant_id=tenant_b.id, dify_app_id="d2", name="B Bot"
-            )
+            AgentRegistry(agent_id="b-bot", tenant_id=tenant_b.id, dify_app_id="d2", name="B Bot")
         )
         await session.commit()
 
@@ -378,9 +372,7 @@ async def test_offline_and_delete_emit_events(session_factory) -> None:  # type:
         event_bus.subscribe(AGENT_OFFLINE, on_offline)
         event_bus.subscribe(AGENT_DELETED, on_deleted)
 
-        offlined = await service.offline(
-            agent.agent_id, tenant_id=tenant.id, actor_id=user.id
-        )
+        offlined = await service.offline(agent.agent_id, tenant_id=tenant.id, actor_id=user.id)
         assert offlined.status == "offline"
         assert len(offline_events) == 1
 

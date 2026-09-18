@@ -29,9 +29,7 @@ _TYPE_TO_DIFY_MODE: dict[str, str] = {
     "data": "chat",
 }
 
-_DUPLICATE_AGENT_CONSTRAINTS = frozenset(
-    {"pk_agent_registry", "uq_agent_registry_tenant_agent_id"}
-)
+_DUPLICATE_AGENT_CONSTRAINTS = frozenset({"pk_agent_registry", "uq_agent_registry_tenant_agent_id"})
 
 # camelCase DTO keys that differ from the ORM column name on ``AgentRegistry``.
 # ``update`` maps these before handing the payload to ``update_with_version`` so
@@ -158,9 +156,7 @@ class AgentService:
         tool_ids = data.pop("toolIds", None)
         fields = {_FIELD_TO_COLUMN.get(key, key): value for key, value in data.items()}
 
-        updated = await self._repo.update_with_version(
-            tenant_id, agent_id, version, **fields
-        )
+        updated = await self._repo.update_with_version(tenant_id, agent_id, version, **fields)
         if updated is None:
             await self._session.rollback()
             raise AppError(409, "CONFLICT", "Agent version conflict")
@@ -229,9 +225,7 @@ class AgentService:
         )
         return updated
 
-    async def delete(
-        self, agent_id: str, *, tenant_id: uuid.UUID, actor_id: uuid.UUID
-    ) -> None:
+    async def delete(self, agent_id: str, *, tenant_id: uuid.UUID, actor_id: uuid.UUID) -> None:
         agent = await self._repo.find_by_id(tenant_id, agent_id)
         if agent is None:
             raise AppError(404, "NOT_FOUND", "Agent not found")
@@ -257,9 +251,7 @@ class AgentService:
                 AgentKnowledgeBinding(agent_id=agent.agent_id, kb_id=kb_id)
             )
         for tool_id in tool_ids:
-            agent.tool_bindings.append(
-                AgentToolBinding(agent_id=agent.agent_id, tool_id=tool_id)
-            )
+            agent.tool_bindings.append(AgentToolBinding(agent_id=agent.agent_id, tool_id=tool_id))
 
     async def _replace_bindings(
         self,

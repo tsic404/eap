@@ -447,9 +447,7 @@ class DifyConsoleClient:
             "POST", f"/console/api/datasets/{dataset_id}/documents", json_body=body
         )
 
-    async def list_documents(
-        self, dataset_id: str, *, page: int = 1, limit: int = 20
-    ) -> Any:
+    async def list_documents(self, dataset_id: str, *, page: int = 1, limit: int = 20) -> Any:
         return await self._request(
             "GET",
             f"/console/api/datasets/{dataset_id}/documents",

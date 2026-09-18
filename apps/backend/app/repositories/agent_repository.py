@@ -91,9 +91,7 @@ class AgentRepository:
         agents = list((await self._session.scalars(stmt)).all())
         return agents, total
 
-    async def find_by_id(
-        self, tenant_id: uuid.UUID, agent_id: str
-    ) -> AgentRegistry | None:
+    async def find_by_id(self, tenant_id: uuid.UUID, agent_id: str) -> AgentRegistry | None:
         """Load one agent with its bindings (names included), or ``None``."""
         stmt = (
             select(AgentRegistry)
@@ -106,9 +104,7 @@ class AgentRepository:
                 selectinload(AgentRegistry.knowledge_bindings).selectinload(
                     AgentKnowledgeBinding.knowledge
                 ),
-                selectinload(AgentRegistry.tool_bindings).selectinload(
-                    AgentToolBinding.tool
-                ),
+                selectinload(AgentRegistry.tool_bindings).selectinload(AgentToolBinding.tool),
                 noload(AgentRegistry.run_logs),
                 noload(AgentRegistry.daily_stats),
             )

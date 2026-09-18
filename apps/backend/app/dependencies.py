@@ -35,9 +35,7 @@ def _parse_uuid(value: str, code: str) -> uuid.UUID:
         raise AppError(401, code, "Invalid token identity") from None
 
 
-async def get_current_user(
-    request: Request, session: AsyncSession = Depends(get_session)
-) -> User:
+async def get_current_user(request: Request, session: AsyncSession = Depends(get_session)) -> User:
     """Resolve the authenticated user, returning 401 when absent or unknown."""
     user_id = getattr(request.state, "user_id", None)
     if not user_id:

@@ -287,9 +287,7 @@ async def test_execute_high_risk_keeps_real_params_in_approval_task() -> None:
     )
     tool = _make_tool(risk_level="high")
 
-    await service.execute(
-        tool, {"phone": "13800138000", "name": "张三"}, requester=_make_user()
-    )
+    await service.execute(tool, {"phone": "13800138000", "name": "张三"}, requester=_make_user())
 
     task = session.add.call_args.args[0]
     # The task row is the approver's decision payload — real values, unmasked.
@@ -386,9 +384,7 @@ async def test_debug_saves_masked_request_body() -> None:
     )
     tool = _make_tool()
 
-    await service.debug(
-        tool, DebugToolDto(params={"phone": "13800138000"}, save_as_test_case=True)
-    )
+    await service.debug(tool, DebugToolDto(params={"phone": "13800138000"}, save_as_test_case=True))
 
     case = session.add.call_args.args[0]
     assert json.loads(case.request_body) == {"phone": "***"}

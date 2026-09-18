@@ -51,6 +51,7 @@ def _set_identity(
         state["role"] = role
         structlog.contextvars.bind_contextvars(role=role)
 
+
 def _header(scope: Scope, name: str) -> str | None:
     headers = cast(list[tuple[bytes, bytes]], scope.get("headers", []))
     for key, value in headers:

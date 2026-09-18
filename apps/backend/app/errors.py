@@ -74,9 +74,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         return error_response(exc.status_code, exc.code, exc.message, exc.details)
 
     @app.exception_handler(StarletteHTTPException)
-    async def http_exception_handler(
-        request: Request, exc: StarletteHTTPException
-    ) -> JSONResponse:
+    async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         code = _STATUS_CODE_MAP.get(exc.status_code, "ERROR")
         detail = exc.detail
         if isinstance(detail, str):

@@ -226,9 +226,7 @@ class KnowledgeService:
         limit: int,
     ) -> DocumentPageDto:
         kb = await self._require_kb(session, tenant, kb_id)
-        result = await self._dify_console.list_documents(
-            kb.dify_dataset_id, page=page, limit=limit
-        )
+        result = await self._dify_console.list_documents(kb.dify_dataset_id, page=page, limit=limit)
         items = [
             DocumentDto(
                 id=doc["id"],
@@ -297,9 +295,7 @@ class KnowledgeService:
         owns_client = retriever is None
         if retriever is None:
             if not kb.dify_api_key:
-                raise AppError(
-                    409, "KB_API_KEY_MISSING", "Knowledge base has no dataset API key"
-                )
+                raise AppError(409, "KB_API_KEY_MISSING", "Knowledge base has no dataset API key")
             # Dataset-scoped bearer: a per-KB key, never the global app key.
             retriever = DifyClientService(self._settings.dify_api_base_url, kb.dify_api_key)
         body: dict[str, Any] = {"query": dto.query}
@@ -307,9 +303,7 @@ class KnowledgeService:
             body["retrieval_model"] = dto.retrieval_model
         try:
             started = time.perf_counter()
-            result = await retriever.post(
-                f"/v1/datasets/{kb.dify_dataset_id}/retrieve", body
-            )
+            result = await retriever.post(f"/v1/datasets/{kb.dify_dataset_id}/retrieve", body)
             latency_ms = (time.perf_counter() - started) * 1000
         finally:
             if owns_client:

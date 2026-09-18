@@ -34,9 +34,11 @@ _PRIVATE_PEM = _KEY.private_bytes(
     serialization.PrivateFormat.PKCS8,
     serialization.NoEncryption(),
 ).decode()
-_PUBLIC_PEM = _KEY.public_key().public_bytes(
-    serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
-).decode()
+_PUBLIC_PEM = (
+    _KEY.public_key()
+    .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+    .decode()
+)
 
 
 def _settings() -> Settings:
@@ -94,9 +96,7 @@ async def test_rotate_revokes_old_and_mints_successor(session_factory) -> None: 
         rotated = await service.rotate(session, pair.refresh_token)
 
     async with session_factory() as session:
-        old = await session.scalar(
-            select(RefreshToken).where(RefreshToken.token_hash == old_hash)
-        )
+        old = await session.scalar(select(RefreshToken).where(RefreshToken.token_hash == old_hash))
         new = await session.scalar(
             select(RefreshToken).where(RefreshToken.token_hash == hash_token(rotated.refresh_token))
         )
@@ -175,9 +175,7 @@ async def test_reuse_beyond_grace_revokes_family(session_factory) -> None:  # ty
     # Backdate the old token's rotation past the grace window to simulate a
     # replay arriving long after the legitimate refresh completed.
     async with session_factory() as session:
-        old = await session.scalar(
-            select(RefreshToken).where(RefreshToken.token_hash == old_hash)
-        )
+        old = await session.scalar(select(RefreshToken).where(RefreshToken.token_hash == old_hash))
         assert old is not None
         old.revoked_at = datetime.now(UTC) - timedelta(seconds=GRACE_PERIOD_SECONDS + 10)
         await session.commit()

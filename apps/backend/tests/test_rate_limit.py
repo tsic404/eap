@@ -138,7 +138,6 @@ async def test_redis_bucket_recovers_after_cooldown(monkeypatch: pytest.MonkeyPa
     assert limiter._failed_at == 0.0
 
 
-
 def test_middleware_returns_429_when_conversation_limit_exceeded() -> None:
     settings = Settings(_env_file=None, rate_limit_conversation_per_minute=2)
     app = FastAPI()
@@ -159,9 +158,7 @@ def test_middleware_returns_429_when_conversation_limit_exceeded() -> None:
 
 
 def test_middleware_returns_429_on_global_exhaustion() -> None:
-    settings = Settings(
-        _env_file=None, rate_limit_requests=2, rate_limit_window_seconds=3600
-    )
+    settings = Settings(_env_file=None, rate_limit_requests=2, rate_limit_window_seconds=3600)
     app = FastAPI()
     app.add_middleware(RateLimitMiddleware, settings=settings, limiter=InMemoryTokenBucket())
 

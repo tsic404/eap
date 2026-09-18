@@ -51,9 +51,7 @@ _base_db_name = make_url(_TEST_DSN).database
 if not _base_db_name:
     raise ValueError("TEST_DB_DSN must include a database name")
 _TEST_DB_NAME = f"{_base_db_name}_{uuid.uuid4().hex[:12]}"
-_TEST_DSN = make_url(_TEST_DSN).set(database=_TEST_DB_NAME).render_as_string(
-    hide_password=False
-)
+_TEST_DSN = make_url(_TEST_DSN).set(database=_TEST_DB_NAME).render_as_string(hide_password=False)
 _TEST_ASYNC_URL = _TEST_DSN.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 
@@ -115,9 +113,7 @@ async def test_post_patch_patch_all_200() -> None:
             await conn.run_sync(Base.metadata.create_all)
 
         async with factory() as session:
-            tenant = Tenant(
-                name="Tenant", slug="tenant-a", sso_provider="local", status="active"
-            )
+            tenant = Tenant(name="Tenant", slug="tenant-a", sso_provider="local", status="active")
             session.add(tenant)
             await session.flush()
             user = User(

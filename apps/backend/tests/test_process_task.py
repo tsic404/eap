@@ -93,9 +93,7 @@ def _proxy() -> ToolProxy:
 @pytest.mark.asyncio
 async def test_process_task_executes_approved_tool(session_factory, monkeypatch):
     task_id = await _seed_task_and_tool(session_factory)
-    monkeypatch.setattr(
-        _PROCESS_TASK_MODULE, "async_session_factory", session_factory
-    )
+    monkeypatch.setattr(_PROCESS_TASK_MODULE, "async_session_factory", session_factory)
 
     await _process(
         str(task_id),
@@ -115,9 +113,7 @@ async def test_process_task_executes_approved_tool(session_factory, monkeypatch)
 @pytest.mark.asyncio
 async def test_process_task_skips_cancelled_task(session_factory, monkeypatch):
     task_id = await _seed_task_and_tool(session_factory, status="cancelled")
-    monkeypatch.setattr(
-        _PROCESS_TASK_MODULE, "async_session_factory", session_factory
-    )
+    monkeypatch.setattr(_PROCESS_TASK_MODULE, "async_session_factory", session_factory)
 
     await _process(
         str(task_id),
@@ -136,9 +132,7 @@ async def test_process_task_skips_cancelled_task(session_factory, monkeypatch):
 @pytest.mark.asyncio
 async def test_process_task_marks_unsupported_type_failed(session_factory, monkeypatch):
     task_id = await _seed_task_and_tool(session_factory, task_type="knowledge_index")
-    monkeypatch.setattr(
-        _PROCESS_TASK_MODULE, "async_session_factory", session_factory
-    )
+    monkeypatch.setattr(_PROCESS_TASK_MODULE, "async_session_factory", session_factory)
 
     await _process(
         str(task_id),
@@ -158,9 +152,7 @@ async def test_process_task_marks_unsupported_type_failed(session_factory, monke
 async def test_process_task_duplicate_claim_skips_execution(session_factory, monkeypatch):
     """A second job for the same outbox id must not re-execute (SETNX lost)."""
     task_id = await _seed_task_and_tool(session_factory)
-    monkeypatch.setattr(
-        _PROCESS_TASK_MODULE, "async_session_factory", session_factory
-    )
+    monkeypatch.setattr(_PROCESS_TASK_MODULE, "async_session_factory", session_factory)
 
     await _process(
         str(task_id),

@@ -41,9 +41,7 @@ def _make_user(tenant: Tenant, role: str = "agent_admin") -> User:
     )
 
 
-async def _seed_task(
-    session_factory, **overrides: object
-) -> tuple[uuid.UUID, uuid.UUID, User]:
+async def _seed_task(session_factory, **overrides: object) -> tuple[uuid.UUID, uuid.UUID, User]:
     """Create tenant + creator user + task; return (task_id, tenant_id, creator)."""
     tenant = _make_tenant()
     user = _make_user(tenant)
@@ -92,9 +90,7 @@ async def test_approve_transitions_writes_outbox_and_enqueues(session_factory, m
 
     async with session_factory() as session:
         service = TaskService(session)
-        task = await service.transition(
-            str(task_id), "approved", tenant_id=tenant_id, actor=user
-        )
+        task = await service.transition(str(task_id), "approved", tenant_id=tenant_id, actor=user)
 
     assert task.status == "approved"
 
