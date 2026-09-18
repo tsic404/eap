@@ -9,6 +9,7 @@ import {
   ChevronUp,
 } from "lucide-react";
 
+import { useMediaQuery } from "@/lib/use-media-query";
 import { cn } from "@/lib/utils";
 
 import { Button } from "./button";
@@ -60,6 +61,7 @@ export function DataTable<T>({
   } | null>(null);
   const [page, setPage] = useState(0);
   const [internalSelected, setInternalSelected] = useState<string[]>([]);
+  const isMobile = useMediaQuery("(max-width: 767px)");
 
   const isControlled = selectedKeys !== undefined;
   const selected = isControlled ? selectedKeys : internalSelected;
@@ -129,91 +131,142 @@ export function DataTable<T>({
     return <EmptyState title={emptyTitle} description={emptyDescription} />;
   }
 
+  const allPageSelected =
+    pageKeys.length > 0 && pageKeys.every((key) => selected.includes(key));
+
   return (
     <div className="flex flex-col gap-3">
-      <div className="overflow-x-auto rounded-md border border-border">
-        <table className="w-full border-collapse text-left text-sm">
-          <thead className="bg-muted">
-            <tr>
-              {selectable && (
-                <th className="w-10 px-3 py-2.5">
-                  <input
-                    type="checkbox"
-                    aria-label="选择当前页全部"
-                    checked={
-                      pageKeys.length > 0 &&
-                      pageKeys.every((key) => selected.includes(key))
-                    }
-                    onChange={toggleAll}
-                  />
-                </th>
-              )}
-              {columns.map((column) => (
-                <th
-                  key={column.key}
-                  className={cn(
-                    "px-3 py-2.5 font-medium text-foreground",
-                    column.className,
-                  )}
-                >
-                  {column.sortable ? (
-                    <button
-                      type="button"
-                      onClick={() => toggleSort(column)}
-                      className="inline-flex items-center gap-1"
-                    >
-                      {column.header}
-                      {sort?.key === column.key ? (
-                        sort.direction === "asc" ? (
-                          <ChevronUp className="h-4 w-4" />
-                        ) : (
-                          <ChevronDown className="h-4 w-4" />
-                        )
-                      ) : (
-                        <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
-                      )}
-                    </button>
-                  ) : (
-                    column.header
-                  )}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {pageData.map((row) => {
-              const key = rowKey(row);
-              return (
-                <tr key={key} className="border-t border-border">
-                  {selectable && (
-                    <td className="px-3 py-2.5">
-                      <input
-                        type="checkbox"
-                        aria-label="选择行"
-                        checked={selected.includes(key)}
-                        onChange={() => toggleRow(key)}
-                      />
-                    </td>
-                  )}
+      {isMobile ? (
+        <div className="flex flex-col gap-3">
+          {selectable && (
+            <label className="flex items-center gap-2 self-start text-sm text-muted-foreground">
+              <input
+                type="checkbox"
+                aria-label="选择当前页全部"
+                checked={allPageSelected}
+                onChange={toggleAll}
+              />
+              全选
+            </label>
+          )}
+          {pageData.map((row) => {
+            const key = rowKey(row);
+            return (
+              <div
+                key={key}
+                className="flex flex-col gap-3 rounded-lg border border-border bg-background p-4 shadow-sm"
+              >
+                {selectable && (
+                  <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      aria-label="选择行"
+                      checked={selected.includes(key)}
+                      onChange={() => toggleRow(key)}
+                    />
+                    选择
+                  </label>
+                )}
+                <dl className="flex flex-col gap-2">
                   {columns.map((column) => (
-                    <td
-                      key={column.key}
-                      className={cn(
-                        "px-3 py-2.5 text-foreground",
-                        column.className,
-                      )}
-                    >
-                      {column.cell
-                        ? column.cell(row)
-                        : defaultValue(row, column.key)}
-                    </td>
+                    <div key={column.key} className="flex flex-col gap-0.5">
+                      <dt className="text-xs font-medium text-muted-foreground">
+                        {column.header}
+                      </dt>
+                      <dd className="text-sm text-foreground">
+                        {column.cell
+                          ? column.cell(row)
+                          : defaultValue(row, column.key)}
+                      </dd>
+                    </div>
                   ))}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                </dl>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-md border border-border">
+          <table className="w-full border-collapse text-left text-sm">
+            <thead className="bg-muted">
+              <tr>
+                {selectable && (
+                  <th className="w-10 px-3 py-2.5">
+                    <input
+                      type="checkbox"
+                      aria-label="选择当前页全部"
+                      checked={allPageSelected}
+                      onChange={toggleAll}
+                    />
+                  </th>
+                )}
+                {columns.map((column) => (
+                  <th
+                    key={column.key}
+                    className={cn(
+                      "px-3 py-2.5 font-medium text-foreground",
+                      column.className,
+                    )}
+                  >
+                    {column.sortable ? (
+                      <button
+                        type="button"
+                        onClick={() => toggleSort(column)}
+                        className="inline-flex items-center gap-1"
+                      >
+                        {column.header}
+                        {sort?.key === column.key ? (
+                          sort.direction === "asc" ? (
+                            <ChevronUp className="h-4 w-4" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
+                        )}
+                      </button>
+                    ) : (
+                      column.header
+                    )}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {pageData.map((row) => {
+                const key = rowKey(row);
+                return (
+                  <tr key={key} className="border-t border-border">
+                    {selectable && (
+                      <td className="px-3 py-2.5">
+                        <input
+                          type="checkbox"
+                          aria-label="选择行"
+                          checked={selected.includes(key)}
+                          onChange={() => toggleRow(key)}
+                        />
+                      </td>
+                    )}
+                    {columns.map((column) => (
+                      <td
+                        key={column.key}
+                        className={cn(
+                          "px-3 py-2.5 text-foreground",
+                          column.className,
+                        )}
+                      >
+                        {column.cell
+                          ? column.cell(row)
+                          : defaultValue(row, column.key)}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
       <div className="flex items-center justify-between text-sm text-muted-foreground">
         <span>
           第 {currentPage + 1} / {pageCount} 页

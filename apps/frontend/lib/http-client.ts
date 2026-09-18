@@ -1,5 +1,6 @@
 import axios, { AxiosError } from "axios";
 import type { AxiosInstance, InternalAxiosRequestConfig } from "axios";
+import * as Sentry from "@sentry/nextjs";
 
 import { API_ROUTES, ROUTES } from "./api-routes";
 import {
@@ -7,6 +8,7 @@ import {
   readAccessTokenCookie,
   setAccessToken,
 } from "./token-store";
+import { toast } from "./toast-bus";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
 
@@ -106,6 +108,12 @@ apiClient.interceptors.response.use(
         }
         redirectToLogin();
       }
+    }
+    if (status === 403) {
+      toast({ type: "error", title: "无权限访问" });
+    }
+    if (status !== undefined && status >= 500) {
+      Sentry.captureException(error);
     }
     return Promise.reject(error);
   },

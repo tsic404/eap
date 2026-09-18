@@ -3,6 +3,8 @@ import { cookies } from "next/headers";
 
 import { AuthProvider } from "@/components/auth/auth-context";
 import { RoleProvider } from "@/components/auth/role-context";
+import { WebVitals } from "@/components/layout/web-vitals";
+import { OfflineBanner } from "@/components/ui/offline-banner";
 import { ToastProvider } from "@/components/ui/toast";
 import { resolveRole, ROLE_COOKIE } from "@/lib/roles";
 import "./globals.css";
@@ -22,7 +24,11 @@ export default async function RootLayout({
       <body>
         <AuthProvider>
           <RoleProvider role={role}>
-            <ToastProvider>{children}</ToastProvider>
+            <ToastProvider>
+              <WebVitals />
+              <OfflineBanner />
+              {children}
+            </ToastProvider>
           </RoleProvider>
         </AuthProvider>
       </body>

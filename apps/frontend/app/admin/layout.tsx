@@ -1,6 +1,8 @@
 "use client";
 
 import { AdminRouteGuard } from "@/components/auth/admin-route-guard";
+import { AdminSidebar } from "@/components/layout/admin-sidebar";
+import { AppShell } from "@/components/layout/app-shell";
 
 /**
  * Friendly client-side guard for every `/admin/*` route. Authorization is
@@ -10,5 +12,9 @@ import { AdminRouteGuard } from "@/components/auth/admin-route-guard";
 export default function AdminLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  return <AdminRouteGuard>{children}</AdminRouteGuard>;
+  return (
+    <AdminRouteGuard>
+      <AppShell sidebar={<AdminSidebar />}>{children}</AppShell>
+    </AdminRouteGuard>
+  );
 }
