@@ -48,6 +48,23 @@ export function formatNumber(value: number): string {
   return Number.isFinite(value) ? NUMBER_FORMATTER.format(value) : "";
 }
 
+/**
+ * Format a millisecond duration as human-readable text; `null`/non-finite
+ * input → em dash. Sub-second values keep millisecond precision; minutes are
+ * shown as `Xm Ys`.
+ */
+export function formatDuration(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  if (value < 1000) return `${value} ms`;
+  if (value < 60_000) return `${(value / 1000).toFixed(1)} s`;
+  // Round the whole duration to seconds first, then split — rounding the
+  // remainder alone would turn 59.5s into "Xm 60s".
+  const totalSeconds = Math.round(value / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${seconds}s`;
+}
+
 /** Format a byte count into a human-readable size (`1.5 MB`). */
 export function formatBytes(bytes: number, decimals = 1): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "";

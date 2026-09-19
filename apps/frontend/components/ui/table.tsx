@@ -33,6 +33,7 @@ export interface DataTableProps<T> {
   selectable?: boolean;
   selectedKeys?: string[];
   onSelectionChange?: (keys: string[]) => void;
+  onRowClick?: (row: T) => void;
   pageSize?: number;
   emptyTitle?: string;
   emptyDescription?: string;
@@ -51,6 +52,7 @@ export function DataTable<T>({
   selectable = false,
   selectedKeys,
   onSelectionChange,
+  onRowClick,
   pageSize = 10,
   emptyTitle,
   emptyDescription,
@@ -154,7 +156,23 @@ export function DataTable<T>({
             return (
               <div
                 key={key}
-                className="flex flex-col gap-3 rounded-lg border border-border bg-background p-4 shadow-sm"
+                className={cn(
+                  "flex flex-col gap-3 rounded-lg border border-border bg-background p-4 shadow-sm",
+                  onRowClick && "cursor-pointer",
+                )}
+                onClick={onRowClick ? () => onRowClick(row) : undefined}
+                role={onRowClick ? "button" : undefined}
+                tabIndex={onRowClick ? 0 : undefined}
+                onKeyDown={
+                  onRowClick
+                    ? (event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          onRowClick(row);
+                        }
+                      }
+                    : undefined
+                }
               >
                 {selectable && (
                   <label className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -163,6 +181,7 @@ export function DataTable<T>({
                       aria-label="选择行"
                       checked={selected.includes(key)}
                       onChange={() => toggleRow(key)}
+                      onClick={(event) => event.stopPropagation()}
                     />
                     选择
                   </label>
@@ -236,7 +255,26 @@ export function DataTable<T>({
               {pageData.map((row) => {
                 const key = rowKey(row);
                 return (
-                  <tr key={key} className="border-t border-border">
+                  <tr
+                    key={key}
+                    role={onRowClick ? "button" : undefined}
+                    className={cn(
+                      "border-t border-border",
+                      onRowClick && "cursor-pointer hover:bg-muted",
+                    )}
+                    onClick={onRowClick ? () => onRowClick(row) : undefined}
+                    tabIndex={onRowClick ? 0 : undefined}
+                    onKeyDown={
+                      onRowClick
+                        ? (event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              onRowClick(row);
+                            }
+                          }
+                        : undefined
+                    }
+                  >
                     {selectable && (
                       <td className="px-3 py-2.5">
                         <input
@@ -244,6 +282,7 @@ export function DataTable<T>({
                           aria-label="选择行"
                           checked={selected.includes(key)}
                           onChange={() => toggleRow(key)}
+                          onClick={(event) => event.stopPropagation()}
                         />
                       </td>
                     )}
