@@ -83,3 +83,40 @@ class ConversationPageDto(BaseModel):
 
     items: list[ConversationDto]
     nextCursor: str | None
+
+
+class MessageAttachmentDto(BaseModel):
+    """A file attached to a history message (Dify ``message_files`` entry)."""
+
+    id: str
+    type: str
+    url: str | None = None
+    belongsTo: Literal["user", "assistant"] | None = None
+
+
+class MessageDto(BaseModel):
+    """One history message: a user query paired with the assistant's answer.
+
+    ``feedback`` is Dify's ``like``/``dislike`` rating, or ``None`` when the
+    user has not rated this message. ``createdAt`` is ``None`` when Dify did not
+    report a valid timestamp for the message.
+    """
+
+    id: str
+    query: str
+    answer: str
+    status: str
+    feedback: Literal["like", "dislike"] | None = None
+    files: list[MessageAttachmentDto] = Field(default_factory=list)
+    createdAt: datetime | None = None
+
+
+class MessagePageDto(BaseModel):
+    """Cursor-paginated message history, newest first.
+
+    ``nextCursor`` is the opaque cursor for the next (older) page: the id of the
+    oldest message in this page, or ``None`` when there is no older history.
+    """
+
+    items: list[MessageDto]
+    nextCursor: str | None = None

@@ -26,6 +26,9 @@ from app.schemas.conversation import (
     ConversationPageDto,
     CreateConversationDto,
     ListConversationsDto,
+    MessageAttachmentDto,
+    MessageDto,
+    MessagePageDto,
     SendMessageDto,
 )
 from app.services.dify_client import DifyClientService
@@ -180,6 +183,52 @@ class ConversationService:
         conversation.deleted_at = datetime.now(UTC)
         await session.commit()
 
+    # ── message history ──
+
+    async def list_messages(
+        self,
+        session: AsyncSession,
+        user: User,
+        conversation_id: str,
+        limit: int = 20,
+        cursor: str | None = None,
+    ) -> MessagePageDto:
+        """Return a conversation's message history from Dify, newest first.
+
+        Messages live in Dify (the platform stores only the conversation row),
+        so this proxies Dify's ``GET /v1/messages``. A conversation with no
+        ``dify_conversation_id`` has exchanged no turn yet, so it returns an
+        empty page without an upstream call.
+        """
+        conversation = await self._require_conversation(session, user, conversation_id)
+        if not conversation.dify_conversation_id:
+            return MessagePageDto(items=[], nextCursor=None)
+        agent = await self._require_agent(session, user.tenant_id, conversation.agent_id)
+        if not agent.dify_api_key:
+            raise AppError(409, "AGENT_API_KEY_MISSING", "Agent has no API key")
+
+        client = DifyClientService(self._settings.dify_api_base_url, agent.dify_api_key)
+        query: dict[str, str] = {
+            "conversation_id": conversation.dify_conversation_id,
+            # The Dify ``user`` identifier must match the one used to post
+            # messages (``<tenant_id>:<user_id>``) or Dify returns no history.
+            "user": f"{user.tenant_id}:{user.id}",
+            "limit": str(limit),
+        }
+        if cursor:
+            query["first_id"] = cursor
+        try:
+            payload = await client.get("/v1/messages", query)
+        except DifyApiError as exc:
+            log.warning("message_history_error", conversation_id=conversation_id, error=str(exc))
+            raise AppError(502, "DIFY_ERROR", "Failed to load message history") from exc
+        finally:
+            await client.aclose()
+
+        items = [_to_message_dto(record) for record in payload.get("data") or []]
+        next_cursor = items[-1].id if (payload.get("has_more") and items) else None
+        return MessagePageDto(items=items, nextCursor=next_cursor)
+
     # ── streaming ──
 
     async def prepare_stream(
@@ -325,3 +374,37 @@ def _to_dto(conversation: Conversation) -> ConversationDto:
         createdAt=conversation.created_at,
         updatedAt=conversation.updated_at,
     )
+
+
+def _to_message_dto(record: dict[str, Any]) -> MessageDto:
+    """Map one Dify history message onto the platform ``MessageDto``."""
+    rating = (record.get("feedback") or {}).get("rating")
+    return MessageDto(
+        id=str(record.get("id") or ""),
+        query=str(record.get("query") or ""),
+        answer=str(record.get("answer") or ""),
+        status=str(record.get("status") or "normal"),
+        feedback=rating if rating in ("like", "dislike") else None,
+        files=[
+            MessageAttachmentDto(
+                id=str(f.get("id") or ""),
+                type=str(f.get("type") or "document"),
+                url=f.get("url"),
+                belongsTo=f.get("belongs_to"),
+            )
+            for f in (record.get("message_files") or [])
+        ],
+        createdAt=_epoch_to_datetime(record.get("created_at")),
+    )
+
+
+def _epoch_to_datetime(value: Any) -> datetime | None:
+    """Convert a Dify Unix-epoch-seconds timestamp to an aware ``datetime``.
+
+    Returns ``None`` for a missing, malformed, or out-of-range timestamp rather
+    than forging one: a corrupt record must never surface a fabricated time.
+    """
+    try:
+        return datetime.fromtimestamp(int(value), tz=UTC)
+    except (TypeError, ValueError, OverflowError):
+        return None
