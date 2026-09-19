@@ -1,5 +1,6 @@
 "use client";
 
+import { RUN_LOG_STATUS_LABEL, RUN_LOG_STATUS_VARIANT } from "@/components/run-logs/run-log-labels";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/table";
 import { Tabs } from "@/components/ui/tabs";
@@ -90,20 +91,6 @@ function ConfigTab({ agent }: { agent: AgentDetail }) {
     </div>
   );
 }
-
-const RUN_LOG_STATUS_VARIANT: Record<string, "success" | "danger" | "info" | "warning"> = {
-  success: "success",
-  failed: "danger",
-  running: "info",
-  blocked: "warning",
-};
-
-const RUN_LOG_STATUS_LABEL: Record<string, string> = {
-  success: "成功",
-  failed: "失败",
-  running: "运行中",
-  blocked: "已阻塞",
-};
 
 function LogsTab({ logs }: { logs: RunLog[] }) {
   return (

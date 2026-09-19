@@ -1,0 +1,86 @@
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+
+import type { TraceStep } from "@/lib/run-log-types";
+
+import { TraceTimeline } from "./trace-timeline";
+
+function step(overrides: Partial<TraceStep> = {}): TraceStep {
+  return {
+    stepOrder: 0,
+    name: "步骤",
+    type: null,
+    status: null,
+    latencyMs: null,
+    detail: null,
+    ...overrides,
+  };
+}
+
+describe("TraceTimeline", () => {
+  it("renders an empty state when there are no steps", () => {
+    render(<TraceTimeline steps={[]} />);
+
+    expect(screen.getByText("暂无步骤")).toBeTruthy();
+  });
+
+  it("renders numbered steps with name, status, duration and detail", () => {
+    render(
+      <TraceTimeline
+        steps={[
+          step({ stepOrder: 0, name: "检索知识库", type: "retrieval", status: "success", latencyMs: 120, detail: "命中 3 条" }),
+          step({ stepOrder: 1, name: "生成回复", status: "running" }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("检索知识库")).toBeTruthy();
+    expect(screen.getByText("生成回复")).toBeTruthy();
+    // Circles render `stepOrder + 1`.
+    expect(screen.getByText("1")).toBeTruthy();
+    expect(screen.getByText("2")).toBeTruthy();
+    expect(screen.getByText("retrieval")).toBeTruthy();
+    expect(screen.getByText("120 ms")).toBeTruthy();
+    expect(screen.getByText("命中 3 条")).toBeTruthy();
+    // Missing duration renders a placeholder rather than a blank gap.
+    expect(screen.getByText("—")).toBeTruthy();
+  });
+
+  it("numbers circles from the step's own stepOrder, not render position", () => {
+    render(
+      <TraceTimeline
+        steps={[
+          step({ stepOrder: 4, name: "a" }),
+          step({ stepOrder: 2, name: "b" }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("5")).toBeTruthy();
+    expect(screen.getByText("3")).toBeTruthy();
+  });
+
+  it("maps each status to the shared badge variant and falls back for unknown/absent", () => {
+    render(
+      <TraceTimeline
+        steps={[
+          step({ name: "a", status: "success" }),
+          step({ name: "b", status: "failed" }),
+          step({ name: "c", status: "running" }),
+          step({ name: "d", status: "blocked" }),
+          step({ name: "e", status: null }),
+          step({ name: "f", status: "weird" }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("成功").className).toContain("text-success");
+    expect(screen.getByText("失败").className).toContain("text-danger");
+    expect(screen.getByText("运行中").className).toContain("text-info");
+    expect(screen.getByText("已阻塞").className).toContain("text-warning");
+    // Absent status → "未知" label with the info fallback variant.
+    expect(screen.getByText("未知").className).toContain("text-info");
+    // Unknown status → raw value with the info fallback variant.
+    expect(screen.getByText("weird").className).toContain("text-info");
+  });
+});
