@@ -56,8 +56,35 @@ uv run uvicorn app.main:app --reload --port 3001
 
 ## CI
 
-GitHub Actions 在 PR 上运行 `lint` + `typecheck` + `test` + `build`（前端与后端两个 job）。
+GitHub Actions 在 PR 上运行 `lint` + `typecheck` + `test` + `build`（前端与后端两个 job），并在 main 分支 push 时构建并推送 Docker 镜像到 GHCR。性能门禁（Agent 列表 P95 < 240ms）在 `pytest -m perf` 独立步骤运行，≥20% 退化会拦截合并。
+
+## 测试
+
+```bash
+# 单元 + API 测试（需要本地 PostgreSQL，TEST_DATABASE_URL 指向它）
+cd apps/backend
+uv sync --extra dev --locked
+TEST_DATABASE_URL=postgresql+asyncpg://eap:eap_password@localhost:5432/eap uv run pytest
+
+# 集成测试（httpx.AsyncClient + Testcontainers PostgreSQL/Redis，需 Docker）
+uv run pytest tests/integration
+
+# 性能门禁（Agent 列表 P95 < 240ms）
+uv run pytest -m perf
+```
+
+集成测试用 `testcontainers` 起真实 PostgreSQL(pgvector) 与 Redis 容器，Dify 边界保持 mock。测试数据通过 factory 函数构造（每 worker 独立 tenant 前缀），每个用例跑在事务回滚内。
 
 ## 数据库迁移与部署
 
 schema 变更通过 Alembic 管理（`apps/backend/alembic/`）。迁移脚本的部署注意事项——含 NOT VALID → VALIDATE 两阶段外键的窗口期说明——见 [`deploy/migrations.md`](deploy/migrations.md)。
+
+### 生产部署
+
+```bash
+cp .env.example .env          # 填全所有必需变量（含 Dify/JWT/Weaviate 密钥）
+docker compose -f docker-compose.prod.yml up -d --build
+curl http://localhost/api/health/ready   # 期望 200
+```
+
+生产 compose（`docker-compose.prod.yml`）以非 root 用户运行后端镜像，所有密钥通过 `${VAR:?...}` 强制注入、无硬编码回退。完整步骤见 [`deploy/checklist.md`](deploy/checklist.md)。

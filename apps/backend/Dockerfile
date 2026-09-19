@@ -18,15 +18,18 @@ RUN uv sync --locked --no-dev --no-editable
 FROM python:3.12-slim AS runtime
 ENV PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH"
+# Run as an unprivileged user; the image owns no state that needs root.
+RUN groupadd --system app && useradd --system --gid app --no-create-home app
 WORKDIR /app
-COPY --from=builder /app/.venv /app/.venv
-COPY app ./app
+COPY --from=builder --chown=app:app /app/.venv /app/.venv
+COPY --chown=app:app app ./app
 # Alembic needs its config and script tree in the image to run migrations at
 # container start (see docker-entrypoint.sh).
-COPY alembic.ini ./
-COPY alembic ./alembic
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY --chown=app:app alembic.ini ./
+COPY --chown=app:app alembic ./alembic
+COPY --chown=app:app docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+USER app
 
 EXPOSE 3001
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=5 \

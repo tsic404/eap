@@ -137,7 +137,10 @@ class TaskService:
         """Atomically move a task to ``to_status`` if the state machine allows it."""
         task_uuid = self._parse_task_id(task_id)
 
-        async with self.session.begin():
+        # The router shares this session with the auth dependencies, which
+        # autobegin a transaction before the handler runs, so ``begin()`` would
+        # raise; use the existing transaction and commit/rollback explicitly.
+        try:
             task = await self._select_task(task_uuid, tenant_id)
             if task is None:
                 raise AppError(404, "TASK_NOT_FOUND", "Task not found")
@@ -188,6 +191,11 @@ class TaskService:
                     )
                 )
 
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            raise
+
         if to_status in _WORK_TRIGGERING_STATUSES:
             await self._dispatch_after_commit(task_uuid, outbox_id, task_type, task_payload)
 
@@ -208,7 +216,7 @@ class TaskService:
         """Re-run a failed task (``failed -> executing``), respecting retry budget."""
         task_uuid = self._parse_task_id(task_id)
 
-        async with self.session.begin():
+        try:
             task = await self._select_task(task_uuid, tenant_id)
             if task is None:
                 raise AppError(404, "TASK_NOT_FOUND", "Task not found")
@@ -245,6 +253,11 @@ class TaskService:
                     payload=task_payload,
                 )
             )
+
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            raise
 
         await self._dispatch_after_commit(task_uuid, outbox_id, task_type, task_payload)
 
