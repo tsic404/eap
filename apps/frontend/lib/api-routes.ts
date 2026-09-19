@@ -23,6 +23,9 @@ export const API_ROUTES = {
   files: "/files",
   conversations: "/conversations",
   runLogs: "/run-logs",
+  dashboardAdmin: "/dashboard/admin",
+  dashboardUser: "/dashboard/user",
+  models: "/models",
 } as const;
 
 /** Frontend page routes. */
