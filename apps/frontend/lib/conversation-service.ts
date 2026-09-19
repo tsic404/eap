@@ -11,6 +11,7 @@ import type {
   Conversation,
   ConversationPage,
   MessageFile,
+  MessagePage,
   UploadedFile,
 } from "./conversation-types";
 import { apiClient, API_BASE_URL } from "./http-client";
@@ -36,6 +37,19 @@ export async function listConversations(
 export async function getConversation(conversationId: string): Promise<Conversation> {
   const response = await apiClient.get<ApiEnvelope<Conversation>>(
     `${API_ROUTES.conversations}/${conversationId}`,
+  );
+  return response.data.data;
+}
+
+/** Fetch one page of history (newest first); pass `cursor` for the older page. */
+export async function listMessages(
+  conversationId: string,
+  limit = 20,
+  cursor?: string,
+): Promise<MessagePage> {
+  const response = await apiClient.get<ApiEnvelope<MessagePage>>(
+    `${API_ROUTES.conversations}/${conversationId}/messages`,
+    { params: { limit, ...(cursor ? { cursor } : {}) } },
   );
   return response.data.data;
 }
