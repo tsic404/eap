@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.services.conversation as conversation_module
 from app.config import Settings
+from app.core.exceptions import DifyApiError
 from app.errors import AppError
 from app.models.agent import AgentRegistry
 from app.models.conversation import Conversation
@@ -345,3 +346,162 @@ async def test_memory_recall_excludes_expired_memories(session_factory) -> None:
         contents = [m["content"] for m in memories]
         assert "prefers short answers" in contents
         assert "stale preference" not in contents
+
+
+class _FakeHistoryClient:
+    """Records ``get`` args and returns a canned Dify history payload."""
+
+    def __init__(
+        self,
+        payload: dict[str, Any] | None = None,
+        *,
+        error: Exception | None = None,
+    ) -> None:
+        self.payload = payload if payload is not None else {"data": [], "has_more": False}
+        self.error = error
+        self.last_path: str | None = None
+        self.last_query: dict[str, str] | None = None
+
+    async def get(self, path: str, query: dict[str, str] | None = None) -> dict[str, Any]:
+        self.last_path = path
+        self.last_query = query
+        if self.error is not None:
+            raise self.error
+        return self.payload
+
+    async def aclose(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_list_messages_empty_before_first_turn(session_factory) -> None:  # type: ignore[no-untyped-def]
+    async with session_factory() as session:
+        tenant, user = await _seed_tenant_user(session)
+        _seed_agent(session, tenant)
+        await session.commit()
+        service = ConversationService(_settings())
+        created = await service.create(session, user, CreateConversationDto(agentId="agent-1"))
+
+        page = await service.list_messages(session, user, created.id)
+
+        assert page.items == []
+        assert page.nextCursor is None
+
+
+@pytest.mark.asyncio
+async def test_list_messages_maps_history_and_cursor(session_factory, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    payload = {
+        "data": [
+            {
+                "id": "m1",
+                "query": "hello",
+                "answer": "hi there",
+                "status": "normal",
+                "feedback": {"rating": "like"},
+                "message_files": [
+                    {"id": "f1", "type": "image", "url": "https://dify/f1", "belongs_to": "user"}
+                ],
+                "created_at": 1705407629,
+            },
+            {
+                "id": "m0",
+                "query": "older",
+                "answer": "older answer",
+                "status": "normal",
+                "feedback": None,
+                "message_files": [],
+                "created_at": 1705407000,
+            },
+        ],
+        "has_more": True,
+    }
+    fake = _FakeHistoryClient(payload)
+    monkeypatch.setattr(conversation_module, "DifyClientService", lambda *a, **kw: fake)
+
+    async with session_factory() as session:
+        tenant, user = await _seed_tenant_user(session)
+        _seed_agent(session, tenant)
+        await session.commit()
+        service = ConversationService(_settings())
+        created = await service.create(session, user, CreateConversationDto(agentId="agent-1"))
+
+        conversation = await session.get(Conversation, uuid.UUID(created.id))
+        conversation.dify_conversation_id = "dify-c1"
+        await session.commit()
+
+        page = await service.list_messages(session, user, created.id, limit=50, cursor="m1")
+
+    assert fake.last_path == "/v1/messages"
+    assert fake.last_query == {
+        "conversation_id": "dify-c1",
+        "user": f"{tenant.id}:{user.id}",
+        "limit": "50",
+        "first_id": "m1",
+    }
+
+    assert len(page.items) == 2
+    first = page.items[0]
+    assert first.id == "m1"
+    assert first.query == "hello"
+    assert first.answer == "hi there"
+    assert first.status == "normal"
+    assert first.feedback == "like"
+    assert first.files[0].id == "f1"
+    assert first.files[0].type == "image"
+    assert first.files[0].url == "https://dify/f1"
+    assert first.files[0].belongsTo == "user"
+    assert page.items[1].feedback is None
+    # ``has_more`` pages backward to the oldest message id.
+    assert page.nextCursor == "m0"
+
+
+@pytest.mark.asyncio
+async def test_list_messages_dify_error_maps_to_502(session_factory, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    fake = _FakeHistoryClient(error=DifyApiError(500, "boom"))
+    monkeypatch.setattr(conversation_module, "DifyClientService", lambda *a, **kw: fake)
+
+    async with session_factory() as session:
+        tenant, user = await _seed_tenant_user(session)
+        _seed_agent(session, tenant)
+        await session.commit()
+        service = ConversationService(_settings())
+        created = await service.create(session, user, CreateConversationDto(agentId="agent-1"))
+
+        conversation = await session.get(Conversation, uuid.UUID(created.id))
+        conversation.dify_conversation_id = "dify-c1"
+        await session.commit()
+
+        with pytest.raises(AppError) as exc:
+            await service.list_messages(session, user, created.id)
+
+        assert exc.value.status_code == 502
+        assert exc.value.code == "DIFY_ERROR"
+
+
+def test_epoch_to_datetime_invalid_boundaries() -> None:
+    """Missing/malformed/out-of-range timestamps map to ``None``, never epoch zero."""
+    assert conversation_module._epoch_to_datetime(None) is None
+    assert conversation_module._epoch_to_datetime("not-a-timestamp") is None
+    assert conversation_module._epoch_to_datetime(999_999_999_999_999) is None
+
+    converted = conversation_module._epoch_to_datetime(1_705_407_629)
+    assert converted is not None
+    assert converted.tzinfo is not None
+    assert converted.year == 2024
+
+
+def test_to_message_dto_maps_invalid_timestamp_to_none() -> None:
+    record = {
+        "id": "m1",
+        "query": "hello",
+        "answer": "hi",
+        "status": "normal",
+        "created_at": None,
+    }
+
+    dto = conversation_module._to_message_dto(record)
+
+    # A corrupt record keeps its content but never fabricates a timestamp.
+    assert dto.query == "hello"
+    assert dto.answer == "hi"
+    assert dto.createdAt is None

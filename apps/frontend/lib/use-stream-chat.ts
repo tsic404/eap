@@ -2,14 +2,17 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { historyToChatMessages } from "./chat-history";
 import { applySseEvent, initialChatStreamState } from "./chat-stream-state";
-import type { ChatStreamState, RateLimitInfo } from "./conversation-types";
-import { postMessage } from "./conversation-service";
+import type { ChatStreamState, HistoryMessage, RateLimitInfo } from "./conversation-types";
+import { listMessages, postMessage } from "./conversation-service";
 import { SseDecoder } from "./sse-decoder";
 import { toast } from "./toast-bus";
 
 const HEARTBEAT_TIMEOUT_MS = 30_000;
 const RATE_LIMIT_COOLDOWN_SECONDS = 60;
+/** History messages fetched per page (the backend caps `limit` at 100). */
+const HISTORY_PAGE_SIZE = 100;
 
 type StreamOutcome = "completed" | "aborted" | "timeout" | "disconnected" | "terminal";
 
@@ -40,6 +43,21 @@ function describeStreamError(data: Record<string, unknown>): string {
   return message ?? code ?? "对话生成出错";
 }
 
+/** Follow the history cursor to its end, accumulating newest-first items. */
+async function fetchMessageHistory(conversationId: string): Promise<HistoryMessage[]> {
+  const items: HistoryMessage[] = [];
+  let cursor: string | undefined;
+  // Loop until Dify reports no older messages; guard against an empty page or
+  // a non-advancing cursor so a misbehaving upstream cannot spin forever.
+  while (true) {
+    const page = await listMessages(conversationId, HISTORY_PAGE_SIZE, cursor);
+    items.push(...page.items);
+    if (!page.nextCursor || page.items.length === 0 || page.nextCursor === cursor) break;
+    cursor = page.nextCursor;
+  }
+  return items;
+}
+
 /**
  * Consumes the conversation's SSE stream for a single chat turn.
  *
@@ -54,6 +72,9 @@ export function useStreamChat(conversationId: string | null, agentId: string | n
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rateLimitSeconds, setRateLimitSeconds] = useState(0);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyReloadKey, setHistoryReloadKey] = useState(0);
 
   const abortRef = useRef<AbortController | null>(null);
   const heartbeatRef = useRef<number | null>(null);
@@ -71,6 +92,50 @@ export function useStreamChat(conversationId: string | null, agentId: string | n
       if (heartbeatRef.current !== null) window.clearTimeout(heartbeatRef.current);
     };
   }, []);
+
+  // Reset per-conversation state when the conversation changes so a previous
+  // conversation's transcript, stream, and errors cannot leak into the next.
+  useEffect(() => {
+    setStream(initialChatStreamState());
+    setStreaming(false);
+    setError(null);
+    streamingRef.current = false;
+    abortedByUserRef.current = true;
+    lastQueryRef.current = null;
+    abortRef.current?.abort();
+  }, [conversationId]);
+
+  // Load message history once the conversation is known, following the cursor
+  // to the end so reopening a conversation restores the full transcript.
+  useEffect(() => {
+    if (!conversationId) {
+      setHistoryLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setHistoryLoading(true);
+    setHistoryError(null);
+    void (async () => {
+      try {
+        const items = await fetchMessageHistory(conversationId);
+        if (!cancelled) {
+          // Preserve any message sent this session (possible only after a
+          // failed first load — the composer is disabled while it loads).
+          setStream((prev) => ({
+            ...prev,
+            messages: [...historyToChatMessages(items), ...prev.messages],
+          }));
+        }
+      } catch {
+        if (!cancelled) setHistoryError("历史消息加载失败，请重试");
+      } finally {
+        if (!cancelled) setHistoryLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId, historyReloadKey]);
 
   // Rate-limit countdown: tick once per second while a cooldown is active.
   useEffect(() => {
@@ -231,6 +296,10 @@ export function useStreamChat(conversationId: string | null, agentId: string | n
 
   const dismissError = useCallback(() => setError(null), []);
 
+  const retryHistory = useCallback(() => {
+    setHistoryReloadKey((key) => key + 1);
+  }, []);
+
   return {
     messages: stream.messages,
     citations: stream.citations,
@@ -240,8 +309,11 @@ export function useStreamChat(conversationId: string | null, agentId: string | n
     streaming,
     error,
     rateLimitSeconds,
+    historyLoading,
+    historyError,
     sendMessage,
     retry,
+    retryHistory,
     abort,
     dismissError,
   };

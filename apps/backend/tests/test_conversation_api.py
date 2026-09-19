@@ -181,6 +181,26 @@ async def test_delete_conversation_removes_from_list(session_factory) -> None:  
 
 
 @pytest.mark.asyncio
+async def test_list_messages_returns_empty_before_first_turn(session_factory) -> None:  # type: ignore[no-untyped-def]
+    client, private_key, tenant, user = await _route_client(session_factory)
+    token = _sign(private_key, user, tenant)
+
+    created = await client.post(
+        "/api/conversations",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"agentId": "agent-1"},
+    )
+    conv_id = created.json()["data"]["id"]
+
+    resp = await client.get(
+        f"/api/conversations/{conv_id}/messages", headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["data"] == {"items": [], "nextCursor": None}
+
+
+@pytest.mark.asyncio
 async def test_send_message_returns_event_stream(session_factory) -> None:  # type: ignore[no-untyped-def]
     client, private_key, tenant, user = await _route_client(
         session_factory, service=_FakeStreamService()
