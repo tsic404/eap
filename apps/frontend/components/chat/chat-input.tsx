@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 export interface ChatInputProps {
   streaming: boolean;
   rateLimitSeconds: number;
+  /** Disables the composer while history is loading. */
+  disabled?: boolean;
   onSend: (query: string) => void;
   onStop: () => void;
 }
@@ -16,6 +18,7 @@ export interface ChatInputProps {
 export function ChatInput({
   streaming,
   rateLimitSeconds,
+  disabled = false,
   onSend,
   onStop,
 }: ChatInputProps) {
@@ -24,7 +27,7 @@ export function ChatInput({
 
   const submit = () => {
     const trimmed = value.trim();
-    if (!trimmed || streaming || limited) return;
+    if (!trimmed || streaming || limited || disabled) return;
     onSend(trimmed);
     setValue("");
   };
@@ -35,11 +38,13 @@ export function ChatInput({
         <textarea
           rows={1}
           value={value}
-          disabled={limited}
+          disabled={limited || disabled}
           placeholder={
             limited
               ? `${rateLimitSeconds} 秒后可发送`
-              : "输入消息，Enter 发送，Shift+Enter 换行"
+              : disabled
+                ? "正在加载历史消息…"
+                : "输入消息，Enter 发送，Shift+Enter 换行"
           }
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={(event) => {
@@ -68,7 +73,7 @@ export function ChatInput({
             size="sm"
             className="h-9 w-9 shrink-0 p-0"
             aria-label="发送"
-            disabled={limited || value.trim() === ""}
+            disabled={limited || disabled || value.trim() === ""}
             onClick={submit}
           >
             <Send className="h-4 w-4" />
