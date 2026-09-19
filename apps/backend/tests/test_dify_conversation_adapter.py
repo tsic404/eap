@@ -213,6 +213,7 @@ async def test_maps_all_18_dify_events() -> None:
     assert by_name["message_end"]["traceId"] == "trace1"
     message_end_metadata = by_name["message_end"]["metadata"]
     assert message_end_metadata["usage"] == {"total_tokens": 10}
+    assert message_end_metadata["truncationNotice"] is False
     assert message_end_metadata["retrieverResources"][0]["sourceName"] == "doc1"
     assert message_end_metadata["retrieverResources"][0]["kbName"] == "kb1"
     assert message_end_metadata["retrieverResources"][0]["score"] == 0.9
@@ -321,3 +322,22 @@ async def test_event_type_resets_after_dispatch() -> None:
     events = [e async for e in adapter.stream_messages("c1", "hello", "u1", "tenant1")]
 
     assert [e["data"]["content"] for e in events] == ["first"]
+
+
+@pytest.mark.asyncio
+async def test_message_end_carries_truncation_notice() -> None:
+    frames = [
+        'event: message\ndata: {"answer": "hi"}\n\n',
+        'event: message_end\ndata: {"id": "trace1", "conversation_id": "c1", "metadata": {}}',
+    ]
+
+    adapter, _dify, _memory, _bus = _adapter(frames)
+    events = [
+        e
+        async for e in adapter.stream_messages(
+            "c1", "hello", "u1", "tenant1", truncation_notice=True
+        )
+    ]
+
+    message_end = [e for e in events if e["event"] == "message_end"][0]
+    assert message_end["data"]["metadata"]["truncationNotice"] is True

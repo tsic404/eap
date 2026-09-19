@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.services.conversation as conversation_module
 from app.config import Settings
+from app.core.exceptions import DifyApiError
 from app.errors import AppError
 from app.models.agent import AgentRegistry
 from app.models.conversation import Conversation
@@ -79,10 +80,32 @@ def _settings() -> Settings:
 
 class _FakeClient:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        pass
+        self.messages: dict[str, Any] = {"data": [], "has_more": False}
+        self.error: Exception | None = None
+        self.get_calls: list[dict[str, Any]] = []
 
     async def aclose(self) -> None:
         pass
+
+    async def get(
+        self,
+        path: str,
+        query: dict[str, str] | None = None,
+        *,
+        retries: int = 3,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        self.get_calls.append(
+            {
+                "path": path,
+                "query": dict(query) if query else {},
+                "retries": retries,
+                "timeout": timeout,
+            }
+        )
+        if self.error is not None:
+            raise self.error
+        return self.messages
 
 
 class _FakeAdapter:
@@ -93,6 +116,7 @@ class _FakeAdapter:
         self.memory = memory
         self.publisher = publisher
         self.last: tuple[Any, ...] = ()
+        self.truncation_notice: bool | None = None
 
     async def stream_messages(
         self,
@@ -101,8 +125,11 @@ class _FakeAdapter:
         user_id: str,
         tenant_id: str,
         files: list[dict[str, Any]] | None = None,
+        *,
+        truncation_notice: bool = False,
     ):
         self.last = (conv_id, query, user_id, tenant_id, files)
+        self.truncation_notice = truncation_notice
         yield {"event": "message", "data": {"content": "hi", "conversationId": "dify-c1"}}
         yield {"event": "message_end", "data": {"traceId": "t1", "metadata": {}}}
 
@@ -257,6 +284,113 @@ async def test_stream_serializes_and_persists_dify_id(
         assert user_id == str(user.id)
         assert tenant_id == str(user.tenant_id)
         assert files is None
+        # New conversation: no history to count, so no truncation notice.
+        assert adapters[0].truncation_notice is False
+
+
+@pytest.mark.asyncio
+async def test_conversation_is_truncated_at_threshold() -> None:
+    client = _FakeClient()
+    client.messages = {"data": [{}] * 30, "has_more": False}
+
+    assert await conversation_module._conversation_is_truncated(client, "dify-c1", "u1") is True
+    assert client.get_calls == [
+        {
+            "path": "/v1/messages",
+            "query": {"conversation_id": "dify-c1", "user": "u1", "limit": "100"},
+            "retries": 0,
+            "timeout": 5.0,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_conversation_is_truncated_below_threshold() -> None:
+    client = _FakeClient()
+    client.messages = {"data": [{}] * 29, "has_more": False}
+
+    assert await conversation_module._conversation_is_truncated(client, "dify-c1", "u1") is False
+
+
+@pytest.mark.asyncio
+async def test_conversation_is_truncated_short_circuits_on_has_more() -> None:
+    client = _FakeClient()
+    client.messages = {"data": [{}] * 5, "has_more": True}
+
+    assert await conversation_module._conversation_is_truncated(client, "dify-c1", "u1") is True
+
+
+@pytest.mark.asyncio
+async def test_conversation_is_truncated_degrades_on_error() -> None:
+    client = _FakeClient()
+    client.error = DifyApiError(503, "circuit open")
+
+    assert await conversation_module._conversation_is_truncated(client, "dify-c1", "u1") is False
+
+
+@pytest.mark.asyncio
+async def test_conversation_is_truncated_ignores_malformed_payload() -> None:
+    client = _FakeClient()
+    client.messages = {"data": None, "has_more": False}
+
+    assert await conversation_module._conversation_is_truncated(client, "dify-c1", "u1") is False
+
+
+@pytest.mark.asyncio
+async def test_conversation_is_truncated_skips_empty_id() -> None:
+    client = _FakeClient()
+
+    assert await conversation_module._conversation_is_truncated(client, "", "u1") is False
+    assert client.get_calls == []
+
+
+@pytest.mark.asyncio
+async def test_stream_passes_truncation_notice_to_adapter(
+    session_factory,
+    monkeypatch,  # type: ignore[no-untyped-def]
+) -> None:
+    adapters: list[_FakeAdapter] = []
+    holder: dict[str, dict[str, Any]] = {"messages": {"data": [{}] * 30, "has_more": False}}
+
+    def make_client(*args: Any, **kwargs: Any) -> _FakeClient:
+        client = _FakeClient()
+        client.messages = holder["messages"]
+        return client
+
+    def make_adapter(client: Any, memory: Any, publisher: Any) -> _FakeAdapter:
+        adapter = _FakeAdapter(client, memory, publisher)
+        adapters.append(adapter)
+        return adapter
+
+    monkeypatch.setattr(conversation_module, "DifyClientService", make_client)
+    monkeypatch.setattr(conversation_module, "DifyConversationAdapter", make_adapter)
+
+    async with session_factory() as session:
+        tenant, user = await _seed_tenant_user(session)
+        _seed_agent(session, tenant)
+        await session.commit()
+        service = ConversationService(_settings())
+        created = await service.create(session, user, CreateConversationDto(agentId="agent-1"))
+
+        conversation = await session.get(Conversation, uuid.UUID(created.id))
+        conversation.dify_conversation_id = "dify-c1"
+        agent = await session.get(AgentRegistry, "agent-1")
+        await session.commit()
+
+        frames = [
+            frame
+            async for frame in service.stream(
+                session,
+                conversation,
+                agent,
+                user,
+                SendMessageDto(query="hello", agentId="agent-1"),
+            )
+        ]
+
+        assert len(frames) == 2
+        assert adapters[0].last[0] == "dify-c1"
+        assert adapters[0].truncation_notice is True
 
 
 @pytest.mark.asyncio
