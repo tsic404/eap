@@ -238,9 +238,10 @@ def _accumulate_trace(event_name: str, data: dict[str, Any], trace: dict[str, An
                 {
                     "tool_name": tool,
                     "tool_id": None,
-                    # Dify's agent_thought carries no success/failure signal, so
-                    # asserting "success" would mis-render a failed run's tool
-                    # point as green. Leave it unknown (None).
+                    # Dify emits no tool_call_* event, and agent_thought carries
+                    # no success/failure or latency signal. Hard-coding "success"
+                    # would mis-render a failed run's tool point as green, so
+                    # status and latency stay unknown (None).
                     "status": None,
                     "permission_mode": None,
                     "latency_ms": None,
