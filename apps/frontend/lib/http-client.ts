@@ -10,7 +10,7 @@ import {
 } from "./token-store";
 import { toast } from "./toast-bus";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
 
 /** Shared axios instance — every API call routes through the JWT interceptors. */
 export const apiClient: AxiosInstance = axios.create({
