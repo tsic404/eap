@@ -118,7 +118,7 @@ export function ChatWindow({ conversationId, agentId, agentName }: ChatWindowPro
       <ChatInput
         streaming={streaming}
         rateLimitSeconds={rateLimitSeconds}
-        onSend={(query) => void sendMessage(query)}
+        onSend={(query, files) => sendMessage(query, files)}
         onStop={abort}
       />
     </div>

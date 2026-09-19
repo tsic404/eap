@@ -20,6 +20,7 @@ export const API_ROUTES = {
   agents: "/agents",
   tools: "/tools",
   knowledgeBases: "/knowledge-bases",
+  files: "/files",
   conversations: "/conversations",
   runLogs: "/run-logs",
 } as const;
