@@ -33,8 +33,10 @@ from app.middleware.transform import TransformMiddleware
 from app.rate_limit import RedisTokenBucket
 from app.routers.agents import router as agents_router
 from app.routers.conversations import router as conversations_router
+from app.routers.dashboard import router as dashboard_router
 from app.routers.files import router as files_router
 from app.routers.knowledge import router as knowledge_router
+from app.routers.models import router as models_router
 from app.routers.run_logs import router as run_logs_router
 from app.routers.tasks import router as tasks_router
 from app.routers.tools import router as tools_router
@@ -117,6 +119,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(tasks_router)
     app.include_router(conversations_router)
     app.include_router(run_logs_router)
+    app.include_router(dashboard_router)
+    app.include_router(models_router)
 
     register_db_pool_metrics()
     register_rq_metrics(settings.redis_url)
