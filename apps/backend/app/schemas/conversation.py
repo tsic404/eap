@@ -36,6 +36,19 @@ class MessageFileDto(BaseModel):
     type: Literal["image", "document", "audio", "video", "custom"] = "document"
 
 
+class UploadedFileDto(BaseModel):
+    """A raw file uploaded for chat attachment (``POST /api/files/upload``).
+
+    ``id`` is the Dify upload-file id (from ``/console/api/files/upload``), not
+    the document id a knowledge-base upload would create — the chat-messages
+    call maps this value to ``upload_file_id``.
+    """
+
+    id: str = Field(min_length=1)
+    name: str
+    type: Literal["image", "document", "audio", "video", "custom"] = "document"
+
+
 class SendMessageDto(BaseModel):
     """Body of ``POST /api/conversations/{id}/messages`` (SSE streaming)."""
 

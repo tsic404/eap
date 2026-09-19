@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { applySseEvent, initialChatStreamState } from "./chat-stream-state";
-import type { ChatStreamState, RateLimitInfo } from "./conversation-types";
+import type { ChatStreamState, MessageFile, RateLimitInfo } from "./conversation-types";
 import { postMessage } from "./conversation-service";
 import { SseDecoder } from "./sse-decoder";
 import { toast } from "./toast-bus";
@@ -61,6 +61,7 @@ export function useStreamChat(conversationId: string | null, agentId: string | n
   const streamingRef = useRef(false);
   const mountedRef = useRef(false);
   const lastQueryRef = useRef<string | null>(null);
+  const lastFilesRef = useRef<MessageFile[] | undefined>(undefined);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -82,7 +83,7 @@ export function useStreamChat(conversationId: string | null, agentId: string | n
   }, [rateLimitSeconds]);
 
   const streamOnce = useCallback(
-    async (query: string): Promise<StreamOutcome> => {
+    async (query: string, files?: MessageFile[]): Promise<StreamOutcome> => {
       if (!conversationId || !agentId) return "terminal";
 
       const controller = new AbortController();
@@ -107,7 +108,7 @@ export function useStreamChat(conversationId: string | null, agentId: string | n
       try {
         const response = await postMessage(
           conversationId,
-          { query, agentId },
+          { query, agentId, files },
           controller.signal,
         );
         if (!mountedRef.current) return "aborted";
@@ -169,9 +170,9 @@ export function useStreamChat(conversationId: string | null, agentId: string | n
   );
 
   const sendMessage = useCallback(
-    async (query: string) => {
+    async (query: string, files?: MessageFile[]): Promise<boolean> => {
       const trimmed = query.trim();
-      if (!trimmed || !conversationId || !agentId || streamingRef.current) return;
+      if (!trimmed || !conversationId || !agentId || streamingRef.current) return false;
 
       streamingRef.current = true;
       setStreaming(true);
@@ -179,6 +180,7 @@ export function useStreamChat(conversationId: string | null, agentId: string | n
       setRateLimitSeconds(0);
       abortedByUserRef.current = false;
       lastQueryRef.current = trimmed;
+      lastFilesRef.current = files;
 
       setStream((prev) => ({
         messages: [
@@ -200,8 +202,8 @@ export function useStreamChat(conversationId: string | null, agentId: string | n
         renderedIds: prev.renderedIds,
       }));
 
-      const outcome = await streamOnce(trimmed);
-      if (!mountedRef.current) return;
+      const outcome = await streamOnce(trimmed, files);
+      if (!mountedRef.current) return false;
 
       streamingRef.current = false;
       setStreaming(false);
@@ -213,7 +215,9 @@ export function useStreamChat(conversationId: string | null, agentId: string | n
       } else if (outcome === "disconnected") {
         setError("连接中断，请重试");
       }
-      // "terminal": the 429 toast / HTTP error banner already surfaced the cause.
+      // "terminal": the 429 toast / HTTP error banner already surfaced the
+      // cause; the message never reached Dify, so report it as not delivered.
+      return outcome !== "terminal";
     },
     [conversationId, agentId, streamOnce],
   );
@@ -227,7 +231,7 @@ export function useStreamChat(conversationId: string | null, agentId: string | n
   }, []);
 
   const retry = useCallback(() => {
-    if (lastQueryRef.current) void sendMessage(lastQueryRef.current);
+    if (lastQueryRef.current) void sendMessage(lastQueryRef.current, lastFilesRef.current);
   }, [sendMessage]);
 
   const dismissError = useCallback(() => setError(null), []);

@@ -6,6 +6,22 @@
 
 export type MessageRole = "user" | "assistant";
 
+/** Attachment type carried on a chat message (mirrors backend ``MessageFileDto``). */
+export type MessageFileType = "image" | "document" | "audio" | "video" | "custom";
+
+/** Attachment sent with a message; ``id`` is the Dify upload-file id. */
+export interface MessageFile {
+  id: string;
+  type: MessageFileType;
+}
+
+/** Raw file uploaded for chat (``POST /api/files/upload``); ``id`` is the upload-file id. */
+export interface UploadedFile {
+  id: string;
+  name: string;
+  type: MessageFileType;
+}
+
 /** Item returned by `GET /api/conversations` and `GET /api/conversations/{id}`. */
 export interface Conversation {
   id: string;

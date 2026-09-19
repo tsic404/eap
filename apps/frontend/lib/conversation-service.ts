@@ -10,6 +10,8 @@ import type { ApiEnvelope } from "./auth-types";
 import type {
   Conversation,
   ConversationPage,
+  MessageFile,
+  UploadedFile,
 } from "./conversation-types";
 import { apiClient, API_BASE_URL } from "./http-client";
 import { getAccessToken } from "./token-store";
@@ -17,6 +19,7 @@ import { getAccessToken } from "./token-store";
 export interface SendMessageInput {
   query: string;
   agentId: string;
+  files?: MessageFile[];
 }
 
 export async function listConversations(
@@ -63,7 +66,27 @@ export async function postMessage(
       body: JSON.stringify({
         query: input.query,
         agentId: input.agentId,
+        files: input.files,
       }),
     },
   );
+}
+
+/**
+ * Upload a chat attachment, returning its Dify upload-file id (not a knowledge
+ * document id). The id is echoed back as ``MessageFile.id`` on the next send.
+ */
+export async function uploadChatFile(file: File): Promise<UploadedFile> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await apiClient.post<ApiEnvelope<UploadedFile>>(
+    `${API_ROUTES.files}/upload`,
+    formData,
+    {
+      // FormData needs the browser to set the multipart boundary; drop the
+      // instance default `application/json` header so axios can do that.
+      headers: { "Content-Type": undefined },
+    },
+  );
+  return response.data.data;
 }
