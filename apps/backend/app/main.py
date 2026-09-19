@@ -16,6 +16,7 @@ from app.db import async_session_factory
 from app.dify_console import DifyConsoleClient
 from app.errors import register_exception_handlers
 from app.events.audit import register_audit_log_handler
+from app.events.run_log import register_run_log_handler
 from app.health import router as health_router
 from app.logging_conf import configure_logging, get_logger
 from app.metrics import register_db_pool_metrics, register_rq_metrics
@@ -33,6 +34,7 @@ from app.rate_limit import RedisTokenBucket
 from app.routers.agents import router as agents_router
 from app.routers.conversations import router as conversations_router
 from app.routers.knowledge import router as knowledge_router
+from app.routers.run_logs import router as run_logs_router
 from app.routers.tasks import router as tasks_router
 from app.routers.tools import router as tools_router
 from app.services.conversation import ConversationService
@@ -104,6 +106,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(RequestContextMiddleware)
     register_exception_handlers(app)
     register_audit_log_handler()
+    register_run_log_handler()
     app.include_router(health_router)
     app.include_router(auth_router)
     app.include_router(tools_router)
@@ -111,6 +114,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(knowledge_router)
     app.include_router(tasks_router)
     app.include_router(conversations_router)
+    app.include_router(run_logs_router)
 
     register_db_pool_metrics()
     register_rq_metrics(settings.redis_url)

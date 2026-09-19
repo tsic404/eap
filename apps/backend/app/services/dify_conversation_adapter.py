@@ -18,6 +18,19 @@ from app.services.dify_client import DifyClientService
 
 logger = structlog.get_logger(__name__)
 
+# Tool observations are truncated so a single run cannot bloat ``trace_tool_calls``.
+_OBSERVATION_MAX_CHARS = 2000
+
+
+def _new_trace_state() -> dict[str, Any]:
+    """Fresh accumulator for one stream's run-log trace (§13.1 P1)."""
+    return {
+        "steps": {},  # node_id -> TraceStepRecord-shaped dict (insertion = node order)
+        "tool_calls": [],
+        "output": None,
+        "status": None,
+    }
+
 
 class MemoryRecall(Protocol):
     """Minimal memory-service contract the adapter needs."""
@@ -93,7 +106,7 @@ class DifyConversationAdapter:
                 for f in files
             ]
 
-        async for event in self._stream_events(body, user_id, tenant_id):
+        async for event in self._stream_events(body, user_id, tenant_id, _new_trace_state()):
             yield event
 
     async def _stream_events(
@@ -101,6 +114,7 @@ class DifyConversationAdapter:
         body: dict[str, Any],
         user_id: str,
         tenant_id: str,
+        trace: dict[str, Any],
     ) -> AsyncIterator[dict[str, Any]]:
         buffer = ""
         event_type = ""
@@ -111,7 +125,7 @@ class DifyConversationAdapter:
             buffer = lines.pop() if lines else ""
             for line in lines:
                 event_type, event = await self._handle_sse_line(
-                    line, event_type, user_id, tenant_id
+                    line, event_type, user_id, tenant_id, trace
                 )
                 if event is not None:
                     yield event
@@ -119,7 +133,9 @@ class DifyConversationAdapter:
         # Flush a final frame that ended without a trailing newline — e.g. the
         # closing ``message_end`` — so ``conversation.completed`` still fires.
         if buffer:
-            _event_type, event = await self._handle_sse_line(buffer, event_type, user_id, tenant_id)
+            _event_type, event = await self._handle_sse_line(
+                buffer, event_type, user_id, tenant_id, trace
+            )
             if event is not None:
                 yield event
 
@@ -129,6 +145,7 @@ class DifyConversationAdapter:
         event_type: str,
         user_id: str,
         tenant_id: str,
+        trace: dict[str, Any],
     ) -> tuple[str, dict[str, Any] | None]:
         """Dispatch one SSE line; returns ``(next_event_type, event_or_none)``."""
         if line.startswith("event:"):
@@ -154,11 +171,17 @@ class DifyConversationAdapter:
             )
             return "", None
 
+        if not isinstance(data, dict):
+            # A non-object payload has no event fields; drop it rather than
+            # crash on ``.get`` below.
+            return "", None
+
         # Dify's Service API carries the event name inside the JSON payload
         # ("event" key); the explicit ``event:`` line is a fallback for the
         # generic SSE framing. Reset after dispatch so a following ``data:``
         # line without its own event info never inherits a stale name.
         event_name = str(data.get("event") or event_type)
+        _accumulate_trace(event_name, data, trace)
         event = _map_event(event_name, data)
         if event is None:
             return "", None
@@ -170,10 +193,70 @@ class DifyConversationAdapter:
                     "conversationId": data.get("conversation_id"),
                     "userId": user_id,
                     "tenantId": tenant_id,
+                    "messageEnd": data,
+                    "steps": list(trace["steps"].values()),
+                    "toolCalls": trace["tool_calls"],
+                    "output": trace["output"],
+                    "status": trace["status"],
                 },
             )
 
         return "", event
+
+
+def _accumulate_trace(event_name: str, data: dict[str, Any], trace: dict[str, Any]) -> None:
+    """Fold one Dify SSE event into the stream's run-log trace (§13.1 P1).
+
+    Node start/finish pairs become steps (keyed by node id, so a finished node
+    updates its started step in place); agent thoughts carrying a ``tool`` become
+    tool calls; ``message``/``message_replace``/``agent_message`` update the final
+    answer; ``workflow_finished`` records the run status.
+    """
+    if event_name == "node_started":
+        node_data = data.get("data") or {}
+        node_id = node_data.get("node_id")
+        if node_id is not None:
+            trace["steps"][node_id] = {
+                "step_order": node_data.get("index") or 0,
+                "name": node_data.get("title") or "",
+                "type": "workflow",
+                "status": "running",
+                "latency_ms": None,
+                "detail": None,
+            }
+    elif event_name == "node_finished":
+        node_data = data.get("data") or {}
+        node_id = node_data.get("node_id")
+        step = trace["steps"].get(node_id)
+        if step is not None:
+            step["status"] = node_data.get("status")
+    elif event_name == "agent_thought":
+        tool = data.get("tool")
+        if tool:
+            observation = data.get("observation")
+            trace["tool_calls"].append(
+                {
+                    "tool_name": tool,
+                    "tool_id": None,
+                    # Dify's agent_thought carries no success/failure signal, so
+                    # asserting "success" would mis-render a failed run's tool
+                    # point as green. Leave it unknown (None).
+                    "status": None,
+                    "permission_mode": None,
+                    "latency_ms": None,
+                    "request_summary": None,
+                    "response_summary": (
+                        observation[:_OBSERVATION_MAX_CHARS] if observation else None
+                    ),
+                }
+            )
+    elif event_name in ("message", "message_replace"):
+        answer = data.get("answer")
+        if answer is not None:
+            trace["output"] = answer
+    elif event_name == "workflow_finished":
+        workflow_data = data.get("data") or {}
+        trace["status"] = workflow_data.get("status")
 
 
 def _map_event(event_name: str, data: dict[str, Any]) -> dict[str, Any] | None:

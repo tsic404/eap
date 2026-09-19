@@ -217,12 +217,21 @@ async def test_maps_all_18_dify_events() -> None:
     assert message_end_metadata["retrieverResources"][0]["kbName"] == "kb1"
     assert message_end_metadata["retrieverResources"][0]["score"] == 0.9
 
-    assert bus.published == [
-        (
-            "conversation.completed",
-            {"conversationId": "c1", "userId": "u1", "tenantId": "tenant1"},
-        )
-    ]
+    assert len(bus.published) == 1
+    event_name, payload = bus.published[0]
+    assert event_name == "conversation.completed"
+    assert payload["conversationId"] == "c1"
+    assert payload["userId"] == "u1"
+    assert payload["tenantId"] == "tenant1"
+    assert payload["messageEnd"]["id"] == "trace1"
+    assert payload["status"] == "succeeded"
+    assert payload["output"] == "replaced full text"
+    assert [s["name"] for s in payload["steps"]] == ["retrieve"]
+    assert [s["status"] for s in payload["steps"]] == ["success"]
+    assert [t["tool_name"] for t in payload["toolCalls"]] == ["search"]
+    assert payload["toolCalls"][0]["response_summary"] == "found"
+    # agent_thought carries no success/failure signal, so status stays unknown.
+    assert payload["toolCalls"][0]["status"] is None
 
 
 @pytest.mark.asyncio
@@ -285,7 +294,16 @@ async def test_flushes_trailing_frame_without_newline() -> None:
     assert bus.published == [
         (
             "conversation.completed",
-            {"conversationId": "c1", "userId": "u1", "tenantId": "tenant1"},
+            {
+                "conversationId": "c1",
+                "userId": "u1",
+                "tenantId": "tenant1",
+                "messageEnd": {"id": "trace1", "conversation_id": "c1", "metadata": {}},
+                "steps": [],
+                "toolCalls": [],
+                "output": "hi",
+                "status": None,
+            },
         )
     ]
 

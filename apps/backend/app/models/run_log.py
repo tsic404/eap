@@ -51,6 +51,9 @@ class RunLog(Base):
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     tool_call_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     knowledge_hit_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Dify's ``conversation_id`` from the ``message_end`` event — the run log is
+    # one turn of a conversation, so this enables the ``conversationId`` filter.
+    conversation_id: Mapped[str | None] = mapped_column(String(255))
     dify_message_id: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
