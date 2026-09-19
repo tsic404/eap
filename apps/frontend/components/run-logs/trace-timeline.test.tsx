@@ -60,6 +60,66 @@ describe("TraceTimeline", () => {
     expect(screen.getByText("3")).toBeTruthy();
   });
 
+  it("animates running (spin) and blocked (pulse) steps, leaving static steps still", () => {
+    render(
+      <TraceTimeline
+        steps={[
+          step({ stepOrder: 0, name: "a", status: "running" }),
+          step({ stepOrder: 1, name: "b", status: "success" }),
+          step({ stepOrder: 2, name: "c", status: "blocked" }),
+        ]}
+      />,
+    );
+
+    // Running step: a decorative ring spins while the numbered circle stays still.
+    expect(screen.getByText("1").parentElement?.querySelector(".animate-spin")).toBeTruthy();
+    expect(screen.getByText("1").className).not.toContain("animate-spin");
+    // Blocked step: the numbered circle itself pulses.
+    expect(screen.getByText("3").className).toContain("animate-pulse");
+    // Static (success) step: no animation on or around its circle.
+    expect(screen.getByText("2").className).not.toContain("animate-spin");
+    expect(screen.getByText("2").className).not.toContain("animate-pulse");
+    expect(screen.getByText("2").parentElement?.querySelector(".animate-spin")).toBeNull();
+  });
+
+  it("marks only the highest-order running step as the current one", () => {
+    const { container } = render(
+      <TraceTimeline
+        steps={[
+          step({ stepOrder: 5, name: "a", status: "running" }),
+          step({ stepOrder: 9, name: "b", status: "running" }),
+          step({ stepOrder: 7, name: "c", status: "running" }),
+        ]}
+      />,
+    );
+
+    // Exactly one pulse ring, on the highest stepOrder (9 → "10").
+    expect(container.querySelectorAll(".animate-ping")).toHaveLength(1);
+    expect(screen.getByText("10").parentElement?.querySelector(".animate-ping")).toBeTruthy();
+    expect(screen.getByText("6").parentElement?.querySelector(".animate-ping")).toBeNull();
+    expect(screen.getByText("8").parentElement?.querySelector(".animate-ping")).toBeNull();
+  });
+
+  it("picks a single current step when stepOrders tie", () => {
+    const { container } = render(
+      <TraceTimeline
+        steps={[
+          step({ stepOrder: 0, name: "a", status: "running" }),
+          step({ stepOrder: 0, name: "b", status: "running" }),
+          step({ stepOrder: 0, name: "c", status: "running" }),
+        ]}
+      />,
+    );
+
+    // All stepOrders tie at 0, yet exactly one current ring renders.
+    expect(container.querySelectorAll(".animate-ping")).toHaveLength(1);
+    // The latest running step (last list item) wins the tie.
+    const rows = container.querySelectorAll("li");
+    expect(rows[0].querySelector(".animate-ping")).toBeNull();
+    expect(rows[1].querySelector(".animate-ping")).toBeNull();
+    expect(rows[2].querySelector(".animate-ping")).toBeTruthy();
+  });
+
   it("maps each status to the shared badge variant and falls back for unknown/absent", () => {
     render(
       <TraceTimeline

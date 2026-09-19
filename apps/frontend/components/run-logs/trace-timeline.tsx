@@ -31,6 +31,18 @@ export function TraceTimeline({ steps }: TraceTimelineProps) {
     );
   }
 
+  // No backend flag marks the active step, so infer it as the highest
+  // `stepOrder` running step. `stepOrder` can tie (backend `index` falls back
+  // to 0), so the latest array index breaks the tie and keeps a unique winner.
+  let currentIndex = -1;
+  let currentStepOrder = -1;
+  steps.forEach((step, index) => {
+    if (step.status === "running" && step.stepOrder >= currentStepOrder) {
+      currentStepOrder = step.stepOrder;
+      currentIndex = index;
+    }
+  });
+
   return (
     <ol className="flex flex-col">
       {steps.map((step, index) => {
@@ -39,18 +51,36 @@ export function TraceTimeline({ steps }: TraceTimelineProps) {
         const label = RUN_LOG_STATUS_LABEL[status] ?? step.status ?? "未知";
         const isLast = index === steps.length - 1;
         const duration = step.latencyMs !== null ? `${step.latencyMs} ms` : "—";
+        const isRunning = status === "running";
+        const isBlocked = status === "blocked";
+        const isCurrent = index === currentIndex;
 
         return (
           <li key={`${step.stepOrder}-${index}`} className="flex gap-4">
             <div className="flex flex-col items-center">
-              <span
-                aria-hidden
-                className={cn(
-                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-sm font-medium",
-                  CIRCLE_VARIANT_CLASSES[variant],
+              <span className="relative flex h-8 w-8 shrink-0 items-center justify-center">
+                {isRunning && (
+                  <span
+                    aria-hidden
+                    className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-info"
+                  />
                 )}
-              >
-                {step.stepOrder + 1}
+                {isCurrent && (
+                  <span
+                    aria-hidden
+                    className="absolute inset-0 rounded-full border-2 border-info animate-ping"
+                  />
+                )}
+                <span
+                  aria-hidden
+                  className={cn(
+                    "flex h-full w-full items-center justify-center rounded-full border text-sm font-medium",
+                    CIRCLE_VARIANT_CLASSES[variant],
+                    isBlocked && "animate-pulse",
+                  )}
+                >
+                  {step.stepOrder + 1}
+                </span>
               </span>
               {!isLast && (
                 <span aria-hidden className="mt-2 w-px flex-1 bg-border" />
