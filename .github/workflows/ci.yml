@@ -81,7 +81,10 @@ jobs:
         run: mypy app
 
       - name: Test
-        run: pytest
+        run: pytest -m "not perf"
+
+      - name: Performance gate (Agent list P95 < 240ms)
+        run: pytest -m perf
 
       - name: Migration smoke test (upgrade → downgrade)
         env:
@@ -128,6 +131,22 @@ jobs:
           PY
           alembic downgrade base
           alembic upgrade head
+
+      - name: Migration deploy (retry ×3)
+        env:
+          DATABASE_URL: postgresql+asyncpg://eap:eap_password@localhost:5432/eap
+        run: |
+          alembic downgrade base
+          for attempt in 1 2 3; do
+            if alembic upgrade head; then
+              echo "alembic upgrade succeeded on attempt $attempt"
+              exit 0
+            fi
+            echo "alembic upgrade attempt $attempt failed; retrying in 5s"
+            sleep 5
+          done
+          echo "alembic upgrade failed after 3 attempts"
+          exit 1
 
       - name: Build
         run: uv build --wheel
@@ -189,3 +208,37 @@ jobs:
           E2E_PSQL_DSN: postgresql://eap:eap_password@localhost:5432/eap_e2e
           E2E_DATABASE_URL: postgresql+asyncpg://eap:eap_password@localhost:5432/eap_e2e
           E2E_REDIS_URL: redis://localhost:6379/0
+
+  docker:
+    name: Docker (build + push)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/backend
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ghcr.io/${{ github.repository }}-backend:${{ github.sha }}
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/frontend/Dockerfile
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ghcr.io/${{ github.repository }}-frontend:${{ github.sha }}

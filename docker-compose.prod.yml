@@ -1,0 +1,208 @@
+name: eap-prod
+
+# Production compose: same 8 services as docker-compose.yml, but images run as
+# non-root (backend Dockerfile) and every secret is required at boot — no
+# hardcoded fallback. Bring the stack up with:
+#
+#   cp .env.example .env  # fill in every `${VAR:?...}` secret
+#   docker compose -f docker-compose.prod.yml up -d --build
+#   curl http://localhost/api/health/ready   # expect 200
+
+x-dify-env: &dify-env
+  LOG_LEVEL: ${DIFY_LOG_LEVEL:-INFO}
+  SECRET_KEY: ${DIFY_SECRET_KEY:?DIFY_SECRET_KEY must be set in .env}
+  MIGRATION_ENABLED: "true"
+  DB_TYPE: postgresql
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_USERNAME: ${POSTGRES_USER:-eap}
+  DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+  DB_DATABASE: dify
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+  CELERY_BROKER_URL: redis://redis:6379/1
+  VECTOR_STORE: weaviate
+  WEAVIATE_ENDPOINT: http://weaviate:8080
+  WEAVIATE_API_KEY: ${WEAVIATE_API_KEY:?WEAVIATE_API_KEY must be set in .env}
+  STORAGE_TYPE: local
+  STORAGE_LOCAL_PATH: storage
+  FILES_URL: ""
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "${NGINX_PORT:-80}:80"
+    volumes:
+      - ./deploy/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - frontend
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+    expose:
+      - "3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost/api}
+    depends_on:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/"]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile
+    expose:
+      - "3001"
+    environment:
+      APP_ENV: production
+      COOKIE_SECURE: "true"
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set in .env}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL must be set in .env}
+      DIFY_API_BASE_URL: ${DIFY_API_BASE_URL:-http://dify-api:5001}
+      DIFY_API_KEY: ${DIFY_API_KEY:-}
+      DIFY_CONSOLE_EMAIL: ${DIFY_CONSOLE_EMAIL:?DIFY_CONSOLE_EMAIL must be set in .env}
+      DIFY_CONSOLE_PASSWORD: ${DIFY_CONSOLE_PASSWORD:?DIFY_CONSOLE_PASSWORD must be set in .env}
+      OIDC_ISSUER: ${OIDC_ISSUER:?OIDC_ISSUER must be set in .env}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?OIDC_CLIENT_ID must be set in .env}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?OIDC_CLIENT_SECRET must be set in .env}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-https://localhost/api/auth/callback}
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:?JWT_PRIVATE_KEY must be set in .env}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?JWT_PUBLIC_KEY must be set in .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3001/api/health/live')",
+        ]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 5
+    restart: unless-stopped
+
+  dify-api:
+    image: langgenius/dify-api:1.17.0
+    environment:
+      <<: *dify-env
+      MODE: api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      weaviate:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:5001/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 5
+    restart: unless-stopped
+
+  dify-worker:
+    image: langgenius/dify-api:1.17.0
+    command: >-
+      celery -A app.celery worker -P gevent -c 1 --loglevel INFO
+      -Q dataset,generation,mail,ops_trace,plugin
+    environment:
+      <<: *dify-env
+      MODE: worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      weaviate:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os, redis; redis.from_url(os.environ['CELERY_BROKER_URL']).ping()",
+        ]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 5
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-eap}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-eap}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-eap} -d ${POSTGRES_DB:-eap}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  weaviate:
+    image: semitechnologies/weaviate:1.24.10
+    environment:
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "false"
+      AUTHENTICATION_APIKEY_ENABLED: "true"
+      AUTHENTICATION_APIKEY_ALLOWED_KEYS: ${WEAVIATE_API_KEY:?WEAVIATE_API_KEY must be set in .env}
+      AUTHENTICATION_APIKEY_USERS: ${WEAVIATE_API_USER:-eap@example.com}
+      PERSISTENCE_DATA_PATH: /var/lib/weaviate
+      DEFAULT_VECTORIZER_MODULE: none
+      CLUSTER_HOSTNAME: node1
+    volumes:
+      - weaviadata:/var/lib/weaviate
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/v1/.well-known/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  weaviadata:

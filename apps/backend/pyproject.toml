@@ -30,6 +30,7 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "ruff>=0.8",
+    "testcontainers[postgres,redis]>=4.15",
 ]
 
 [build-system]
@@ -64,6 +65,11 @@ extend-immutable-calls = [
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+[tool.pytest.ini_options]
+markers = [
+    "perf: performance gate (Agent list P95 < 240ms)",
+]
 
 [[tool.mypy.overrides]]
 module = ["pgvector.*"]
