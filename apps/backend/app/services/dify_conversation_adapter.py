@@ -61,6 +61,7 @@ class DifyConversationAdapter:
         self._dify = dify_client
         self._memory = memory
         self._event_bus = event_bus
+        self._truncation_notice = False
 
     async def stream_messages(
         self,
@@ -69,12 +70,17 @@ class DifyConversationAdapter:
         user_id: str,
         tenant_id: str,
         files: list[dict[str, Any]] | None = None,
+        *,
+        truncation_notice: bool = False,
     ) -> AsyncIterator[dict[str, Any]]:
         """Yield platform SSE events for one Dify conversation turn.
 
         Each yielded item is ``{"event": <name>, "data": <payload>}`` in the
-        platform's camelCase envelope.
+        platform's camelCase envelope. ``truncation_notice`` is surfaced on the
+        closing ``message_end`` metadata so the client can show the token-limit
+        banner without counting messages locally (§31.2.3).
         """
+        self._truncation_notice = truncation_notice
         dify_user = f"{tenant_id}:{user_id}"
         memories = await self._memory.recall(user_id, tenant_id, query) or []
 
@@ -187,6 +193,7 @@ class DifyConversationAdapter:
             return "", None
 
         if event_name == "message_end":
+            event["data"]["metadata"]["truncationNotice"] = self._truncation_notice
             await self._event_bus.publish(
                 "conversation.completed",
                 {

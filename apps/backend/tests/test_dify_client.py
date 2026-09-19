@@ -79,6 +79,42 @@ async def test_get_returns_json() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_preserves_client_timeout_by_default() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["timeout"] = request.extensions.get("timeout")
+        return httpx.Response(200, json={"ok": True})
+
+    client = _client(handler)
+    try:
+        assert await client.get("/v1/info") == {"ok": True}
+    finally:
+        await client.aclose()
+
+    # Omitting ``timeout`` must keep the client's 30s default, not reset it to
+    # httpx's own default (or disable it via an explicit ``timeout=None``).
+    assert captured["timeout"] == {"connect": 30.0, "read": 30.0, "write": 30.0, "pool": 30.0}
+
+
+@pytest.mark.asyncio
+async def test_get_applies_explicit_timeout_override() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["timeout"] = request.extensions.get("timeout")
+        return httpx.Response(200, json={"ok": True})
+
+    client = _client(handler)
+    try:
+        assert await client.get("/v1/info", timeout=5.0) == {"ok": True}
+    finally:
+        await client.aclose()
+
+    assert captured["timeout"] == {"connect": 5.0, "read": 5.0, "write": 5.0, "pool": 5.0}
+
+
+@pytest.mark.asyncio
 async def test_post_sends_json_body_and_returns_json() -> None:
     captured: dict[str, object] = {}
 
@@ -199,6 +235,25 @@ async def test_get_timeout_raises_504_after_retries(monkeypatch: pytest.MonkeyPa
             await client.get("/v1/info")
         assert exc_info.value.status_code == 504
         assert calls["n"] == 4
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_get_retries_zero_makes_single_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    _freeze_sleep(monkeypatch)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(502, content=b"bad gateway")
+
+    client = _client(handler)
+    try:
+        with pytest.raises(DifyApiError) as exc_info:
+            await client.get("/v1/info", retries=0)
+        assert exc_info.value.status_code == 502
+        assert calls["n"] == 1
     finally:
         await client.aclose()
 

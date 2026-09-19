@@ -74,11 +74,20 @@ class DifyClientService:
         query: Mapping[str, str] | None = None,
         *,
         retries: int = 3,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
-        """GET ``path`` and return the JSON body, retrying transient failures."""
+        """GET ``path`` and return the JSON body, retrying transient failures.
+
+        ``timeout`` overrides the client's default per-request timeout for this
+        call, so latency-sensitive callers (e.g. the pre-stream truncation
+        check) can bound their worst-case blocking.
+        """
 
         async def _request() -> httpx.Response:
-            return await self._client.get(path, params=dict(query) if query else None)
+            request_kwargs: dict[str, Any] = {"params": dict(query) if query else None}
+            if timeout is not None:
+                request_kwargs["timeout"] = timeout
+            return await self._client.get(path, **request_kwargs)
 
         return await self._with_retry(path, _request, retries)
 
