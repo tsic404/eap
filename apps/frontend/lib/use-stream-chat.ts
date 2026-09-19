@@ -195,6 +195,7 @@ export function useStreamChat(conversationId: string | null, agentId: string | n
         workflow: null,
         traceId: null,
         completed: false,
+        truncationNotice: false,
         assistantId: null,
         renderedIds: prev.renderedIds,
       }));
@@ -237,6 +238,7 @@ export function useStreamChat(conversationId: string | null, agentId: string | n
     toolCalls: stream.toolCalls,
     workflow: stream.workflow,
     traceId: stream.traceId,
+    truncationNotice: stream.truncationNotice,
     streaming,
     error,
     rateLimitSeconds,
