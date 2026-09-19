@@ -34,7 +34,13 @@ class TraceCitationDto(BaseModel):
 
 
 class TraceToolCallDto(BaseModel):
-    """A tool invocation made during the run."""
+    """A tool invocation made during the run.
+
+    ``status`` and ``latencyMs`` stay ``None`` for Agent-mode tool calls: Dify's
+    only tool-call signal there is ``agent_thought``, which carries neither a
+    success/failure flag nor a per-call latency. They are intentionally not
+    hard-coded to "success" — that would mis-render a failed call as green.
+    """
 
     toolName: str | None = None
     toolId: str | None = None
