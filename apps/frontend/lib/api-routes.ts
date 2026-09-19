@@ -43,6 +43,7 @@ export const ROUTES = {
   adminToolDetail: (toolId: string) => `/admin/tools/${toolId}`,
   conversations: "/user/conversations",
   conversationDetail: (conversationId: string) => `/user/conversations/${conversationId}`,
+  adminRunLogs: "/admin/run-logs",
   adminRunLogDetail: (traceId: string) => `/admin/run-logs/${traceId}`,
 } as const;
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { RUN_LOG_STATUS_LABEL, RUN_LOG_STATUS_VARIANT } from "@/components/run-logs/run-log-labels";
+import { RUN_LOG_STATUS_LABEL, RUN_LOG_STATUS_VARIANT } from "@/components/trace/trace-labels";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/table";
 import { Tabs } from "@/components/ui/tabs";

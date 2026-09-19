@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  Activity,
   BookOpen,
   LayoutDashboard,
   ScrollText,
@@ -21,6 +22,7 @@ const NAV_ITEMS = [
   { key: "tools", label: "工具", icon: Wrench, href: "/admin/tools" },
   { key: "users", label: "用户管理", icon: Users, href: "#" },
   { key: "review", label: "智能体审核", icon: ShieldCheck, href: "#" },
+  { key: "runLogs", label: "运行日志", icon: Activity, href: "/admin/run-logs" },
   { key: "gateway", label: "模型网关", icon: Server, href: "#" },
   { key: "audit", label: "审计日志", icon: ScrollText, href: "#" },
   { key: "settings", label: "系统设置", icon: Settings, href: "#" },
