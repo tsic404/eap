@@ -2,24 +2,11 @@
 
 import { MessageSquare } from "lucide-react";
 
+import { RUN_LOG_STATUS_LABEL, RUN_LOG_STATUS_VARIANT } from "@/components/run-logs/run-log-labels";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import type { RunLog } from "@/lib/agent-types";
 import { formatDateTime } from "@/lib/formatters";
-
-const RUN_LOG_STATUS_VARIANT: Record<string, "success" | "danger" | "info" | "warning"> = {
-  success: "success",
-  failed: "danger",
-  running: "info",
-  blocked: "warning",
-};
-
-const RUN_LOG_STATUS_LABEL: Record<string, string> = {
-  success: "成功",
-  failed: "失败",
-  running: "运行中",
-  blocked: "已阻塞",
-};
 
 /**
  * Embedded debug conversation window. Renders the agent's recent run logs as a
