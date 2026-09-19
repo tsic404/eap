@@ -30,6 +30,7 @@ export function initialChatStreamState(): ChatStreamState {
     workflow: null,
     traceId: null,
     completed: false,
+    truncationNotice: false,
     assistantId: null,
     renderedIds: [],
   };
@@ -143,10 +144,20 @@ function replaceAssistantText(state: ChatStreamState, text: string | null): Chat
 }
 
 function finishMessage(state: ChatStreamState, data: Record<string, unknown>): ChatStreamState {
-  const resources = data.metadata as { retrieverResources?: unknown } | undefined;
-  const raw = resources?.retrieverResources;
+  const metadata = data.metadata as
+    | { retrieverResources?: unknown; truncationNotice?: unknown }
+    | undefined;
+  const raw = metadata?.retrieverResources;
   const citations: Citation[] = Array.isArray(raw) ? raw.map(toCitation) : [];
-  return { ...state, traceId: strOrNull(data.traceId), citations, completed: true };
+  return {
+    ...state,
+    traceId: strOrNull(data.traceId),
+    citations,
+    // Strict `=== true`: a missing/garbled flag degrades to `false`, never a
+    // false banner on a healthy conversation.
+    truncationNotice: metadata?.truncationNotice === true,
+    completed: true,
+  };
 }
 
 function toCitation(raw: unknown): Citation {

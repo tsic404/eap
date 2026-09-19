@@ -63,6 +63,21 @@ describe("applySseEvent", () => {
     ]);
   });
 
+  it("surfaces truncationNotice from message_end metadata", () => {
+    let state = initialChatStreamState();
+    state = applySseEvent(
+      state,
+      event("message_end", { traceId: "t1", metadata: { truncationNotice: true } }),
+    );
+    expect(state.truncationNotice).toBe(true);
+  });
+
+  it("treats a missing truncationNotice flag as false", () => {
+    let state = initialChatStreamState();
+    state = applySseEvent(state, event("message_end", { traceId: "t1", metadata: {} }));
+    expect(state.truncationNotice).toBe(false);
+  });
+
   it("tracks workflow node progress", () => {
     let state = initialChatStreamState();
     state = applySseEvent(state, event("workflow_started", { workflowRunId: "wf1" }));

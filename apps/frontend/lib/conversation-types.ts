@@ -73,6 +73,8 @@ export interface ChatStreamState {
   traceId: string | null;
   /** `true` once `message_end` has been received for the active turn. */
   completed: boolean;
+  /** `true` when the backend reports token truncation on `message_end` metadata. */
+  truncationNotice: boolean;
   /** Message id of the assistant bubble currently being streamed into. */
   assistantId: string | null;
   /** Every assistant message id already rendered, used to dedup replays. */

@@ -13,8 +13,6 @@ import { MessageList } from "./message-list";
 import { ToolCallCard } from "./tool-call-card";
 import { WorkflowProgress } from "./workflow-progress";
 
-const TOKEN_LIMIT_MESSAGE_THRESHOLD = 31;
-
 export interface ChatWindowProps {
   conversationId: string;
   agentId: string;
@@ -29,6 +27,7 @@ export function ChatWindow({ conversationId, agentId, agentName }: ChatWindowPro
     toolCalls,
     workflow,
     traceId,
+    truncationNotice,
     streaming,
     error,
     rateLimitSeconds,
@@ -39,8 +38,7 @@ export function ChatWindow({ conversationId, agentId, agentName }: ChatWindowPro
   } = useStreamChat(conversationId, agentId);
 
   const [tokenNoticeDismissed, setTokenNoticeDismissed] = useState(false);
-  const showTokenNotice =
-    messages.length >= TOKEN_LIMIT_MESSAGE_THRESHOLD && !tokenNoticeDismissed;
+  const showTokenNotice = truncationNotice && !tokenNoticeDismissed;
 
   return (
     <div className="flex h-screen flex-col bg-background">
