@@ -79,7 +79,7 @@ uv run pytest tests/integration
 uv run pytest -m perf
 ```
 
-集成测试用 `testcontainers` 起真实 PostgreSQL(pgvector) 与 Redis 容器，Dify 边界保持 mock。测试数据通过 factory 函数构造（每 worker 独立 tenant 前缀），每个用例跑在事务回滚内。
+集成测试用 `testcontainers` 起真实 PostgreSQL(pgvector) 与 Redis 容器，Dify 边界保持 mock。测试数据通过 factory 函数构造（每 worker 独立 tenant 前缀），每个用例跑在事务回滚内。受 cgroup 限制的本地 Docker 启动 Ryuk 会报 `operation not permitted` 并导致全部用例超时，此时用 `TESTCONTAINERS_RYUK_DISABLED=true uv run pytest tests/integration` 关闭 Ryuk 运行；关闭后若测试被中断，残留容器用 `docker container prune -f` 清理。
 
 ## 数据库迁移与部署
 
