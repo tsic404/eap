@@ -1,7 +1,8 @@
 /**
- * Run-log / trace domain types mirroring the backend `app/schemas/run_log.py`
- * DTOs (`RunLogDto` / `RunLogDetailDto`). Fields are camelCase to match the
- * wire format produced by `_to_dto` / `_to_detail_dto`.
+ * Run-log / trace domain types mirroring the backend run_logs DTOs.
+ *
+ * Run-log resources are serialized to camelCase, consistent with the agent
+ * DTOs whose `recentLogs` already expose `traceId`/`latencyMs`/`createdAt`.
  */
 
 export const RUN_LOG_STATUSES = ["success", "failed", "running", "blocked"] as const;
@@ -25,7 +26,41 @@ export interface RunLogSummary {
   createdAt: string;
 }
 
-/** One workflow step on a trace's timeline. */
+/** Cursor-paginated envelope returned by `GET /api/run-logs`. */
+export interface RunLogListResponse {
+  items: RunLogSummary[];
+  nextCursor: string | null;
+}
+
+/** Query parameters accepted by `GET /api/run-logs` (§32.6 list contract). */
+export interface RunLogListParams {
+  agentId?: string;
+  conversationId?: string;
+  status?: RunLogStatus;
+  from?: string;
+  to?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+/** Filter-bar state; empty strings mean "no filter" for that dimension. */
+export interface RunLogFilters {
+  agentId: string;
+  conversationId: string;
+  status: "" | RunLogStatus;
+  from: string;
+  to: string;
+}
+
+export const EMPTY_RUN_LOG_FILTERS: RunLogFilters = {
+  agentId: "",
+  conversationId: "",
+  status: "",
+  from: "",
+  to: "",
+};
+
+/** One trace step rendered by TraceTimeline. */
 export interface TraceStep {
   stepOrder: number;
   name: string;
@@ -35,7 +70,7 @@ export interface TraceStep {
   detail: string | null;
 }
 
-/** One knowledge-base hit cited by the run. */
+/** One recalled chunk shown in the citations view. */
 export interface TraceCitation {
   sourceName: string | null;
   kbName: string | null;
@@ -43,7 +78,7 @@ export interface TraceCitation {
   score: number | null;
 }
 
-/** One tool invocation made during the run. */
+/** One tool invocation shown in the tool-calls view. */
 export interface TraceToolCall {
   toolName: string | null;
   toolId: string | null;

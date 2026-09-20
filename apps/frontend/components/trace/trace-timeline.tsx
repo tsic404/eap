@@ -1,22 +1,20 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
+import type { BadgeVariant } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import type { TraceStep } from "@/lib/run-log-types";
 import { cn } from "@/lib/utils";
 
-import {
-  RUN_LOG_STATUS_LABEL,
-  RUN_LOG_STATUS_VARIANT,
-  type RunLogStatusVariant,
-} from "./run-log-labels";
+import { RUN_LOG_STATUS_LABEL, RUN_LOG_STATUS_VARIANT } from "./trace-labels";
 
 /** Circle coloring per badge variant, keeping the trace colors aligned with badges. */
-const CIRCLE_VARIANT_CLASSES: Record<RunLogStatusVariant, string> = {
+const CIRCLE_VARIANT_CLASSES: Record<BadgeVariant, string> = {
+  default: "border-border bg-muted text-muted-foreground",
   success: "border-success bg-success-subtle text-success",
+  warning: "border-warning bg-warning-subtle text-warning",
   danger: "border-danger bg-danger-subtle text-danger",
   info: "border-info bg-info-subtle text-info",
-  warning: "border-warning bg-warning-subtle text-warning",
 };
 
 export interface TraceTimelineProps {
