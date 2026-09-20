@@ -13,6 +13,8 @@ import {
 import { API_ROUTES, AUTH_ROUTES, ROUTES } from "@/lib/api-routes";
 import type { ApiEnvelope, CurrentUser, Tenant } from "@/lib/auth-types";
 import { apiClient, refreshAccessToken } from "@/lib/http-client";
+import { resolveRole } from "@/lib/roles";
+import { clearRoleCookie, setRoleCookie } from "@/lib/role-store";
 import { clearAccessToken, getAccessToken } from "@/lib/token-store";
 
 export interface AuthContextValue {
@@ -38,12 +40,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const response = await apiClient.get<ApiEnvelope<CurrentUser>>(API_ROUTES.me);
       const currentUser = response.data?.data ?? null;
+      if (currentUser) {
+        setRoleCookie(resolveRole(currentUser.role));
+      } else {
+        clearRoleCookie();
+      }
       setUser(currentUser);
       setTenant(currentUser ? { id: currentUser.tenantId } : null);
       setError(null);
       return currentUser;
     } catch (err) {
-      // A 401 here means "not authenticated", not an error worth surfacing.
+      // Any /api/me failure drops the confirmed user; clear the role cookie so
+      // the middleware gate does not serve /admin on stale state (least
+      // privilege). Only non-401 errors are surfaced — a 401 just means "not
+      // authenticated".
+      clearRoleCookie();
       if (!(axios.isAxiosError(err) && err.response?.status === 401)) {
         setError("无法加载用户信息，请稍后重试");
       }
@@ -57,7 +68,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
     (async () => {
       if (!getAccessToken()) {
-        await refreshAccessToken();
+        const token = await refreshAccessToken();
+        // A failed refresh leaves no session; drop any stale role cookie so
+        // the middleware gate falls back to least privilege.
+        if (!token) {
+          clearRoleCookie();
+        }
       }
       if (!cancelled && getAccessToken()) {
         await loadUser();
@@ -85,6 +101,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setTenant(null);
       setError(null);
       clearAccessToken();
+      clearRoleCookie();
       window.location.assign(ROUTES.login);
     }
   }, []);
@@ -93,6 +110,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const token = await refreshAccessToken();
     if (token) {
       await loadUser();
+    } else {
+      clearRoleCookie();
     }
     return token;
   }, [loadUser]);

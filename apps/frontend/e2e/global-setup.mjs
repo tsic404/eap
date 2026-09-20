@@ -42,6 +42,14 @@ const SEED_SQL = `
   INSERT INTO tenants (id, name, slug, sso_domain, sso_provider, quota_limit, quota_used, status)
   SELECT gen_random_uuid(), 'Acme', 'acme-e2e', 'acme.com', 'oidc', 10000, 0, 'active'
   WHERE NOT EXISTS (SELECT 1 FROM tenants WHERE sso_domain = 'acme.com');
+
+  -- alice is the admin identity: the RBAC e2e asserts she reaches /admin.
+  -- bob is left unseeded so the backend auto-creates him as employee.
+  INSERT INTO users (id, tenant_id, sso_sub, email, name, role, status)
+  SELECT gen_random_uuid(), t.id, 'user-1', 'alice@acme.com', 'Alice', 'agent_admin', 'active'
+  FROM tenants t
+  WHERE t.sso_domain = 'acme.com'
+    AND NOT EXISTS (SELECT 1 FROM users u WHERE u.tenant_id = t.id AND u.sso_sub = 'user-1');
 `;
 
 function psqlUrl(dsn) {

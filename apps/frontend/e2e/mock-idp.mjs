@@ -27,9 +27,31 @@ const CONFIG = {
   jwks_uri: `${ISSUER}/jwks`,
 };
 
-// code -> { nonce, codeChallenge, codeChallengeMethod }, populated at
+// Two mock identities for the RBAC e2e: alice is an agent_admin (seeded by
+// global-setup), bob is an employee (auto-created by the backend on first
+// login). The SSO button produces alice by default; a test selects bob by
+// setting the `mock_idp_user` cookie before the SSO navigation (route
+// interception cannot rewrite cross-origin redirect navigations reliably).
+const USERS = {
+  alice: { sub: "user-1", email: "alice@acme.com", name: "Alice" },
+  bob: { sub: "user-2", email: "bob@acme.com", name: "Bob" },
+};
+
+// access_token -> user, populated at /token, consumed at /userinfo.
+const accessTokens = new Map();
+
+// code -> { nonce, codeChallenge, codeChallengeMethod, user }, populated at
 // authorize, consumed at token.
 const codes = new Map();
+
+function parseCookie(header, name) {
+  if (!header) return null;
+  for (const part of header.split(";")) {
+    const [key, ...value] = part.trim().split("=");
+    if (key === name) return value.join("=");
+  }
+  return null;
+}
 
 function b64url(buf) {
   return Buffer.from(buf).toString("base64url");
@@ -87,7 +109,8 @@ const server = createServer(async (req, res) => {
       return json(res, 400, { error: "invalid_request" });
     }
     const code = randomBytes(16).toString("base64url");
-    codes.set(code, { nonce, codeChallenge, codeChallengeMethod });
+    const user = USERS[parseCookie(req.headers.cookie, "mock_idp_user") ?? "alice"] ?? USERS.alice;
+    codes.set(code, { nonce, codeChallenge, codeChallengeMethod, user });
     const target = new URL(redirectUri);
     target.searchParams.set("code", code);
     target.searchParams.set("state", state);
@@ -112,20 +135,28 @@ const server = createServer(async (req, res) => {
     const idToken = signIdToken({
       iss: ISSUER,
       aud: CLIENT_ID,
-      sub: "user-1",
+      sub: entry.user.sub,
       nonce: entry.nonce,
       iat: now,
       exp: now + 300,
     });
+    const accessToken = `e2e-${entry.user.sub}`;
+    accessTokens.set(accessToken, entry.user);
     return json(res, 200, {
       id_token: idToken,
-      access_token: "e2e-idp-access-token",
+      access_token: accessToken,
       token_type: "Bearer",
     });
   }
 
   if (path === "/userinfo") {
-    return json(res, 200, { sub: "user-1", email: "alice@acme.com", name: "Alice" });
+    const authorization = req.headers.authorization ?? "";
+    const accessToken = authorization.replace(/^Bearer\s+/, "");
+    const user = accessTokens.get(accessToken);
+    if (!user) {
+      return json(res, 401, { error: "invalid_token" });
+    }
+    return json(res, 200, { sub: user.sub, email: user.email, name: user.name });
   }
 
   return json(res, 404, { error: "not_found" });
