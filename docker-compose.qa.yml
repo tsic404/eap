@@ -1,0 +1,180 @@
+# QA environment: one-command bring-up of the SSO end-to-end stack the
+# Playwright e2e harness exercises, minus the test runner.
+#
+#   make qa-up     # generate JWT keys + build + start everything
+#   make qa-down   # stop and remove the stack
+#
+# Entry point: http://localhost:8090 (reverse proxy → frontend + backend).
+#
+# The mock IdP is published on :4000 so the *browser* can reach its
+# authorization endpoint directly. The *backend* reaches the IdP's
+# server-to-server endpoints (token/userinfo/JWKS) over the compose network via
+# OIDC_DISCOVERY_URL, while still validating the id_token against the
+# browser-facing issuer (OIDC_ISSUER). That split is exactly what
+# mock-idp.mjs's MOCK_IDP_ISSUER / MOCK_IDP_BACKEND_BASE contract exists for.
+#
+# Host ports are overridable for machines where the defaults are taken:
+#   QA_IDP_PORT    (default 4000)   mock IdP browser-facing port
+#   QA_PROXY_PORT  (default 8090)   reverse-proxy / entry-point port
+#   QA_PG_PORT     (default 5433)   PostgreSQL host port (debug only)
+#   QA_REDIS_PORT  (default 6380)   Redis host port (debug only)
+
+name: eap-qa
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: eap
+      POSTGRES_PASSWORD: eap_password
+      POSTGRES_DB: eap_e2e
+    ports:
+      - "${QA_PG_PORT:-5433}:5432"
+    volumes:
+      - qa_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eap -d eap_e2e"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${QA_REDIS_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  mock-idp:
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - ./apps/frontend/e2e/mock-idp.mjs:/app/mock-idp.mjs:ro
+    environment:
+      MOCK_IDP_PORT: "${QA_IDP_PORT:-4000}"
+      MOCK_IDP_ISSUER: http://localhost:${QA_IDP_PORT:-4000}
+      MOCK_IDP_BACKEND_BASE: http://mock-idp:${QA_IDP_PORT:-4000}
+      OIDC_CLIENT_ID: e2e-client
+    command: ["node", "mock-idp.mjs"]
+    ports:
+      - "${QA_IDP_PORT:-4000}:${QA_IDP_PORT:-4000}"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-qO-",
+          "http://127.0.0.1:${QA_IDP_PORT:-4000}/.well-known/openid-configuration",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql+asyncpg://eap:eap_password@postgres:5432/eap_e2e
+      REDIS_URL: redis://redis:6379/0
+      OIDC_ISSUER: http://localhost:${QA_IDP_PORT:-4000}
+      OIDC_DISCOVERY_URL: http://mock-idp:${QA_IDP_PORT:-4000}
+      OIDC_CLIENT_ID: e2e-client
+      OIDC_CLIENT_SECRET: ""
+      OIDC_REDIRECT_URI: http://localhost:${QA_PROXY_PORT:-8090}/api/auth/callback
+      JWT_PRIVATE_KEY_FILE: /run/secrets/jwt_private
+      JWT_PUBLIC_KEY_FILE: /run/secrets/jwt_public
+      CORS_ALLOWED_ORIGINS: '["http://localhost:${QA_PROXY_PORT:-8090}", "http://localhost"]'
+    secrets:
+      - jwt_private
+      - jwt_public
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # One-shot seed: the backend's entrypoint migrates the schema before serving,
+  # so once it is healthy the tenants table exists and the mock IdP's tenant can
+  # be inserted idempotently. Re-runs on every `make qa-up`; harmless.
+  db-seed:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: eap_password
+    volumes:
+      - ./deploy/qa/seed-acme-tenant.sql:/seed-acme-tenant.sql:ro
+    command:
+      [
+        "psql",
+        "-h",
+        "postgres",
+        "-U",
+        "eap",
+        "-d",
+        "eap_e2e",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-f",
+        "/seed-acme-tenant.sql",
+      ]
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: "no"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      NEXT_PUBLIC_API_BASE_URL: /api
+    expose:
+      - "3000"
+    healthcheck:
+      # 127.0.0.1, not localhost: in this image localhost resolves to ::1 first
+      # and the standalone server binds IPv4 only (same override as the dev
+      # compose).
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/"]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 5
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  reverse-proxy:
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - ./apps/frontend/e2e/reverse-proxy.mjs:/app/reverse-proxy.mjs:ro
+    environment:
+      PROXY_PORT: "${QA_PROXY_PORT:-8090}"
+      E2E_BACKEND_URL: http://backend:3001
+      E2E_FRONTEND_URL: http://frontend:3000
+    command: ["node", "reverse-proxy.mjs"]
+    ports:
+      - "${QA_PROXY_PORT:-8090}:${QA_PROXY_PORT:-8090}"
+    depends_on:
+      - frontend
+      - backend
+    restart: unless-stopped
+
+secrets:
+  jwt_private:
+    file: ./deploy/qa/keys/jwt_private.pem
+  jwt_public:
+    file: ./deploy/qa/keys/jwt_public.pem
+
+volumes:
+  qa_pgdata:

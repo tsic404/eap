@@ -9,7 +9,13 @@ import { createServer } from "node:http";
 import { createHash, generateKeyPairSync, randomBytes, sign } from "node:crypto";
 
 const PORT = Number(process.env.MOCK_IDP_PORT ?? 4000);
-const ISSUER = `http://localhost:${PORT}`;
+const ISSUER = process.env.MOCK_IDP_ISSUER ?? `http://localhost:${PORT}`;
+// Base URL the *backend* uses for the server-to-server endpoints (token,
+// userinfo, JWKS). Defaults to ISSUER so the in-process e2e harness (which
+// runs the IdP and backend on one host) is unchanged; the QA compose stack
+// overrides it to the service DNS name because a container cannot reach
+// `localhost` on the host.
+const BACKEND_BASE = process.env.MOCK_IDP_BACKEND_BASE ?? ISSUER;
 const CLIENT_ID = process.env.OIDC_CLIENT_ID ?? "e2e-client";
 
 const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -22,9 +28,9 @@ const JWKS = {
 const CONFIG = {
   issuer: ISSUER,
   authorization_endpoint: `${ISSUER}/authorize`,
-  token_endpoint: `${ISSUER}/token`,
-  userinfo_endpoint: `${ISSUER}/userinfo`,
-  jwks_uri: `${ISSUER}/jwks`,
+  token_endpoint: `${BACKEND_BASE}/token`,
+  userinfo_endpoint: `${BACKEND_BASE}/userinfo`,
+  jwks_uri: `${BACKEND_BASE}/jwks`,
 };
 
 // Two mock identities for the RBAC e2e: alice is an agent_admin (seeded by

@@ -47,3 +47,6 @@ Thumbs.db
 
 # Docker volumes
 pgdata/
+
+# QA environment — generated JWT keypair (see scripts/qa-gen-keys.sh)
+deploy/qa/keys/

@@ -1,7 +1,9 @@
 """Environment-backed application configuration (pydantic-settings)."""
 
 from functools import lru_cache
+from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -40,6 +42,12 @@ class Settings(BaseSettings):
 
     # OIDC / SSO
     oidc_issuer: str = ""
+    # Optional override for where discovery / token / userinfo / JWKS are
+    # fetched from. Defaults to ``oidc_issuer``. Containers need this when the
+    # IdP is published on a host-reachable URL (for the browser's authorize
+    # redirect) but the backend must reach its endpoints over the compose
+    # network under a different name.
+    oidc_discovery_url: str | None = None
     oidc_client_id: str = ""
     oidc_client_secret: str = ""
     oidc_redirect_uri: str = "http://localhost/api/auth/callback"
@@ -47,6 +55,11 @@ class Settings(BaseSettings):
     # JWT (RS256 key material; empty until OIDC/SSO is configured)
     jwt_private_key: str = ""
     jwt_public_key: str = ""
+    # Optional file paths to the key material. Containers mount PEM files and
+    # point these at them, because multi-line PEM cannot travel through .env or
+    # compose `environment:` values. A non-empty inline key takes precedence.
+    jwt_private_key_file: str | None = None
+    jwt_public_key_file: str | None = None
 
     # Refresh-token rotation (architecture §34.1). Access tokens always live 15
     # minutes (the OIDC spec constant); refresh tokens default to 30 days.
@@ -81,6 +94,14 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
     log_json: bool = True
+
+    @model_validator(mode="after")
+    def _load_jwt_key_files(self) -> "Settings":
+        if not self.jwt_private_key and self.jwt_private_key_file:
+            self.jwt_private_key = Path(self.jwt_private_key_file).read_text()
+        if not self.jwt_public_key and self.jwt_public_key_file:
+            self.jwt_public_key = Path(self.jwt_public_key_file).read_text()
+        return self
 
 
 @lru_cache

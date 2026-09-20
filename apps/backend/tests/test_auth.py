@@ -148,6 +148,37 @@ def test_json_parse_maps_malformed_body_to_503() -> None:
     assert exc.value.code == "OIDC_UNAVAILABLE"
 
 
+@pytest.mark.asyncio
+async def test_discover_uses_discovery_url_not_issuer() -> None:
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        return httpx.Response(
+            200,
+            json={
+                "issuer": _ISSUER,
+                "authorization_endpoint": _ISSUER + "/authorize",
+                "token_endpoint": _ISSUER + "/token",
+                "userinfo_endpoint": _ISSUER + "/userinfo",
+                "jwks_uri": _ISSUER + "/jwks",
+            },
+        )
+
+    settings = Settings(
+        _env_file=None,
+        oidc_issuer=_ISSUER,
+        oidc_discovery_url="http://idp-internal:4000",
+        oidc_client_id=_CLIENT_ID,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as mock_http:
+        client = OidcClient(settings, client=mock_http)
+        config = await client.discover()
+
+    assert config["issuer"] == _ISSUER
+    assert requested == ["http://idp-internal:4000/.well-known/openid-configuration"]
+
+
 def test_issue_access_token_roundtrip() -> None:
     settings = _settings()
     token, expires_in = issue_access_token(

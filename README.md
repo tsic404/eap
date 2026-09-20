@@ -81,6 +81,34 @@ uv run pytest -m perf
 
 集成测试用 `testcontainers` 起真实 PostgreSQL(pgvector) 与 Redis 容器，Dify 边界保持 mock。测试数据通过 factory 函数构造（每 worker 独立 tenant 前缀），每个用例跑在事务回滚内。受 cgroup 限制的本地 Docker 启动 Ryuk 会报 `operation not permitted` 并导致全部用例超时，此时用 `TESTCONTAINERS_RYUK_DISABLED=true uv run pytest tests/integration` 关闭 Ryuk 运行；关闭后若测试被中断，残留容器用 `docker container prune -f` 清理。
 
+## QA 环境（SSO 端到端）
+
+一键拉起与 Playwright e2e 回归同源的 SSO 栈（mock IdP + backend + eap_e2e DB + frontend + 反向代理），无需再手动 `docker build` / `uv sync` / 建库 / socat。
+
+```bash
+make qa-up     # 生成 JWT 密钥 + 构建并启动全部服务
+make qa-down   # 停止并移除全部服务（保留 eap_e2e 数据卷）
+```
+
+- 入口：http://localhost:8090（反向代理把前端与后端统一到同一 origin）
+- 登录：首页 → `SSO 登录`；mock IdP 用户 `alice@acme.com` 落到 seed 的 `acme.com` 租户
+- 后端日志：`docker compose -f docker-compose.qa.yml logs -f backend`
+
+| 服务 | 端口 | 说明 |
+| --- | --- | --- |
+| reverse-proxy | 8090 | 反向代理（`/api/*` → backend，其余 → frontend） |
+| mock-idp | 4000 | mock OIDC IdP（浏览器直达其 authorize 端点） |
+| frontend | 内部 3000 | Next.js 生产构建 |
+| backend | 内部 3001 | FastAPI，含 JWT 密钥生成 |
+| postgres | 5433 | `eap_e2e` 库（首次启动 seed `acme.com` 租户） |
+| redis | 6380 | 会话 / 限流 |
+
+说明：
+
+- `make qa-up` 幂等：JWT 密钥首次生成后复用（`deploy/qa/keys/`，已 gitignore），租户 seed 为幂等 SQL。
+- 容器化后浏览器与后端分处不同网络视角：后端经 `OIDC_DISCOVERY_URL` 走 compose 网络访问 IdP 的 token/userinfo/JWKS，同时按浏览器侧 `OIDC_ISSUER` 校验 id_token（对应 `mock-idp.mjs` 的 `MOCK_IDP_ISSUER` / `MOCK_IDP_BACKEND_BASE`）。
+- 连数据库卷一起彻底清理：`docker compose -f docker-compose.qa.yml down -v`。
+
 ## 数据库迁移与部署
 
 schema 变更通过 Alembic 管理（`apps/backend/alembic/`）。迁移脚本的部署注意事项——含 NOT VALID → VALIDATE 两阶段外键的窗口期说明——见 [`deploy/migrations.md`](deploy/migrations.md)。
