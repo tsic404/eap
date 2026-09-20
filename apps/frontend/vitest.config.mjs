@@ -12,6 +12,8 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: true,
+    // Cap workers: the default (numCpus - 1) forks oversubscribe under high load, timing out worker startup and dropping all tests.
+    maxWorkers: 4,
     exclude: ["**/node_modules/**", "e2e/**"],
   },
 });
