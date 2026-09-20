@@ -24,6 +24,8 @@ interface Attachment {
 export interface ChatInputProps {
   streaming: boolean;
   rateLimitSeconds: number;
+  /** Disables the composer while history is loading. */
+  disabled?: boolean;
   onSend: (query: string, files: MessageFile[]) => Promise<boolean>;
   onStop: () => void;
 }
@@ -47,6 +49,7 @@ function validateFile(file: File): string | null {
 export function ChatInput({
   streaming,
   rateLimitSeconds,
+  disabled = false,
   onSend,
   onStop,
 }: ChatInputProps) {
@@ -116,7 +119,7 @@ export function ChatInput({
 
   const submit = () => {
     const trimmed = value.trim();
-    if (!trimmed || streaming || limited || uploading) return;
+    if (!trimmed || streaming || limited || uploading || disabled) return;
     const files = attachments.map(({ id, type }) => ({ id, type }));
     // Clear the composer only once the send actually committed; a rejected
     // send (429 / HTTP error) keeps the text and attachments so the user can
@@ -166,7 +169,7 @@ export function ChatInput({
           size="sm"
           className="h-9 w-9 shrink-0 p-0"
           aria-label="添加附件"
-          disabled={limited || streaming || uploading}
+          disabled={limited || streaming || uploading || disabled}
           onClick={() => inputRef.current?.click()}
         >
           {uploading ? <Spinner size="sm" /> : <Paperclip className="h-4 w-4" />}
@@ -175,11 +178,13 @@ export function ChatInput({
         <textarea
           rows={1}
           value={value}
-          disabled={limited}
+          disabled={limited || disabled}
           placeholder={
             limited
               ? `${rateLimitSeconds} 秒后可发送`
-              : "输入消息，Enter 发送，Shift+Enter 换行"
+              : disabled
+                ? "正在加载历史消息…"
+                : "输入消息，Enter 发送，Shift+Enter 换行"
           }
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={(event) => {
@@ -208,7 +213,7 @@ export function ChatInput({
             size="sm"
             className="h-9 w-9 shrink-0 p-0"
             aria-label="发送"
-            disabled={limited || uploading || value.trim() === ""}
+            disabled={limited || uploading || disabled || value.trim() === ""}
             onClick={submit}
           >
             <Send className="h-4 w-4" />

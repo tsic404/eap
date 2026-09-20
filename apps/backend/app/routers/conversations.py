@@ -20,6 +20,7 @@ from app.schemas.conversation import (
     ConversationStatus,
     CreateConversationDto,
     ListConversationsDto,
+    MessagePageDto,
     SendMessageDto,
 )
 from app.services.conversation import ConversationService, sse_frame
@@ -82,6 +83,18 @@ async def delete_conversation(
     session: Session,
 ) -> None:
     await service.soft_delete(session, user, conversation_id)
+
+
+@router.get("/{conversation_id}/messages", response_model=MessagePageDto)
+async def list_messages(
+    conversation_id: str,
+    service: ConversationServiceDep,
+    user: CurrentUser,
+    session: Session,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    cursor: Annotated[str | None, Query()] = None,
+) -> MessagePageDto:
+    return await service.list_messages(session, user, conversation_id, limit=limit, cursor=cursor)
 
 
 @router.post("/{conversation_id}/messages")

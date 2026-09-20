@@ -39,12 +39,37 @@ export interface ConversationPage {
   nextCursor: string | null;
 }
 
+/** A file attached to a history message (mirrors backend `MessageAttachmentDto`). */
+export interface MessageAttachment {
+  id: string;
+  type: string;
+  url: string | null;
+  belongsTo: MessageRole | null;
+}
+
+/** One history turn: a user query paired with the assistant's answer. */
+export interface HistoryMessage {
+  id: string;
+  query: string;
+  answer: string;
+  status: string;
+  feedback: "like" | "dislike" | null;
+  files: MessageAttachment[];
+  createdAt: string | null;
+}
+
+/** Cursor-paginated envelope returned by `GET /api/conversations/{id}/messages`. */
+export interface MessagePage {
+  items: HistoryMessage[];
+  nextCursor: string | null;
+}
+
 /** A single chat bubble. Assistant messages are keyed by the SSE `messageId`. */
 export interface ChatMessage {
   id: string;
   role: MessageRole;
   content: string;
-  createdAt: string;
+  createdAt: string | null;
 }
 
 /** A knowledge citation surfaced by `message_end` (retriever resources). */

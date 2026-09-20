@@ -6,6 +6,8 @@ import { ArrowLeft, Bot, X } from "lucide-react";
 
 import { ROUTES } from "@/lib/api-routes";
 import { useStreamChat } from "@/lib/use-stream-chat";
+import { ErrorBanner } from "@/components/ui/error-banner";
+import { Skeleton } from "@/components/ui/skeleton";
 
 import { ChatInput } from "./chat-input";
 import { CitationCard } from "./citation-card";
@@ -31,8 +33,11 @@ export function ChatWindow({ conversationId, agentId, agentName }: ChatWindowPro
     streaming,
     error,
     rateLimitSeconds,
+    historyLoading,
+    historyError,
     sendMessage,
     retry,
+    retryHistory,
     abort,
     dismissError,
   } = useStreamChat(conversationId, agentId);
@@ -99,7 +104,23 @@ export function ChatWindow({ conversationId, agentId, agentName }: ChatWindowPro
         </div>
       )}
 
-      <MessageList messages={messages} streaming={streaming} />
+      {historyError ? (
+        <div className="flex flex-1 items-center justify-center p-6">
+          <ErrorBanner
+            title="历史消息加载失败"
+            description="无法读取会话记录，请重试"
+            onRetry={retryHistory}
+          />
+        </div>
+      ) : historyLoading ? (
+        <div className="flex flex-1 flex-col gap-3 p-4" aria-busy="true">
+          <Skeleton className="h-16 w-2/3" />
+          <Skeleton className="ml-auto h-16 w-1/2" />
+          <Skeleton className="h-16 w-2/3" />
+        </div>
+      ) : (
+        <MessageList messages={messages} streaming={streaming} />
+      )}
 
       {(workflow || toolCalls.length > 0 || citations.length > 0) && (
         <div className="max-h-40 shrink-0 space-y-2 overflow-y-auto border-t border-border px-4 py-2">
@@ -116,6 +137,7 @@ export function ChatWindow({ conversationId, agentId, agentName }: ChatWindowPro
       <ChatInput
         streaming={streaming}
         rateLimitSeconds={rateLimitSeconds}
+        disabled={historyLoading}
         onSend={(query, files) => sendMessage(query, files)}
         onStop={abort}
       />
