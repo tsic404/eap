@@ -1,6 +1,7 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import { renderWithIntl } from "../test-utils";
 import { WorkspaceSwitcher } from "./workspace-switcher";
 
 const ADMIN_ROLES = [
@@ -12,7 +13,7 @@ const ADMIN_ROLES = [
 
 describe("WorkspaceSwitcher", () => {
   it("shows only the user workspace for employee", () => {
-    render(<WorkspaceSwitcher role="employee" />);
+    renderWithIntl(<WorkspaceSwitcher role="employee" />);
 
     fireEvent.click(screen.getByRole("button", { name: /用户工作区/ }));
 
@@ -21,7 +22,7 @@ describe("WorkspaceSwitcher", () => {
   });
 
   it("defaults to the employee view when no role is provided", () => {
-    render(<WorkspaceSwitcher />);
+    renderWithIntl(<WorkspaceSwitcher />);
 
     fireEvent.click(screen.getByRole("button", { name: /用户工作区/ }));
 
@@ -29,7 +30,7 @@ describe("WorkspaceSwitcher", () => {
   });
 
   it.each(ADMIN_ROLES)("shows both workspaces for %s", (role) => {
-    render(<WorkspaceSwitcher role={role} />);
+    renderWithIntl(<WorkspaceSwitcher role={role} />);
 
     fireEvent.click(screen.getByRole("button", { name: /用户工作区/ }));
 
@@ -37,7 +38,7 @@ describe("WorkspaceSwitcher", () => {
   });
 
   it("updates the displayed workspace on select when uncontrolled", () => {
-    render(<WorkspaceSwitcher role="platform_admin" />);
+    renderWithIntl(<WorkspaceSwitcher role="platform_admin" />);
 
     fireEvent.click(screen.getByRole("button", { name: /用户工作区/ }));
     fireEvent.click(screen.getByRole("menuitem", { name: "管理工作区" }));
@@ -48,7 +49,7 @@ describe("WorkspaceSwitcher", () => {
 
   it("notifies onChange but stays controlled when value is provided", () => {
     const onChange = vi.fn();
-    render(<WorkspaceSwitcher role="platform_admin" value="user" onChange={onChange} />);
+    renderWithIntl(<WorkspaceSwitcher role="platform_admin" value="user" onChange={onChange} />);
 
     fireEvent.click(screen.getByRole("button", { name: /用户工作区/ }));
     fireEvent.click(screen.getByRole("menuitem", { name: "管理工作区" }));

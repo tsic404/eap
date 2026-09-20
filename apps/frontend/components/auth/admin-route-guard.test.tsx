@@ -1,6 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { renderWithIntl } from "../test-utils";
 import { AdminRouteGuard } from "./admin-route-guard";
 import { RoleProvider } from "./role-context";
 
@@ -13,7 +14,7 @@ const ALLOWED_ROLES = [
 
 describe("AdminRouteGuard", () => {
   it("blocks employees and shows the friendly permission notice", () => {
-    render(
+    renderWithIntl(
       <RoleProvider role="employee">
         <AdminRouteGuard>
           <p>管理端内容</p>
@@ -28,7 +29,7 @@ describe("AdminRouteGuard", () => {
   });
 
   it.each(ALLOWED_ROLES)("renders admin content for %s", (role) => {
-    render(
+    renderWithIntl(
       <RoleProvider role={role}>
         <AdminRouteGuard>
           <p>管理端内容</p>

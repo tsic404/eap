@@ -1,8 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { TopAgent } from "@/lib/dashboard-types";
 
+import { renderWithIntl } from "../test-utils";
 import { TopAgentsList } from "./top-agents-list";
 
 const AGENTS: TopAgent[] = [
@@ -13,7 +14,7 @@ const AGENTS: TopAgent[] = [
 
 describe("TopAgentsList", () => {
   it("renders agents in call-count order with rank badges", () => {
-    render(<TopAgentsList agents={AGENTS} />);
+    renderWithIntl(<TopAgentsList agents={AGENTS} />);
 
     expect(screen.getByText("客服助手")).toBeTruthy();
     // A null name falls back to the raw agent id.
@@ -23,7 +24,7 @@ describe("TopAgentsList", () => {
   });
 
   it("renders an empty state when there are no agents", () => {
-    render(<TopAgentsList agents={[]} />);
+    renderWithIntl(<TopAgentsList agents={[]} />);
 
     expect(screen.getByText("暂无排行")).toBeTruthy();
   });

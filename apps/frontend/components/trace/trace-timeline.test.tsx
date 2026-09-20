@@ -1,8 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { TraceStep } from "@/lib/run-log-types";
 
+import { renderWithIntl } from "../test-utils";
 import { TraceTimeline } from "./trace-timeline";
 
 function step(overrides: Partial<TraceStep> = {}): TraceStep {
@@ -19,13 +20,13 @@ function step(overrides: Partial<TraceStep> = {}): TraceStep {
 
 describe("TraceTimeline", () => {
   it("renders an empty state when there are no steps", () => {
-    render(<TraceTimeline steps={[]} />);
+    renderWithIntl(<TraceTimeline steps={[]} />);
 
     expect(screen.getByText("暂无步骤")).toBeTruthy();
   });
 
   it("renders numbered steps with name, status, duration and detail", () => {
-    render(
+    renderWithIntl(
       <TraceTimeline
         steps={[
           step({ stepOrder: 0, name: "检索知识库", type: "retrieval", status: "success", latencyMs: 120, detail: "命中 3 条" }),
@@ -47,7 +48,7 @@ describe("TraceTimeline", () => {
   });
 
   it("numbers circles from the step's own stepOrder, not render position", () => {
-    render(
+    renderWithIntl(
       <TraceTimeline
         steps={[
           step({ stepOrder: 4, name: "a" }),
@@ -61,7 +62,7 @@ describe("TraceTimeline", () => {
   });
 
   it("animates running (spin) and blocked (pulse) steps, leaving static steps still", () => {
-    render(
+    renderWithIntl(
       <TraceTimeline
         steps={[
           step({ stepOrder: 0, name: "a", status: "running" }),
@@ -83,7 +84,7 @@ describe("TraceTimeline", () => {
   });
 
   it("marks only the highest-order running step as the current one", () => {
-    const { container } = render(
+    const { container } = renderWithIntl(
       <TraceTimeline
         steps={[
           step({ stepOrder: 5, name: "a", status: "running" }),
@@ -101,7 +102,7 @@ describe("TraceTimeline", () => {
   });
 
   it("picks a single current step when stepOrders tie", () => {
-    const { container } = render(
+    const { container } = renderWithIntl(
       <TraceTimeline
         steps={[
           step({ stepOrder: 0, name: "a", status: "running" }),
@@ -121,7 +122,7 @@ describe("TraceTimeline", () => {
   });
 
   it("maps each status to the shared badge variant and falls back for unknown/absent", () => {
-    render(
+    renderWithIntl(
       <TraceTimeline
         steps={[
           step({ name: "a", status: "success" }),

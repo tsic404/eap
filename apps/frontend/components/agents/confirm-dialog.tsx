@@ -1,6 +1,7 @@
 "use client";
 
 import { AlertTriangle } from "lucide-react";
+import { useTranslations } from "next-intl";
 
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
@@ -22,12 +23,14 @@ export function ConfirmDialog({
   open,
   title,
   description,
-  confirmLabel = "确认",
+  confirmLabel,
   danger = false,
   loading = false,
   onCancel,
   onConfirm,
 }: ConfirmDialogProps) {
+  const t = useTranslations("common");
+
   return (
     <Modal
       open={open}
@@ -36,7 +39,7 @@ export function ConfirmDialog({
       footer={
         <>
           <Button variant="outline" onClick={onCancel} disabled={loading}>
-            取消
+            {t("cancel")}
           </Button>
           <Button
             onClick={onConfirm}
@@ -47,7 +50,7 @@ export function ConfirmDialog({
                 : undefined
             }
           >
-            {confirmLabel}
+            {confirmLabel ?? t("confirm")}
           </Button>
         </>
       }

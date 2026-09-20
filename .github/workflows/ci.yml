@@ -152,7 +152,7 @@ jobs:
         run: uv build --wheel
 
   e2e:
-    name: E2E (SSO regression)
+    name: E2E (journeys + a11y + visual regression)
     runs-on: ubuntu-latest
     services:
       postgres:

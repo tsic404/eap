@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 const { useAuthMock } = vi.hoisted(() => ({
@@ -13,6 +13,7 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/user",
 }));
 
+import { renderWithIntl } from "../test-utils";
 import { Header } from "./header";
 
 const user = {
@@ -28,7 +29,7 @@ const user = {
 describe("Header", () => {
   it("shows the authenticated user and a logout menu item", () => {
     useAuthMock.mockReturnValue({ user, logout: vi.fn() });
-    render(<Header />);
+    renderWithIntl(<Header />);
 
     fireEvent.click(screen.getByTitle("张三"));
 
@@ -38,7 +39,7 @@ describe("Header", () => {
   it("calls logout when the logout menu item is selected", () => {
     const logoutMock = vi.fn();
     useAuthMock.mockReturnValue({ user, logout: logoutMock });
-    render(<Header />);
+    renderWithIntl(<Header />);
 
     fireEvent.click(screen.getByTitle("张三"));
     fireEvent.click(screen.getByRole("menuitem", { name: "登出" }));
