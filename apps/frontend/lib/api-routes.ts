@@ -19,6 +19,7 @@ export const API_ROUTES = {
   me: "/me",
   agents: "/agents",
   tools: "/tools",
+  tasks: "/tasks",
   knowledgeBases: "/knowledge-bases",
   files: "/files",
   conversations: "/conversations",

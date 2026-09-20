@@ -13,10 +13,10 @@ export function AdminForbidden() {
         或更高角色。
       </p>
       <Link
-        href="/"
+        href="/user"
         className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary-hover"
       >
-        返回首页
+        返回用户工作区
       </Link>
     </main>
   );
