@@ -28,13 +28,19 @@ docker-compose.yml     # 8 容器本地开发环境
 - Node.js >= 20、pnpm 11（版本由根 `packageManager` 字段固定，建议通过 corepack 启用）
 - Python >= 3.12、uv（后端依赖由 `apps/backend/uv.lock` 锁定）
 - Docker / Podman
+- GNU make + bash + OpenSSL（`make setup-env` 自动补全必填密钥）
 
 ### 启动全部 8 个容器
 
 ```bash
-cp .env.example .env   # 按需修改
+make setup-env         # 从 .env.example 生成 .env，并补全必填密钥
 docker compose up -d
 ```
+
+`make setup-env` 幂等：`.env` 不存在时从 `.env.example` 复制，否则原地补全仍为空的
+`WEAVIATE_API_KEY` / `DIFY_SECRET_KEY`（`openssl rand -hex 32`），已填写的值不会被覆盖。
+若 shell 已导出同名空变量（如 `export WEAVIATE_API_KEY=`），其优先级高于 `.env` 会让 compose
+仍硬失败，脚本会报错退出——先 `unset WEAVIATE_API_KEY DIFY_SECRET_KEY` 再重跑。
 
 容器：`nginx`、`frontend`、`backend`、`dify-api`、`dify-worker`、`postgres`、`redis`、`weaviate`。
 
@@ -82,7 +88,8 @@ schema 变更通过 Alembic 管理（`apps/backend/alembic/`）。迁移脚本�
 ### 生产部署
 
 ```bash
-cp .env.example .env          # 填全所有必需变量（含 Dify/JWT/Weaviate 密钥）
+make setup-env                # 生成 .env 并补全 WEAVIATE_API_KEY / DIFY_SECRET_KEY
+                              # 其余必需变量（DB/Redis/Dify 凭据/OIDC/JWT）仍需手工填写
 docker compose -f docker-compose.prod.yml up -d --build
 curl http://localhost/api/health/ready   # 期望 200
 ```
