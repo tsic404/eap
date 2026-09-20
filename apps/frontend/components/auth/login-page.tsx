@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 
+import { useTranslations } from "next-intl";
+
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -18,6 +20,7 @@ export function LoginPage() {
   const { login, error } = useAuth();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [queryError, setQueryError] = useState<string | null>(null);
+  const t = useTranslations("login");
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -36,8 +39,8 @@ export function LoginPage() {
     <main className="flex min-h-screen items-center justify-center bg-muted px-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <CardTitle>登录</CardTitle>
-          <CardDescription>使用企业账号登录 EAP</CardDescription>
+          <CardTitle>{t("title")}</CardTitle>
+          <CardDescription>{t("subtitle")}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <Button
@@ -46,7 +49,7 @@ export function LoginPage() {
             onClick={handleLogin}
             className="w-full"
           >
-            SSO 登录
+            {t("sso")}
           </Button>
           {displayError && (
             <p role="alert" className="text-sm text-danger">

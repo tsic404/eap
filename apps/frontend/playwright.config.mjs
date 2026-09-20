@@ -9,6 +9,18 @@ const frontendDir = path.resolve(dirname, ".");
 const repoRoot = path.resolve(dirname, "../..");
 const backendDir = path.join(repoRoot, "apps/backend");
 
+// Every harness port is overridable so a local run can avoid colliding with a
+// concurrent stack; defaults mirror the CI service ports.
+const FRONTEND_PORT = Number(process.env.E2E_FRONTEND_PORT ?? 3000);
+const BACKEND_PORT = Number(process.env.E2E_BACKEND_PORT ?? 3001);
+const IDP_PORT = Number(process.env.E2E_IDP_PORT ?? 4000);
+const PROXY_PORT = Number(process.env.E2E_PROXY_PORT ?? 8090);
+
+const IDP_ORIGIN = `http://localhost:${IDP_PORT}`;
+const PROXY_ORIGIN = `http://localhost:${PROXY_PORT}`;
+const BACKEND_ORIGIN = `http://127.0.0.1:${BACKEND_PORT}`;
+const FRONTEND_ORIGIN = `http://127.0.0.1:${FRONTEND_PORT}`;
+
 // The backend signs access tokens with an RS256 keypair it reads from env;
 // generate a fresh one per run (signing and verification happen in the same
 // process, so a per-run pair is sufficient).
@@ -36,7 +48,7 @@ export default defineConfig({
   reporter: [["list"]],
   globalSetup: "./e2e/global-setup.mjs",
   use: {
-    baseURL: "http://localhost:8090",
+    baseURL: PROXY_ORIGIN,
     channel: "chrome",
     headless: true,
   },
@@ -44,42 +56,50 @@ export default defineConfig({
     {
       command: "node e2e/mock-idp.mjs",
       cwd: frontendDir,
-      url: "http://localhost:4000/.well-known/openid-configuration",
+      url: `${IDP_ORIGIN}/.well-known/openid-configuration`,
       reuseExistingServer: false,
+      env: { ...process.env, MOCK_IDP_PORT: String(IDP_PORT) },
     },
     {
-      command: `${BACKEND_PYTHON} -m uvicorn app.main:app --host 127.0.0.1 --port 3001`,
+      command: `${BACKEND_PYTHON} -m uvicorn app.main:app --host 127.0.0.1 --port ${BACKEND_PORT}`,
       cwd: backendDir,
-      url: "http://localhost:3001/api/health/live",
+      url: `${BACKEND_ORIGIN}/api/health/live`,
       reuseExistingServer: false,
       env: {
         ...process.env,
         PATH: `${path.join(backendDir, ".venv/bin")}:${process.env.PATH ?? ""}`,
         DATABASE_URL,
         REDIS_URL,
-        OIDC_ISSUER: "http://localhost:4000",
+        OIDC_ISSUER: IDP_ORIGIN,
         OIDC_CLIENT_ID: "e2e-client",
-        OIDC_REDIRECT_URI: "http://localhost:8090/api/auth/callback",
+        OIDC_REDIRECT_URI: `${PROXY_ORIGIN}/api/auth/callback`,
         JWT_PRIVATE_KEY: privateKey,
         JWT_PUBLIC_KEY: publicKey,
         // The proxy origin is the browser's same-origin; the backend's CORS
         // whitelist must admit it or same-origin POSTs (refresh/logout) are
         // rejected with 403.
-        CORS_ALLOWED_ORIGINS: JSON.stringify(["http://localhost:8090", "http://localhost"]),
+        CORS_ALLOWED_ORIGINS: JSON.stringify([PROXY_ORIGIN, "http://localhost"]),
       },
     },
     {
       command: "pnpm dev",
       cwd: frontendDir,
-      url: "http://localhost:3000",
+      url: FRONTEND_ORIGIN,
       reuseExistingServer: false,
       timeout: 180_000,
+      env: { ...process.env, PORT: String(FRONTEND_PORT) },
     },
     {
       command: "node e2e/reverse-proxy.mjs",
       cwd: frontendDir,
-      url: "http://localhost:8090",
+      url: PROXY_ORIGIN,
       reuseExistingServer: false,
+      env: {
+        ...process.env,
+        PROXY_PORT: String(PROXY_PORT),
+        E2E_BACKEND_URL: BACKEND_ORIGIN,
+        E2E_FRONTEND_URL: FRONTEND_ORIGIN,
+      },
     },
   ],
 });

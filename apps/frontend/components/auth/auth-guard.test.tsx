@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 const { replaceMock, useAuthMock } = vi.hoisted(() => ({
@@ -14,12 +14,13 @@ vi.mock("./auth-context", () => ({
   useAuth: () => useAuthMock(),
 }));
 
+import { renderWithIntl } from "../test-utils";
 import { AuthGuard } from "./auth-guard";
 
 describe("AuthGuard", () => {
   it("shows the callback loading state while auth resolves", () => {
     useAuthMock.mockReturnValue({ isLoading: true, isAuthenticated: false });
-    render(
+    renderWithIntl(
       <AuthGuard>
         <div>protected</div>
       </AuthGuard>,
@@ -32,7 +33,7 @@ describe("AuthGuard", () => {
   it("redirects to login when unauthenticated", () => {
     replaceMock.mockReset();
     useAuthMock.mockReturnValue({ isLoading: false, isAuthenticated: false });
-    render(
+    renderWithIntl(
       <AuthGuard>
         <div>protected</div>
       </AuthGuard>,
@@ -43,7 +44,7 @@ describe("AuthGuard", () => {
 
   it("renders children when authenticated", () => {
     useAuthMock.mockReturnValue({ isLoading: false, isAuthenticated: true });
-    render(
+    renderWithIntl(
       <AuthGuard>
         <div>protected</div>
       </AuthGuard>,

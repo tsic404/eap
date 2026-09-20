@@ -1,6 +1,7 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { renderWithIntl } from "../test-utils";
 import { OfflineBanner } from "./offline-banner";
 
 describe("OfflineBanner", () => {
@@ -13,7 +14,7 @@ describe("OfflineBanner", () => {
   });
 
   it("shows the offline banner, then recovers and auto-dismisses", () => {
-    render(<OfflineBanner />);
+    renderWithIntl(<OfflineBanner />);
 
     act(() => {
       window.dispatchEvent(new Event("offline"));

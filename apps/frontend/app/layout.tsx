@@ -1,6 +1,10 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
 
+import { NextIntlClientProvider } from "next-intl";
+import { getLocale, getMessages, getTranslations } from "next-intl/server";
+import { SWRConfig } from "swr";
+
 import { AuthProvider } from "@/components/auth/auth-context";
 import { RoleProvider } from "@/components/auth/role-context";
 import { WebVitals } from "@/components/layout/web-vitals";
@@ -9,28 +13,42 @@ import { ToastProvider } from "@/components/ui/toast";
 import { resolveRole, ROLE_COOKIE } from "@/lib/roles";
 import "./globals.css";
 
-export const metadata: Metadata = {
-  title: "EAP — 企业智能体平台",
-  description: "Enterprise Agent Platform",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("metadata");
+  return {
+    title: t("title"),
+    description: "Enterprise Agent Platform",
+  };
+}
 
 export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   const role = resolveRole((await cookies()).get(ROLE_COOKIE)?.value);
+  const locale = await getLocale();
+  const messages = await getMessages();
 
   return (
-    <html lang="zh-CN">
+    <html lang={locale}>
       <body>
-        <AuthProvider>
-          <RoleProvider role={role}>
-            <ToastProvider>
-              <WebVitals />
-              <OfflineBanner />
-              {children}
-            </ToastProvider>
-          </RoleProvider>
-        </AuthProvider>
+        <NextIntlClientProvider locale={locale} messages={messages}>
+          <SWRConfig
+            value={{
+              // Coalesce bursts of the same fetch into one request (§30.14).
+              dedupingInterval: 2000,
+            }}
+          >
+            <AuthProvider>
+              <RoleProvider role={role}>
+                <ToastProvider>
+                  <WebVitals />
+                  <OfflineBanner />
+                  {children}
+                </ToastProvider>
+              </RoleProvider>
+            </AuthProvider>
+          </SWRConfig>
+        </NextIntlClientProvider>
       </body>
     </html>
   );

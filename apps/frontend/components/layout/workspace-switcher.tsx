@@ -3,13 +3,14 @@
 import { useState } from "react";
 
 import { ChevronsUpDown } from "lucide-react";
+import { useTranslations } from "next-intl";
 
 import { Dropdown } from "@/components/ui/dropdown";
 import { canAccessAdmin, type UserRole } from "@/lib/roles";
 
 const WORKSPACES = [
-  { value: "user", label: "用户工作区" },
-  { value: "admin", label: "管理工作区" },
+  { value: "user", labelKey: "user" },
+  { value: "admin", labelKey: "admin" },
 ] as const;
 
 export interface WorkspaceSwitcherProps {
@@ -27,6 +28,7 @@ export function WorkspaceSwitcher({
   defaultValue = "user",
   onChange,
 }: WorkspaceSwitcherProps) {
+  const t = useTranslations("workspace");
   const workspaces = WORKSPACES.filter(
     (workspace) => canAccessAdmin(role) || workspace.value === "user",
   );
@@ -48,13 +50,13 @@ export function WorkspaceSwitcher({
       triggerClassName="gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-foreground hover:bg-muted"
       trigger={
         <>
-          {current.label}
+          {t(current.labelKey)}
           <ChevronsUpDown className="h-4 w-4 text-muted-foreground" />
         </>
       }
       items={workspaces.map((workspace) => ({
         value: workspace.value,
-        label: workspace.label,
+        label: t(workspace.labelKey),
         onSelect: () => select(workspace.value),
       }))}
     />

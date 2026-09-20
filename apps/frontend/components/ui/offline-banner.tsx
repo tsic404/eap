@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Loader2, Wifi } from "lucide-react";
+import { useTranslations } from "next-intl";
 
 import { cn } from "@/lib/utils";
 
@@ -18,6 +19,7 @@ type NetworkState = "online" | "offline" | "recovered";
 export function OfflineBanner() {
   const [state, setState] = useState<NetworkState>("online");
   const recoveryTimerRef = useRef<number | null>(null);
+  const t = useTranslations("offline");
 
   useEffect(() => {
     // Sync the initial state after hydration so SSR markup always matches.
@@ -72,12 +74,12 @@ export function OfflineBanner() {
       {isDisconnected ? (
         <>
           <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-          网络连接已断开，正在尝试重新连接...
+          {t("disconnected")}
         </>
       ) : (
         <>
           <Wifi className="h-4 w-4" aria-hidden="true" />
-          已恢复连接
+          {t("recovered")}
         </>
       )}
     </div>

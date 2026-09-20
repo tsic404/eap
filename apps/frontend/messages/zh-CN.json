@@ -1,0 +1,83 @@
+{
+  "metadata": {
+    "title": "EAP — 企业智能体平台"
+  },
+  "common": {
+    "confirm": "确认",
+    "cancel": "取消",
+    "retry": "重试",
+    "close": "关闭"
+  },
+  "header": {
+    "notification": "通知",
+    "openNavigation": "打开导航",
+    "profile": "个人资料",
+    "settings": "设置",
+    "logout": "登出",
+    "defaultUser": "用户"
+  },
+  "workspace": {
+    "user": "用户工作区",
+    "admin": "管理工作区"
+  },
+  "breadcrumb": {
+    "navLabel": "面包屑",
+    "home": "首页",
+    "user": "用户工作区",
+    "agents": "智能体",
+    "knowledge": "知识库",
+    "tools": "工具",
+    "conversations": "会话",
+    "settings": "设置",
+    "admin": "管理",
+    "tasks": "任务中心"
+  },
+  "sidebar": {
+    "userNav": "用户工作区导航",
+    "adminNav": "管理工作区导航",
+    "chat": "会话",
+    "agents": "智能体",
+    "knowledge": "知识库",
+    "tools": "工具",
+    "tasks": "任务中心",
+    "dashboard": "仪表盘",
+    "users": "用户管理",
+    "review": "智能体审核",
+    "runLogs": "运行日志",
+    "gateway": "模型网关",
+    "audit": "审计日志",
+    "settings": "系统设置"
+  },
+  "login": {
+    "title": "登录",
+    "subtitle": "使用企业账号登录 EAP",
+    "sso": "SSO 登录"
+  },
+  "forbidden": {
+    "title": "无管理权限",
+    "description": "您没有管理权限。如需访问管理端，请联系平台管理员授予 agent_admin 或更高角色。",
+    "back": "返回用户工作区"
+  },
+  "offline": {
+    "disconnected": "网络连接已断开，正在尝试重新连接...",
+    "recovered": "已恢复连接"
+  },
+  "callback": {
+    "loading": "正在完成登录…"
+  },
+  "empty": {
+    "default": "暂无数据"
+  },
+  "modal": {
+    "close": "关闭"
+  },
+  "chat": {
+    "back": "返回会话列表",
+    "defaultAgent": "智能体",
+    "truncationNotice": "对话较长，较早的消息可能未被纳入上下文",
+    "dismissNotice": "关闭提示",
+    "dismissError": "关闭错误提示",
+    "historyFailed": "历史消息加载失败",
+    "historyFailedDescription": "无法读取会话记录，请重试"
+  }
+}

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Bot, X } from "lucide-react";
+import { useTranslations } from "next-intl";
 
 import { ROUTES } from "@/lib/api-routes";
 import { useStreamChat } from "@/lib/use-stream-chat";
@@ -42,6 +43,9 @@ export function ChatWindow({ conversationId, agentId, agentName }: ChatWindowPro
     dismissError,
   } = useStreamChat(conversationId, agentId);
 
+  const t = useTranslations("chat");
+  const tCommon = useTranslations("common");
+
   const [tokenNoticeDismissed, setTokenNoticeDismissed] = useState(false);
   const showTokenNotice = truncationNotice && !tokenNoticeDismissed;
 
@@ -50,14 +54,14 @@ export function ChatWindow({ conversationId, agentId, agentName }: ChatWindowPro
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-4">
         <Link
           href={ROUTES.conversations}
-          aria-label="返回会话列表"
+          aria-label={t("back")}
           className="flex h-9 w-9 items-center justify-center rounded-md text-foreground transition-colors hover:bg-muted"
         >
           <ArrowLeft className="h-5 w-5" />
         </Link>
         <Bot className="h-5 w-5 text-primary" />
         <span className="truncate text-sm font-semibold text-foreground">
-          {agentName ?? "智能体"}
+          {agentName ?? t("defaultAgent")}
         </span>
         {traceId && (
           <span className="ml-auto truncate text-xs text-muted-foreground" title={traceId}>
@@ -68,10 +72,10 @@ export function ChatWindow({ conversationId, agentId, agentName }: ChatWindowPro
 
       {showTokenNotice && (
         <div className="flex items-start gap-2 border-b border-border bg-warning-subtle px-4 py-2 text-sm text-warning">
-          <span className="flex-1">对话较长，较早的消息可能未被纳入上下文</span>
+          <span className="flex-1">{t("truncationNotice")}</span>
           <button
             type="button"
-            aria-label="关闭提示"
+            aria-label={t("dismissNotice")}
             onClick={() => setTokenNoticeDismissed(true)}
             className="text-warning hover:text-foreground"
           >
@@ -91,11 +95,11 @@ export function ChatWindow({ conversationId, agentId, agentName }: ChatWindowPro
             onClick={retry}
             className="shrink-0 font-medium underline underline-offset-2 hover:text-foreground"
           >
-            重试
+            {tCommon("retry")}
           </button>
           <button
             type="button"
-            aria-label="关闭错误提示"
+            aria-label={t("dismissError")}
             onClick={dismissError}
             className="shrink-0 text-danger hover:text-foreground"
           >
@@ -107,8 +111,8 @@ export function ChatWindow({ conversationId, agentId, agentName }: ChatWindowPro
       {historyError ? (
         <div className="flex flex-1 items-center justify-center p-6">
           <ErrorBanner
-            title="历史消息加载失败"
-            description="无法读取会话记录，请重试"
+            title={t("historyFailed")}
+            description={t("historyFailedDescription")}
             onRetry={retryHistory}
           />
         </div>

@@ -1,5 +1,7 @@
 "use client";
 
+import dynamic from "next/dynamic";
+
 import { Activity, AlertTriangle, Bot, Clock } from "lucide-react";
 
 import { AlertList } from "@/components/dashboard/alert-list";
@@ -7,13 +9,20 @@ import { HealthStatusPanel } from "@/components/dashboard/health-status-panel";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { ModelList } from "@/components/dashboard/model-list";
 import { TopAgentsList } from "@/components/dashboard/top-agents-list";
-import { TrendChart } from "@/components/dashboard/trend-chart";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { evaluateDashboardHealth, formatPercent } from "@/lib/dashboard-health";
 import { formatDuration, formatNumber } from "@/lib/formatters";
 import { extractApiErrorMessage } from "@/lib/platform-service";
 import { useAdminDashboard, useModels } from "@/lib/use-dashboard";
+
+// recharts is the largest leaf in the admin bundle and renders only on the
+// client (ResponsiveContainer measures the DOM), so split it out of the
+// initial chunk and hydrate after mount (§30.14 lazy loading).
+const TrendChart = dynamic(
+  () => import("@/components/dashboard/trend-chart").then((m) => m.TrendChart),
+  { ssr: false, loading: () => <Skeleton className="h-64 w-full" /> },
+);
 
 function DashboardSkeleton() {
   return (

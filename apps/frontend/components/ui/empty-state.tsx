@@ -1,4 +1,7 @@
+"use client";
+
 import { Inbox } from "lucide-react";
+import { useTranslations } from "next-intl";
 
 import { cn } from "@/lib/utils";
 
@@ -12,12 +15,14 @@ export interface EmptyStateProps {
 
 /** Placeholder for empty lists/results, with optional call-to-action. */
 export function EmptyState({
-  title = "暂无数据",
+  title,
   description,
   icon,
   action,
   className,
 }: EmptyStateProps) {
+  const t = useTranslations("empty");
+
   return (
     <div
       className={cn(
@@ -29,7 +34,7 @@ export function EmptyState({
         {icon ?? <Inbox className="h-6 w-6" />}
       </div>
       <div className="flex flex-col gap-1">
-        <p className="text-sm font-medium text-foreground">{title}</p>
+        <p className="text-sm font-medium text-foreground">{title ?? t("default")}</p>
         {description && (
           <p className="text-sm text-muted-foreground">{description}</p>
         )}
