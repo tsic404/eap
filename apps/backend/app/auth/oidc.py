@@ -57,6 +57,9 @@ class OidcClient:
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._issuer = settings.oidc_issuer.rstrip("/")
+        # Fetch base for the IdP's machine endpoints; falls back to the issuer
+        # so a single public IdP URL keeps working unchanged.
+        self._discovery_url = (settings.oidc_discovery_url or settings.oidc_issuer).rstrip("/")
         self._client_id = settings.oidc_client_id
         self._client_secret = settings.oidc_client_secret
         self._redirect_uri = settings.oidc_redirect_uri
@@ -83,7 +86,7 @@ class OidcClient:
         if self._config is not None:
             return self._config
         client = await self._http()
-        url = f"{self._issuer}/.well-known/openid-configuration"
+        url = f"{self._discovery_url}/.well-known/openid-configuration"
         try:
             response = await client.get(url)
             response.raise_for_status()
