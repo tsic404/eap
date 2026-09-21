@@ -151,6 +151,53 @@ jobs:
       - name: Build
         run: uv build --wheel
 
+  k6:
+    name: k6 (Agent list P95 < 330ms, fixed resources)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/backend
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: eap
+          POSTGRES_PASSWORD: eap_password
+          POSTGRES_DB: eap
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U eap -d eap"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.1.0
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          uv sync --extra dev --locked
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Install k6
+        run: |
+          curl -sL https://github.com/grafana/k6/releases/download/v0.55.0/k6-v0.55.0-linux-amd64.tar.gz | tar xz
+          sudo mv k6-v0.55.0-linux-amd64/k6 /usr/local/bin/k6
+
+      - name: k6 baseline gate (Agent list P95 < 330ms)
+        env:
+          DATABASE_URL: postgresql+asyncpg://eap:eap_password@localhost:5432/eap
+        run: bash ../../scripts/k6-perf-gate.sh
+
   e2e:
     name: E2E (journeys + a11y + visual regression)
     runs-on: ubuntu-latest

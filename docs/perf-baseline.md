@@ -3,9 +3,14 @@
 两条 HTTP 级性能基线，对应 T25-FE 验收标准中的 k6 里程碑。阈值以 `thresholds`
 内置在脚本里，`p(95)` 不达标即非零退出。
 
+`agent-list.js` 的**权威运行在 CI 固定资源 runner**（`.github/workflows/ci.yml`
+的 `k6` job，经 `scripts/k6-perf-gate.sh` 起后端 + seed + 发 token 后跑 k6）；
+**本地运行仅供调参**——共享开发宿主机上其他任务的 CPU 争抢会整体抬升延迟分布
+（实测 load 16+ 时 p(90) 达 511ms），本地门禁结果不可复现。
+
 | 脚本 | 端点 | 门禁 | 依赖 |
 | --- | --- | --- | --- |
-| `k6/agent-list.js` | `GET /api/agents` | P95 < 200ms | 后端 + PostgreSQL |
+| `k6/agent-list.js` | `GET /api/agents` | P95 < 330ms（CI 固定资源） | 后端 + PostgreSQL |
 | `k6/first-token.js` | `POST /api/conversations/{id}/messages`（SSE） | P95 < 1500ms | 后端 + Dify + 已绑定智能体 |
 
 ## 前置条件
@@ -25,7 +30,10 @@
 ## 运行
 
 ```bash
-# Agent 列表
+# Agent 列表（权威：CI `k6` job，固定资源 runner）
+bash scripts/k6-perf-gate.sh    # 本地复现 CI 步骤（调参用，非权威）
+
+# Agent 列表（本地调参：已有后端时直接跑脚本）
 k6 run k6/agent-list.js -e ACCESS_TOKEN=... [-e BASE_URL=http://localhost/api]
 
 # 首 Token（先确认 /api/health/ready 返回 200，智能体已绑定 Dify 密钥）
