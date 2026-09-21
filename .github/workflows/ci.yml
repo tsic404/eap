@@ -168,15 +168,6 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -205,9 +196,10 @@ jobs:
         env:
           # The e2e harness owns a dedicated disposable database (eap_e2e); the
           # global-setup guard refuses any non-disposable name without opt-in.
+          # Redis is self-managed too: global-setup starts its own throwaway
+          # redis:7-alpine container, exercising the container path in CI.
           E2E_PSQL_DSN: postgresql://eap:eap_password@localhost:5432/eap_e2e
           E2E_DATABASE_URL: postgresql+asyncpg://eap:eap_password@localhost:5432/eap_e2e
-          E2E_REDIS_URL: redis://localhost:6379/0
 
   docker:
     name: Docker (build + push)

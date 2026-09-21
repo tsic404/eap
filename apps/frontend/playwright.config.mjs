@@ -33,7 +33,11 @@ const { privateKey, publicKey } = generateKeyPairSync("rsa", {
 const DATABASE_URL =
   process.env.E2E_DATABASE_URL ??
   "postgresql+asyncpg://eap:eap_password@localhost:5432/eap_e2e";
-const REDIS_URL = process.env.E2E_REDIS_URL ?? "redis://localhost:6379/0";
+// The harness self-manages a throwaway Redis container on 127.0.0.1:6380 (see
+// global-setup.mjs); the default must match that port. E2E_REDIS_URL still
+// overrides for callers that provide their own Redis (e.g. a CI service).
+const REDIS_PORT = process.env.E2E_REDIS_PORT ?? "6380";
+const REDIS_URL = process.env.E2E_REDIS_URL ?? `redis://127.0.0.1:${REDIS_PORT}/0`;
 // Prefer the project venv; fall back to `python` on PATH (CI installs system-wide).
 const venvPython = path.join(backendDir, ".venv/bin/python");
 const BACKEND_PYTHON =
@@ -47,6 +51,7 @@ export default defineConfig({
   workers: 1,
   reporter: [["list"]],
   globalSetup: "./e2e/global-setup.mjs",
+  globalTeardown: "./e2e/global-teardown.mjs",
   use: {
     baseURL: PROXY_ORIGIN,
     channel: "chrome",

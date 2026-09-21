@@ -109,6 +109,31 @@ make qa-down   # 停止并移除全部服务（保留 eap_e2e 数据卷）
 - 容器化后浏览器与后端分处不同网络视角：后端经 `OIDC_DISCOVERY_URL` 走 compose 网络访问 IdP 的 token/userinfo/JWKS，同时按浏览器侧 `OIDC_ISSUER` 校验 id_token（对应 `mock-idp.mjs` 的 `MOCK_IDP_ISSUER` / `MOCK_IDP_BACKEND_BASE`）。
 - 连数据库卷一起彻底清理：`docker compose -f docker-compose.qa.yml down -v`。
 
+### SSO e2e 回归（Playwright）
+
+```bash
+pnpm install
+npx playwright install chrome   # 首次需下载浏览器
+cd apps/backend && uv sync --extra dev --locked && cd ../..
+pnpm --filter @eap/frontend test:e2e
+```
+
+`e2e/sso.spec.ts` 用真实浏览器走完整 OIDC 授权码 + PKCE 流程，全链路本地化、不依赖真实企业 IdP：
+
+- **IdP**：`e2e/mock-idp.mjs` 进程内提供 discovery / JWKS / authorize / token / userinfo，RS256 密钥每次运行生成。
+- **Redis**：`e2e/global-setup.mjs` 自动起一次性 `redis:7-alpine` 容器（`127.0.0.1:6380`，容器名带进程 PID，持久化关闭故不会进入 MISCONF），并把容器 ID 写入所有权标记；`e2e/global-teardown.mjs` 只删除本次运行创建的容器。未设 `E2E_REDIS_URL` 时不再复用宿主 Redis；端口被占（如崩溃遗留的 `eap-e2e-redis-*` 容器）则报错并提示清理。
+- **数据库**：`global-setup.mjs` 重置一次性库 `eap_e2e`（库名必须带 `_e2e`/`_test` 后缀，否则需 `E2E_DESTRUCTIVE=1`）并 seed `acme.com` tenant。
+
+前置：Docker（起 Redis 容器）、本地 PostgreSQL（`localhost:5432`，`eap`/`eap_password`）、后端 venv（或 `E2E_BACKEND_PYTHON` 指定解释器）。
+
+环境变量覆盖：
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `E2E_REDIS_URL` | 空 | 自备 Redis 时指定（如 `redis://localhost:6379/0`）；设置后 harness 跳过自管理容器，teardown 也不会触碰它 |
+| `E2E_REDIS_PORT` | `6380` | 自管理 Redis 容器的宿主端口 |
+| `E2E_PSQL_DSN` / `E2E_DATABASE_URL` | `…/eap_e2e` | 一次性库 DSN |
+
 ## 数据库迁移与部署
 
 schema 变更通过 Alembic 管理（`apps/backend/alembic/`）。迁移脚本的部署注意事项——含 NOT VALID → VALIDATE 两阶段外键的窗口期说明——见 [`deploy/migrations.md`](deploy/migrations.md)。
