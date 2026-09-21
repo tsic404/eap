@@ -63,8 +63,11 @@ const SEED_SQL = `
 //
 // Ownership: setup records the container id it created in a marker file;
 // teardown removes only that container, so a reused/caller-provided Redis is
-// never touched. setup runs after the DB reset so a failed setup step can never
-// leak a container (Playwright skips teardown when globalSetup fails).
+// never touched. The marker name carries the port so sequential runs on
+// different ports cannot overwrite each other's marker (a fixed path would
+// orphan the earlier run's container). setup runs after the DB reset so a
+// failed setup step can never leak a container (Playwright skips teardown when
+// globalSetup fails).
 //
 // The container name carries the setup process's pid, so no fixed name exists
 // that one run could ever force-delete from another. A stale container left by
@@ -72,7 +75,7 @@ const SEED_SQL = `
 const REDIS_PORT = process.env.E2E_REDIS_PORT ?? "6380";
 const REDIS_CONTAINER = `eap-e2e-redis-${process.pid}`;
 const REDIS_IMAGE = "redis:7-alpine";
-const REDIS_MARKER = path.join(tmpdir(), "eap-e2e-redis-owner");
+const REDIS_MARKER = path.join(tmpdir(), `eap-e2e-redis-owner-${REDIS_PORT}`);
 
 function redisPortInUse() {
   return new Promise((resolve) => {
