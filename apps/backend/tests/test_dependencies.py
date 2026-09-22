@@ -1,5 +1,6 @@
 """RBAC dependency tests: get_current_user, require_roles, get_active_tenant."""
 
+import asyncio
 import uuid
 from unittest.mock import AsyncMock
 
@@ -9,12 +10,15 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
+from app.auth.revocation import revoked_jti_key
+from app.auth.tokens import ACCESS_TOKEN_TTL_SECONDS
 from app.config import Settings
 from app.db import get_session
 from app.dependencies import get_active_tenant, get_current_user, require_roles
 from app.main import create_app
 from app.models.tenant import Tenant
 from app.models.user import User
+from tests.conftest import FakeRedis
 
 
 def _make_tenant(
@@ -53,20 +57,35 @@ def _keypair() -> tuple[object, str]:
     return private_key, public_pem
 
 
-def _signed_token(private_key: object, user: User, tenant: Tenant | None = None) -> str:
+def _signed_token(
+    private_key: object, user: User, tenant: Tenant | None = None, jti: str | None = None
+) -> str:
     payload: dict[str, str] = {"sub": str(user.id), "role": user.role}
     if tenant is not None:
         payload["tenantId"] = str(tenant.id)
+    if jti is not None:
+        payload["jti"] = jti
     return pyjwt.encode(payload, private_key, algorithm="RS256")
 
 
+def _seed_revoked_jti(redis: FakeRedis, jti: str) -> None:
+    """Mark ``jti`` revoked directly, as an earlier logout would have."""
+    asyncio.run(redis.set(revoked_jti_key(jti), "1", ex=ACCESS_TOKEN_TTL_SECONDS))
+
+
 def _client(
-    user: User | None, tenant: Tenant | None, private_key: object, public_pem: str
+    user: User | None,
+    tenant: Tenant | None,
+    private_key: object,
+    public_pem: str,
+    redis: FakeRedis | None = None,
 ) -> TestClient:
     """Build an app whose DB dependency is stubbed with the given rows."""
     app: FastAPI = create_app(
         settings=Settings(_env_file=None, jwt_public_key=public_pem, rate_limit_enabled=False)
     )
+    if redis is not None:
+        app.state.redis = redis
     session = AsyncMock()
 
     async def _get(model: object, pk: object) -> object | None:
@@ -129,6 +148,44 @@ def test_get_current_user_returns_401_when_user_unknown() -> None:
     resp = client.get("/api/test/me", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 401
     assert resp.json()["error"]["code"] == "UNAUTHORIZED"
+
+
+def test_get_current_user_returns_401_when_access_token_revoked() -> None:
+    # A logged-out access token is still signature-valid until its exp, so the
+    # registry entry is what stops it from authenticating.
+    private_key, public_pem = _keypair()
+    tenant = _make_tenant()
+    user = _make_user(tenant)
+    redis = FakeRedis()
+    _seed_revoked_jti(redis, "jti-revoked")
+    client = _client(user, tenant, private_key, public_pem, redis=redis)
+    token = _signed_token(private_key, user, tenant, jti="jti-revoked")
+
+    @client.app.get("/api/test/me")  # type: ignore[attr-defined]
+    async def me(current_user: User = Depends(get_current_user)) -> dict[str, str]:
+        return {"role": current_user.role}
+
+    resp = client.get("/api/test/me", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 401
+    assert resp.json()["error"]["code"] == "TOKEN_REVOKED"
+
+
+def test_get_current_user_admits_token_with_other_jti_revoked() -> None:
+    private_key, public_pem = _keypair()
+    tenant = _make_tenant()
+    user = _make_user(tenant)
+    redis = FakeRedis()
+    _seed_revoked_jti(redis, "jti-someone-else")
+    client = _client(user, tenant, private_key, public_pem, redis=redis)
+    token = _signed_token(private_key, user, tenant, jti="jti-mine")
+
+    @client.app.get("/api/test/me")  # type: ignore[attr-defined]
+    async def me(current_user: User = Depends(get_current_user)) -> dict[str, str]:
+        return {"role": current_user.role}
+
+    resp = client.get("/api/test/me", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    assert resp.json() == {"data": {"role": "agent_admin"}}
 
 
 def test_require_roles_returns_403_for_employee() -> None:

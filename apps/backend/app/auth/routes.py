@@ -18,6 +18,7 @@ from app.auth.oidc import (
     generate_state,
 )
 from app.auth.refresh import RefreshService, TokenPair
+from app.auth.revocation import revoke_access_token
 from app.auth.schemas import CurrentUser
 from app.auth.state_store import OidcStateStore
 from app.config import Settings
@@ -45,6 +46,20 @@ def _set_refresh_cookie(response: Response, token_pair: TokenPair, settings: Set
         samesite="lax",
         secure=settings.cookie_secure,
     )
+
+
+async def _revoke_bearer_token(request: Request) -> None:
+    """Mark the request's access token revoked, when it carries a bearer token.
+
+    Logout still succeeds without one: the refresh family is revoked either way,
+    and an access token the client kept to itself then only outlives its own
+    short ``exp``.
+    """
+    authorization = request.headers.get("authorization", "")
+    if not authorization.lower().startswith("bearer "):
+        return
+    token = authorization[7:].strip()
+    await revoke_access_token(getattr(request.app.state, "redis", None), token)
 
 
 async def _resolve_user(
@@ -193,8 +208,10 @@ async def logout(
     response: Response,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> dict[str, str]:
-    """Revoke the refresh-token family and clear the cookie."""
+    """Revoke the access token (by ``jti``) and the refresh-token family; clear the cookie."""
     refresh_service: RefreshService = request.app.state.refresh_service
+
+    await _revoke_bearer_token(request)
 
     raw_token = request.cookies.get(_REFRESH_COOKIE)
     if raw_token:
