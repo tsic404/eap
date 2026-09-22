@@ -56,7 +56,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     dify_console = DifyConsoleClient(settings)
     app.state.dify_console = dify_console
     app.state.knowledge_service = KnowledgeService(dify_console, settings=settings)
-    app.state.conversation_service = ConversationService(settings=settings)
+    app.state.conversation_service = ConversationService(
+        settings=settings, tool_proxy=app.state.tool_proxy
+    )
     await dify_console.startup()
 
     # Auth runtime: a shared Redis client (lazy — no connection until first use)

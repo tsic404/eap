@@ -273,15 +273,17 @@ async def seed_tool(
     *,
     tool_id: str = "tool-1",
     permission_mode: str = "auto",
+    risk_level: str = "medium",
+    name: str | None = None,
 ) -> ToolRegistry:
     tool = ToolRegistry(
         tool_id=tool_id,
         tenant_id=tenant.id,
-        name=tool_id,
+        name=name or tool_id,
         type="http",
         endpoint="http://tool.example/api",
         method="POST",
-        risk_level="medium",
+        risk_level=risk_level,
         permission_mode=permission_mode,
         auth_type="none",
         timeout_ms=10000,
@@ -398,10 +400,23 @@ class Api:
             await seed_kb(session, tenant, kb_id=kb_id)
 
     async def seed_tool(
-        self, tenant: Tenant, *, tool_id: str = "tool-1", permission_mode: str = "auto"
+        self,
+        tenant: Tenant,
+        *,
+        tool_id: str = "tool-1",
+        permission_mode: str = "auto",
+        risk_level: str = "medium",
+        name: str | None = None,
     ) -> None:
         async with self.db.session() as session:
-            await seed_tool(session, tenant, tool_id=tool_id, permission_mode=permission_mode)
+            await seed_tool(
+                session,
+                tenant,
+                tool_id=tool_id,
+                permission_mode=permission_mode,
+                risk_level=risk_level,
+                name=name,
+            )
 
     async def seed_task(
         self, tenant: Tenant, user: User, *, status: str = "pending", type_: str = "tool_approval"
@@ -423,9 +438,11 @@ async def api(
     console = default_console()
     app.state.dify_console = console
     app.state.knowledge_service = KnowledgeService(console, settings=integration_settings)
-    app.state.conversation_service = ConversationService(settings=integration_settings)
     app.state.tool_proxy = ToolProxy(
         transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"ok": True}))
+    )
+    app.state.conversation_service = ConversationService(
+        settings=integration_settings, tool_proxy=app.state.tool_proxy
     )
 
     async def override_get_session() -> AsyncIterator[AsyncSession]:

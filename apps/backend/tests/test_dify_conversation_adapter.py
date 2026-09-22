@@ -341,3 +341,155 @@ async def test_message_end_carries_truncation_notice() -> None:
 
     message_end = [e for e in events if e["event"] == "message_end"][0]
     assert message_end["data"]["metadata"]["truncationNotice"] is True
+
+
+class _FakeToolApproval:
+    """Records approval requests and returns a fixed descriptor (or None)."""
+
+    def __init__(self, result: dict[str, Any] | None) -> None:
+        self._result = result
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def request_approval(
+        self, tool_name: str, params: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        self.calls.append((tool_name, params))
+        return self._result
+
+
+def _adapter_with_approval(
+    frames: list[str], gateway: Any
+) -> tuple[DifyConversationAdapter, FakeEventBus]:
+    dify = FakeDifyClient([f.encode("utf-8") for f in frames])
+    memory = FakeMemory([])
+    bus = FakeEventBus()
+    return DifyConversationAdapter(dify, memory, bus, gateway), bus
+
+
+@pytest.mark.asyncio
+async def test_agent_thought_for_gated_tool_emits_approval_event() -> None:
+    gateway = _FakeToolApproval({"taskId": "task-1", "toolName": "search", "params": {"q": "acme"}})
+    adapter, _bus = _adapter_with_approval(
+        [
+            _frame(
+                "agent_thought",
+                {
+                    "id": "th1",
+                    "thought": "thinking",
+                    "tool": "search",
+                    "tool_input": '{"q": "acme"}',
+                    "observation": "",
+                },
+            ),
+            _frame("message_end", {"id": "trace1", "conversation_id": "c1", "metadata": {}}),
+        ],
+        gateway,
+    )
+
+    events = [e async for e in adapter.stream_messages("c1", "hello", "u1", "tenant1")]
+
+    assert [e["event"] for e in events] == [
+        "agent_thought",
+        "tool_approval_required",
+        "message_end",
+    ]
+    assert gateway.calls == [("search", {"q": "acme"})]
+    approval = events[1]
+    assert approval["data"] == {"taskId": "task-1", "toolName": "search", "params": {"q": "acme"}}
+
+
+@pytest.mark.asyncio
+async def test_agent_thought_after_call_echo_does_not_request_approval_again() -> None:
+    """One Dify tool call is two agent_thought frames; only "before" gates.
+
+    The "after" echo carries ``observation`` and no ``tool_input``; gating it
+    too would create a second pending task and later re-run the tool with empty
+    params.
+    """
+    gateway = _FakeToolApproval({"taskId": "task-1", "toolName": "search", "params": {"q": "acme"}})
+    adapter, _bus = _adapter_with_approval(
+        [
+            _frame(
+                "agent_thought",
+                {
+                    "id": "th1",
+                    "thought": "querying",
+                    "tool": "search",
+                    "tool_input": '{"q": "acme"}',
+                    "observation": "",
+                },
+            ),
+            _frame(
+                "agent_thought",
+                {"id": "th1", "thought": "querying", "tool": "search", "observation": "3 results"},
+            ),
+            _frame("message_end", {"id": "trace1", "conversation_id": "c1", "metadata": {}}),
+        ],
+        gateway,
+    )
+
+    events = [e async for e in adapter.stream_messages("c1", "hello", "u1", "tenant1")]
+
+    assert [e["event"] for e in events] == [
+        "agent_thought",
+        "tool_approval_required",
+        "agent_thought",
+        "message_end",
+    ]
+    # Exactly one approval request, from the "before" frame only.
+    assert gateway.calls == [("search", {"q": "acme"})]
+
+
+@pytest.mark.asyncio
+async def test_agent_thought_for_ungated_tool_emits_no_approval_event() -> None:
+    gateway = _FakeToolApproval(None)
+    adapter, _bus = _adapter_with_approval(
+        [
+            _frame(
+                "agent_thought",
+                {"id": "th1", "tool": "search", "tool_input": '{"q": "acme"}', "observation": ""},
+            ),
+            _frame("message_end", {"id": "trace1", "conversation_id": "c1", "metadata": {}}),
+        ],
+        gateway,
+    )
+
+    events = [e async for e in adapter.stream_messages("c1", "hello", "u1", "tenant1")]
+
+    assert [e["event"] for e in events] == ["agent_thought", "message_end"]
+    assert gateway.calls == [("search", {"q": "acme"})]
+
+
+@pytest.mark.asyncio
+async def test_agent_thought_malformed_tool_input_degrades_to_empty_params() -> None:
+    gateway = _FakeToolApproval(None)
+    adapter, _bus = _adapter_with_approval(
+        [
+            _frame(
+                "agent_thought",
+                {"id": "th1", "tool": "search", "tool_input": "not json", "observation": ""},
+            ),
+            _frame("message_end", {"id": "trace1", "conversation_id": "c1", "metadata": {}}),
+        ],
+        gateway,
+    )
+
+    _events = [e async for e in adapter.stream_messages("c1", "hello", "u1", "tenant1")]
+
+    assert gateway.calls == [("search", {})]
+
+
+@pytest.mark.asyncio
+async def test_agent_thought_without_gateway_never_bridges() -> None:
+    frames = [
+        _frame(
+            "agent_thought",
+            {"id": "th1", "tool": "search", "tool_input": '{"q": "acme"}', "observation": ""},
+        ),
+        _frame("message_end", {"id": "trace1", "conversation_id": "c1", "metadata": {}}),
+    ]
+    adapter, _dify, _memory, _bus = _adapter(frames)
+
+    events = [e async for e in adapter.stream_messages("c1", "hello", "u1", "tenant1")]
+
+    assert [e["event"] for e in events] == ["agent_thought", "message_end"]

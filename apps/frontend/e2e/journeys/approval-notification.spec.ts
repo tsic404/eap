@@ -44,10 +44,12 @@ test("pending approvals show a count badge and approve action", async ({ page, c
   await expect(page.getByText("待审批 1")).toBeVisible();
   await expect(page.getByText("等待审批：接入搜索工具")).toBeVisible();
 
-  // Approving POSTs to the approve endpoint and confirms via toast.
+  // Approving POSTs to the approve endpoint and confirms via toast. Scope to
+  // the toast (role=status): the sidebar status filter also renders "已通过",
+  // so a bare getByText would match both once the toast appears.
   await page.route("**/api/tasks/task-1/approve", (route) =>
     route.fulfill({ json: envelope({ ...TASK, status: "approved" }) }),
   );
   await page.getByRole("button", { name: "同意" }).click();
-  await expect(page.getByText("已通过")).toBeVisible();
+  await expect(page.getByRole("status").getByText("已通过")).toBeVisible();
 });

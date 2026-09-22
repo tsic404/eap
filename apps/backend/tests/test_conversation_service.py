@@ -111,10 +111,11 @@ class _FakeClient:
 class _FakeAdapter:
     """Records args and yields a fixed message → message_end sequence."""
 
-    def __init__(self, client: Any, memory: Any, publisher: Any) -> None:
+    def __init__(self, client: Any, memory: Any, publisher: Any, gateway: Any) -> None:
         self.client = client
         self.memory = memory
         self.publisher = publisher
+        self.gateway = gateway
         self.last: tuple[Any, ...] = ()
         self.truncation_notice: bool | None = None
 
@@ -242,8 +243,8 @@ async def test_stream_serializes_and_persists_dify_id(
 ) -> None:
     adapters: list[_FakeAdapter] = []
 
-    def make_adapter(client: Any, memory: Any, publisher: Any) -> _FakeAdapter:
-        adapter = _FakeAdapter(client, memory, publisher)
+    def make_adapter(client: Any, memory: Any, publisher: Any, gateway: Any) -> _FakeAdapter:
+        adapter = _FakeAdapter(client, memory, publisher, gateway)
         adapters.append(adapter)
         return adapter
 
@@ -357,8 +358,8 @@ async def test_stream_passes_truncation_notice_to_adapter(
         client.messages = holder["messages"]
         return client
 
-    def make_adapter(client: Any, memory: Any, publisher: Any) -> _FakeAdapter:
-        adapter = _FakeAdapter(client, memory, publisher)
+    def make_adapter(client: Any, memory: Any, publisher: Any, gateway: Any) -> _FakeAdapter:
+        adapter = _FakeAdapter(client, memory, publisher, gateway)
         adapters.append(adapter)
         return adapter
 

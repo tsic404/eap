@@ -29,6 +29,28 @@ class ToolRepository:
     async def get(self, tool_id: str) -> ToolRegistry | None:
         return await self.session.get(ToolRegistry, tool_id)
 
+    async def get_by_name(self, name: str, tenant_id: uuid.UUID) -> ToolRegistry | None:
+        """Return a tenant-visible tool by display name, tenant-scoped preferred.
+
+        Dify's ``agent_thought.tool`` carries the tool's display name; a tenant
+        may have a tenant-scoped and a global tool sharing a name, so the
+        tenant-scoped row (``tenant_id IS NOT NULL``) wins.
+        """
+        statement = (
+            select(ToolRegistry)
+            .where(
+                ToolRegistry.name == name,
+                or_(
+                    ToolRegistry.tenant_id == tenant_id,
+                    ToolRegistry.tenant_id.is_(None),
+                ),
+            )
+            .order_by(ToolRegistry.tenant_id.is_(None), ToolRegistry.created_at.desc())
+            .limit(1)
+        )
+        result = await self.session.execute(statement)
+        return result.scalar_one_or_none()
+
     async def list_for_tenant(self, tenant_id: uuid.UUID) -> list[ToolRegistry]:
         statement = (
             select(ToolRegistry)
