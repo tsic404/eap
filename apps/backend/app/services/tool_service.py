@@ -109,6 +109,16 @@ class ToolService:
 
     # -- Execute / debug -----------------------------------------------------
 
+    @staticmethod
+    def requires_approval(tool: ToolRegistry) -> bool:
+        """True when executing ``tool`` must pass through the approval gate.
+
+        Single source of truth for the gate predicate: the chat bridge uses it
+        to decide whether to request approval, and ``execute`` to decide whether
+        to create the pending task instead of calling the tool.
+        """
+        return tool.risk_level == "high" or tool.permission_mode == "confirm"
+
     async def execute(
         self,
         tool: ToolRegistry,
@@ -120,7 +130,7 @@ class ToolService:
         """Execute a tool on behalf of an agent run, gating on risk/approval."""
         if tool.permission_mode == "disabled":
             raise AppError(409, "TOOL_DISABLED", "Tool is disabled")
-        if tool.risk_level == "high" or tool.permission_mode == "confirm":
+        if self.requires_approval(tool):
             task = await self._request_approval(tool, params, conversation_id, requester)
             return {"status": "pending_approval", "task_id": str(task.id)}
         result = await self.tool_proxy.execute(tool, params)

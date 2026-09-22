@@ -41,9 +41,9 @@ log = structlog.get_logger(__name__)
 # cancel are terminal and carry no queue work.
 _WORK_TRIGGERING_STATUSES = frozenset({"approved", "executing"})
 
-# Role whitelist for admin-gated actions (approve/reject): a single source of
-# truth imported by the controller (route gate) and enforced here (service
-# defense-in-depth).
+# Role whitelist for admin-gated actions: a single source of truth imported by
+# the controller (route gate on the task center) and enforced here
+# (service defense-in-depth, alongside the owner self-resolution path).
 ADMIN_ROLES: tuple[str, ...] = ("platform_admin", "agent_admin")
 
 VALID_TRANSITIONS: dict[str, tuple[str, ...]] = {
@@ -153,8 +153,11 @@ class TaskService:
                 )
             if to_status == "approved" and self._is_expired(task):
                 raise AppError(422, "TASK_EXPIRED", "Task has expired")
-            if to_status in ("approved", "rejected") and actor.role not in ADMIN_ROLES:
-                raise AppError(403, "FORBIDDEN", "Only an admin can approve or reject tasks")
+            if to_status in ("approved", "rejected") and not self._is_owner_or_admin(task, actor):
+                # Owner self-resolution (the chat tool-call confirm surface) and
+                # admin adjudication (the task center, route-gated by ADMIN_ROLES)
+                # are the two approval authorities.
+                raise AppError(403, "FORBIDDEN", "Only the task owner or an admin can approve")
             if to_status == "cancelled" and not self._is_owner_or_admin(task, actor):
                 raise AppError(403, "FORBIDDEN", "Only the task owner or an admin can cancel")
 

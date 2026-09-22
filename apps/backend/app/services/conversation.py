@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from typing import Any, cast
 
 import structlog
-from sqlalchemy import func, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
@@ -18,9 +17,9 @@ from app.errors import AppError
 from app.events.bus import EventBus, bus
 from app.models.agent import AgentRegistry
 from app.models.conversation import Conversation
-from app.models.task import Task
 from app.models.user import User
 from app.repositories.conversation import ConversationRepository
+from app.repositories.tool_repository import ToolRepository
 from app.schemas.conversation import (
     ConversationDto,
     ConversationPageDto,
@@ -34,6 +33,9 @@ from app.schemas.conversation import (
 from app.services.dify_client import DifyClientService
 from app.services.dify_conversation_adapter import DifyConversationAdapter
 from app.services.memory import MemoryService
+from app.services.task_service import TaskService
+from app.services.tool_proxy import ToolProxy
+from app.services.tool_service import ToolService
 
 log = structlog.get_logger(__name__)
 
@@ -129,13 +131,66 @@ class _EventPublisher:
         await self._bus.emit(event_name, **payload)
 
 
+class _ToolApprovalGateway:
+    """Bridge a Dify tool call to the platform's approval gate.
+
+    The adapter only sees Dify-side tool names; this gateway resolves the name
+    to a ``ToolRegistry`` and, for a gated tool, calls ``ToolService.execute``
+    to create the pending ``tool_approval`` task — the same gate the admin
+    debug path deliberately bypasses.
+    """
+
+    def __init__(
+        self,
+        session: AsyncSession,
+        user: User,
+        conversation: Conversation,
+        tool_proxy: ToolProxy | None,
+    ) -> None:
+        self._session = session
+        self._user = user
+        self._conversation = conversation
+        self._tool_proxy = tool_proxy
+        self._repository = ToolRepository(session)
+
+    async def request_approval(
+        self, tool_name: str, params: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Create a pending approval task for a gated tool; ``None`` otherwise."""
+        tool = await self._repository.get_by_name(tool_name, self._user.tenant_id)
+        if tool is None or not ToolService.requires_approval(tool):
+            return None
+        if self._tool_proxy is None:
+            # Never silently skip approval for a gated tool: an unwired proxy is
+            # a configuration error, surfaced as a stream error frame.
+            raise AppError(500, "TOOL_PROXY_MISSING", "Tool approval requires a tool proxy")
+        outcome = await ToolService(self._session, self._tool_proxy).execute(
+            tool,
+            params,
+            requester=self._user,
+            conversation_id=str(self._conversation.id),
+        )
+        task_id = outcome.get("task_id")
+        if task_id is None:
+            return None
+        return {"taskId": task_id, "toolName": tool.name, "params": params}
+
+
 class ConversationService:
     """Coordinates the conversation repository, Dify adapter, and memory recall."""
 
-    def __init__(self, settings: Settings, event_bus: EventBus = bus) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        event_bus: EventBus = bus,
+        tool_proxy: ToolProxy | None = None,
+    ) -> None:
         self._settings = settings
         self._bus = event_bus
         self._repo = ConversationRepository()
+        # Wired from ``app.state.tool_proxy`` in production; ``None`` only in
+        # unit tests that never exercise a gated tool call.
+        self._tool_proxy = tool_proxy
 
     # ── create / list / get / delete ──
 
@@ -278,6 +333,7 @@ class ConversationService:
                 input_text=dto.query,
                 model_name=agent.model_name,
             ),
+            _ToolApprovalGateway(session, user, conversation, self._tool_proxy),
         )
         files = [f.model_dump() for f in dto.files] if dto.files is not None else None
         try:
@@ -309,37 +365,32 @@ class ConversationService:
 
         P1 mapping: a conversation's tool call awaiting approval is represented
         by a ``tool_approval`` task whose payload references this conversation;
-        ``callId`` is that task's id. The conditional update fires only on a
-        genuine ``pending → approved`` transition, so concurrent confirms cannot
-        double-approve.
+        ``callId`` is that task's id. Approval goes through
+        ``TaskService.transition`` so the outbox write + RQ enqueue fire. A call
+        that is not an approvable tool call for this conversation — missing,
+        wrong type, expired, or already resolved — surfaces as 404 without
+        leaking task existence.
         """
         conversation = await self._require_conversation(session, user, conversation_id)
+        service = TaskService(session)
         try:
-            task_uuid = uuid.UUID(call_id)
-        except (ValueError, TypeError, AttributeError):
+            task = await service.get(call_id, user.tenant_id)
+        except AppError:
             raise AppError(404, "NOT_FOUND", "Tool call not found") from None
 
-        stmt = (
-            update(Task)
-            .where(
-                Task.id == task_uuid,
-                Task.tenant_id == user.tenant_id,
-                Task.type == "tool_approval",
-                Task.status == "pending",
-                # Mirror the task-module transition guard (§14.1): an expired
-                # approval must never become ``approved``, otherwise the RQ
-                # worker would execute the tool anyway.
-                or_(Task.expires_at.is_(None), Task.expires_at > func.now()),
-                Task.payload["conversation_id"].as_string() == str(conversation.id),
-            )
-            .values(status="approved", resolved_at=func.now())
-            .returning(Task.id, Task.status)
-        )
-        row = (await session.execute(stmt)).first()
-        if row is None:
+        payload = task.payload or {}
+        if task.type != "tool_approval" or payload.get("conversation_id") != str(conversation.id):
             raise AppError(404, "NOT_FOUND", "Tool call not found")
-        await session.commit()
-        return {"callId": str(row.id), "status": row.status}
+
+        try:
+            task = await service.transition(
+                call_id, "approved", tenant_id=user.tenant_id, actor=user
+            )
+        except AppError as exc:
+            if exc.code in ("TASK_EXPIRED", "INVALID_TRANSITION", "TASK_ALREADY_PROCESSED"):
+                raise AppError(404, "NOT_FOUND", "Tool call not found") from None
+            raise
+        return {"callId": str(task.id), "status": task.status}
 
     # ── helpers ──
 

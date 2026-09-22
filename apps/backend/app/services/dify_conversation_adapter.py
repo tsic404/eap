@@ -49,6 +49,21 @@ class EventPublisher(Protocol):
     async def publish(self, event_name: str, payload: dict[str, Any]) -> None: ...
 
 
+class ToolApprovalGateway(Protocol):
+    """Minimal tool-approval contract the adapter needs.
+
+    ``request_approval`` returns ``None`` when the named tool is unknown or not
+    gated, otherwise the approval descriptor the ``tool_approval_required``
+    event carries.
+    """
+
+    async def request_approval(
+        self,
+        tool_name: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any] | None: ...
+
+
 class DifyConversationAdapter:
     """Convert a Dify chat-messages SSE stream into platform SSE event dicts."""
 
@@ -57,10 +72,15 @@ class DifyConversationAdapter:
         dify_client: DifyClientService,
         memory: MemoryRecall,
         event_bus: EventPublisher,
+        tool_approval: ToolApprovalGateway | None = None,
     ) -> None:
         self._dify = dify_client
         self._memory = memory
         self._event_bus = event_bus
+        # ``None`` keeps the adapter usable in isolation (adapter unit tests);
+        # production wiring (``ConversationService.stream``) always passes a
+        # gateway so a gated tool surfaces ``tool_approval_required``.
+        self._tool_approval = tool_approval
         self._truncation_notice = False
 
     async def stream_messages(
@@ -130,19 +150,19 @@ class DifyConversationAdapter:
             # The trailing element is an incomplete line (or ""); keep it buffered.
             buffer = lines.pop() if lines else ""
             for line in lines:
-                event_type, event = await self._handle_sse_line(
+                event_type, events = await self._handle_sse_line(
                     line, event_type, user_id, tenant_id, trace
                 )
-                if event is not None:
+                for event in events:
                     yield event
 
         # Flush a final frame that ended without a trailing newline — e.g. the
         # closing ``message_end`` — so ``conversation.completed`` still fires.
         if buffer:
-            _event_type, event = await self._handle_sse_line(
+            _event_type, events = await self._handle_sse_line(
                 buffer, event_type, user_id, tenant_id, trace
             )
-            if event is not None:
+            for event in events:
                 yield event
 
     async def _handle_sse_line(
@@ -152,16 +172,20 @@ class DifyConversationAdapter:
         user_id: str,
         tenant_id: str,
         trace: dict[str, Any],
-    ) -> tuple[str, dict[str, Any] | None]:
-        """Dispatch one SSE line; returns ``(next_event_type, event_or_none)``."""
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Dispatch one SSE line; returns ``(next_event_type, events)``.
+
+        Usually zero or one event, but an ``agent_thought`` naming a gated tool
+        also yields the ``tool_approval_required`` event it created.
+        """
         if line.startswith("event:"):
-            return line[len("event:") :].strip(), None
+            return line[len("event:") :].strip(), []
         if not line.startswith("data:"):
-            return event_type, None
+            return event_type, []
 
         payload = line[len("data:") :].strip()
         if not payload:
-            return "", None
+            return "", []
 
         try:
             data = json.loads(payload)
@@ -175,12 +199,12 @@ class DifyConversationAdapter:
                 payload_bytes=len(payload.encode("utf-8")),
                 error=str(exc),
             )
-            return "", None
+            return "", []
 
         if not isinstance(data, dict):
             # A non-object payload has no event fields; drop it rather than
             # crash on ``.get`` below.
-            return "", None
+            return "", []
 
         # Dify's Service API carries the event name inside the JSON payload
         # ("event" key); the explicit ``event:`` line is a fallback for the
@@ -190,7 +214,7 @@ class DifyConversationAdapter:
         _accumulate_trace(event_name, data, trace)
         event = _map_event(event_name, data)
         if event is None:
-            return "", None
+            return "", []
 
         if event_name == "message_end":
             event["data"]["metadata"]["truncationNotice"] = self._truncation_notice
@@ -208,7 +232,39 @@ class DifyConversationAdapter:
                 },
             )
 
-        return "", event
+        events = [event]
+        if event_name == "agent_thought":
+            approval = await self._request_tool_approval(data)
+            if approval is not None:
+                events.append(approval)
+        return "", events
+
+    async def _request_tool_approval(self, data: dict[str, Any]) -> dict[str, Any] | None:
+        """Bridge a Dify tool call to the platform approval gate.
+
+        Returns the ``tool_approval_required`` event when the named tool is
+        gated, else ``None``. Absent a wired gateway the adapter does not
+        bridge — the platform only ever constructs it with one.
+
+        Dify emits two ``agent_thought`` frames per tool call: a "before" frame
+        carrying ``tool_input`` with an empty ``observation``, then an "after"
+        echo carrying the ``observation`` but no ``tool_input``. Only the
+        "before" frame may request approval — gating the echo would create a
+        second pending task and later re-run the tool with empty params.
+        """
+        if self._tool_approval is None:
+            return None
+        tool_name = data.get("tool")
+        if not isinstance(tool_name, str) or not tool_name:
+            return None
+        if not data.get("tool_input") or data.get("observation"):
+            return None
+        approval = await self._tool_approval.request_approval(
+            tool_name, _parse_tool_input(data.get("tool_input"))
+        )
+        if approval is None:
+            return None
+        return {"event": "tool_approval_required", "data": approval}
 
 
 def _accumulate_trace(event_name: str, data: dict[str, Any], trace: dict[str, Any]) -> None:
@@ -411,6 +467,25 @@ def _map_event(event_name: str, data: dict[str, Any]) -> dict[str, Any] | None:
         case _:
             # Includes "ping" (keepalive) and any unknown/future event: dropped.
             return None
+
+
+def _parse_tool_input(raw: Any) -> dict[str, Any]:
+    """Decode Dify's ``agent_thought.tool_input`` JSON string into a params dict.
+
+    Dify ships the tool arguments as a JSON-encoded string; anything absent,
+    malformed, or non-object degrades to ``{}`` so a bad payload never breaks
+    the approval request.
+    """
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
 
 
 def _file_payload(data: dict[str, Any]) -> dict[str, Any]:
