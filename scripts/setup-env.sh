@@ -8,7 +8,7 @@ ENV_EXAMPLE="${ENV_EXAMPLE:-.env.example}"
 # Secrets docker compose enforces via `${VAR:?...}`. A value only counts as set
 # after surrounding whitespace and one pair of quotes are stripped, so an empty
 # or whitespace-only (even quoted) value is regenerated.
-REQUIRED_SECRETS=(WEAVIATE_API_KEY DIFY_SECRET_KEY)
+REQUIRED_SECRETS=(WEAVIATE_API_KEY DIFY_SECRET_KEY PLUGIN_DAEMON_KEY PLUGIN_DIFY_INNER_API_KEY)
 
 normalize_value() {
   local value="$1"

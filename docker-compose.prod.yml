@@ -1,6 +1,6 @@
 name: eap-prod
 
-# Production compose: same 8 services as docker-compose.yml, but images run as
+# Production compose: same services as docker-compose.yml, but images run as
 # non-root (backend Dockerfile) and every secret is required at boot — no
 # hardcoded fallback. Bring the stack up with:
 #
@@ -28,6 +28,13 @@ x-dify-env: &dify-env
   STORAGE_TYPE: local
   STORAGE_LOCAL_PATH: storage
   FILES_URL: ""
+  PLUGIN_DAEMON_URL: http://plugin-daemon:5002
+  PLUGIN_DAEMON_KEY: ${PLUGIN_DAEMON_KEY:?PLUGIN_DAEMON_KEY must be set in .env}
+  INNER_API_KEY_FOR_PLUGIN: ${PLUGIN_DIFY_INNER_API_KEY:?PLUGIN_DIFY_INNER_API_KEY must be set in .env}
+  # Plugin remote-install (browser plugin debugging) is not wired: it needs the
+  # daemon's 5003 published on the host plus a browser-reachable host value, so
+  # PLUGIN_REMOTE_INSTALL_HOST/PORT are left at Dify's defaults.
+  PLUGIN_MAX_PACKAGE_SIZE: ${PLUGIN_MAX_PACKAGE_SIZE:-52428800}
 
 services:
   nginx:
@@ -111,7 +118,13 @@ services:
     environment:
       <<: *dify-env
       MODE: api
+    volumes:
+      - dify_api_storage:/app/api/storage
     depends_on:
+      dify-db-init:
+        condition: service_completed_successfully
+      init_permissions:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -134,7 +147,13 @@ services:
     environment:
       <<: *dify-env
       MODE: worker
+    volumes:
+      - dify_api_storage:/app/api/storage
     depends_on:
+      dify-db-init:
+        condition: service_completed_successfully
+      init_permissions:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -155,6 +174,106 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # One-shot: Dify's api/worker connect to `dify` and the plugin daemon to
+  # `dify_plugin`, but Postgres only auto-creates POSTGRES_DB (`eap`). Both are
+  # created here, idempotently, on every bring-up — so this also repairs a
+  # volume initialized before the plugin daemon (and its database) existed.
+  dify-db-init:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+    volumes:
+      - ./deploy/postgres/bootstrap-databases.sql:/bootstrap.sql:ro
+    command:
+      [
+        "psql",
+        "-h",
+        "postgres",
+        "-U",
+        "${POSTGRES_USER:-eap}",
+        "-d",
+        "postgres",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-f",
+        "/bootstrap.sql",
+      ]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # One-shot: the Dify api/worker images run as uid 1001 (`dify`), so their
+  # storage volume must be owned by that uid before either process writes an
+  # uploaded file into it. Flag-file guarded, so the recursive chown runs once
+  # per volume rather than on every bring-up.
+  init_permissions:
+    image: alpine:3.20
+    command:
+      - sh
+      - -c
+      - |
+        FLAG_FILE="/app/api/storage/.init_permissions"
+        if [ -f "$${FLAG_FILE}" ]; then
+          echo "Permissions already initialized. Exiting."
+          exit 0
+        fi
+        chown -R 1001:1001 /app/api/storage && touch "$${FLAG_FILE}"
+        echo "Permissions initialized. Exiting."
+    volumes:
+      - dify_api_storage:/app/api/storage
+    restart: "no"
+
+  # Dify 1.x model/tool plugins run out-of-process here. Every model-manager
+  # call the api makes (dataset creation, model listing, chat generation) is
+  # proxied to this daemon, so it is required for KB and conversation features.
+  plugin-daemon:
+    image: langgenius/dify-plugin-daemon:0.6.10-local
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USERNAME: ${POSTGRES_USER:-eap}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      DB_DATABASE: dify_plugin
+      DB_SSL_MODE: disable
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      REDIS_PASSWORD: ""
+      REDIS_USE_SSL: "false"
+      SERVER_PORT: "5002"
+      SERVER_KEY: ${PLUGIN_DAEMON_KEY:?PLUGIN_DAEMON_KEY must be set in .env}
+      DIFY_INNER_API_URL: http://dify-api:5001
+      DIFY_INNER_API_KEY: ${PLUGIN_DIFY_INNER_API_KEY:?PLUGIN_DIFY_INNER_API_KEY must be set in .env}
+      PLUGIN_REMOTE_INSTALLING_HOST: 0.0.0.0
+      PLUGIN_REMOTE_INSTALLING_PORT: "5003"
+      PLUGIN_WORKING_PATH: /app/storage/cwd
+      PLUGIN_STORAGE_TYPE: local
+      PLUGIN_STORAGE_LOCAL_ROOT: /app/storage
+      PLUGIN_INSTALLED_PATH: plugin
+      PLUGIN_PACKAGE_CACHE_PATH: plugin_packages
+      PLUGIN_MEDIA_CACHE_PATH: assets
+      MAX_PLUGIN_PACKAGE_SIZE: ${PLUGIN_MAX_PACKAGE_SIZE:-52428800}
+      PLUGIN_MAX_EXECUTION_TIMEOUT: "600"
+      PYTHON_ENV_INIT_TIMEOUT: "120"
+      FORCE_VERIFYING_SIGNATURE: "true"
+    volumes:
+      - plugin_daemon_storage:/app/storage
+    depends_on:
+      dify-db-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:5002/health/check"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    restart: unless-stopped
+
   postgres:
     image: pgvector/pgvector:pg16
     environment:
@@ -163,7 +282,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-eap}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-eap} -d ${POSTGRES_DB:-eap}"]
       interval: 10s
@@ -206,3 +324,5 @@ volumes:
   pgdata:
   redisdata:
   weaviadata:
+  dify_api_storage:
+  plugin_daemon_storage:

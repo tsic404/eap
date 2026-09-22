@@ -16,7 +16,7 @@ packages/
   api-contract/        # 前后端共享 API 契约（TypeScript）
 deploy/
   nginx/               # 反向代理配置
-docker-compose.yml     # 8 容器本地开发环境
+docker-compose.yml     # 本地开发环境（9 常驻 + 2 一次性引导容器）
 .env.example           # 环境变量模板
 .github/workflows/ci.yml  # CI 骨架
 ```
@@ -30,7 +30,7 @@ docker-compose.yml     # 8 容器本地开发环境
 - Docker / Podman
 - GNU make + bash + OpenSSL（`make setup-env` 自动补全必填密钥）
 
-### 启动全部 8 个容器
+### 启动全部容器
 
 ```bash
 make setup-env         # 从 .env.example 生成 .env，并补全必填密钥
@@ -38,11 +38,22 @@ docker compose up -d
 ```
 
 `make setup-env` 幂等：`.env` 不存在时从 `.env.example` 复制，否则原地补全仍为空的
-`WEAVIATE_API_KEY` / `DIFY_SECRET_KEY`（`openssl rand -hex 32`），已填写的值不会被覆盖。
+`WEAVIATE_API_KEY` / `DIFY_SECRET_KEY` / `PLUGIN_DAEMON_KEY` / `PLUGIN_DIFY_INNER_API_KEY`
+（`openssl rand -hex 32`），已填写的值不会被覆盖。
 若 shell 已导出同名空变量（如 `export WEAVIATE_API_KEY=`），其优先级高于 `.env` 会让 compose
-仍硬失败，脚本会报错退出——先 `unset WEAVIATE_API_KEY DIFY_SECRET_KEY` 再重跑。
+仍硬失败，脚本会报错退出——先 `unset WEAVIATE_API_KEY DIFY_SECRET_KEY PLUGIN_DAEMON_KEY PLUGIN_DIFY_INNER_API_KEY` 再重跑。
 
-容器：`nginx`、`frontend`、`backend`、`dify-api`、`dify-worker`、`postgres`、`redis`、`weaviate`。
+常驻容器：`nginx`、`frontend`、`backend`、`dify-api`、`dify-worker`、`plugin-daemon`、
+`postgres`、`redis`、`weaviate`。另有两个一次性引导容器，成功即退出：
+
+- `dify-db-init`：幂等创建 `dify` 与 `dify_plugin` 两个库（后者供 plugin daemon 使用），
+  每次 `up` 都跑，因此旧数据卷也能补建。
+- `init_permissions`：把 plugin daemon 存储卷 chown 给 uid 1001（该镜像以非 root 运行）。
+
+Dify 1.x 的模型/工具插件不在 api 进程内，而由 `plugin-daemon` 托管，并使用独立的
+`dify_plugin` 库；api / worker 通过 `PLUGIN_DAEMON_URL` + `PLUGIN_DAEMON_KEY` 访问它，
+daemon 再以 `INNER_API_KEY_FOR_PLUGIN` 回调 api。缺任一环，知识库创建、模型列表与
+流式对话都会以 "Failed to request plugin daemon" 失败。
 
 - 前端首页：http://localhost
 - 健康检查：http://localhost/api/health/live
