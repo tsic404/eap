@@ -3,6 +3,9 @@
 import base64
 import json
 
+import jwt as pyjwt
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
@@ -117,11 +120,22 @@ def test_streaming_response_not_wrapped_or_truncated() -> None:
         assert resp.text == "chunk-onechunk-two"
 
 
+def _rsa_keypair() -> tuple[rsa.RSAPrivateKey, str]:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_pem = (
+        private_key.public_key()
+        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        .decode()
+    )
+    return private_key, public_pem
+
+
 def _ident_handler(request: Request) -> dict[str, object]:
     return {
         "user_id": getattr(request.state, "user_id", None),
         "tenant_id": getattr(request.state, "tenant_id", None),
         "role": getattr(request.state, "role", None),
+        "jti": getattr(request.state, "jti", None),
     }
 
 
@@ -133,20 +147,13 @@ def test_jwt_without_public_key_is_not_trusted() -> None:
     with TestClient(app, raise_server_exceptions=False) as client:
         resp = client.get("/api/test/ident", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
-        assert resp.json() == {"data": {"user_id": None, "tenant_id": None, "role": ""}}
+        assert resp.json() == {
+            "data": {"user_id": None, "tenant_id": None, "role": "", "jti": None}
+        }
 
 
 def test_jwt_with_public_key_verifies_signature() -> None:
-    import jwt as pyjwt
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric import rsa
-
-    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    public_pem = (
-        private_key.public_key()
-        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
-        .decode()
-    )
+    private_key, public_pem = _rsa_keypair()
     token = pyjwt.encode(
         {"sub": "user-123", "tenantId": "tenant-456", "role": "admin"},
         private_key,
@@ -160,7 +167,36 @@ def test_jwt_with_public_key_verifies_signature() -> None:
         resp = client.get("/api/test/ident", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
         assert resp.json() == {
-            "data": {"user_id": "user-123", "tenant_id": "tenant-456", "role": "admin"}
+            "data": {
+                "user_id": "user-123",
+                "tenant_id": "tenant-456",
+                "role": "admin",
+                "jti": None,
+            }
+        }
+
+
+def test_jwt_passes_jti_through_to_request_state() -> None:
+    private_key, public_pem = _rsa_keypair()
+    token = pyjwt.encode(
+        {"sub": "user-123", "tenantId": "tenant-456", "role": "admin", "jti": "jti-abc"},
+        private_key,
+        algorithm="RS256",
+    )
+
+    app = create_app(settings=Settings(_env_file=None, jwt_public_key=public_pem))
+    app.get("/api/test/ident")(_ident_handler)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        resp = client.get("/api/test/ident", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "data": {
+                "user_id": "user-123",
+                "tenant_id": "tenant-456",
+                "role": "admin",
+                "jti": "jti-abc",
+            }
         }
 
 

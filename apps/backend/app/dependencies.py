@@ -5,7 +5,7 @@ decodes the bearer token into ``request.state`` identity context) and business
 handlers. The middleware only *establishes* identity; these dependencies
 *enforce* it and load the authoritative ORM rows.
 
-- ``get_current_user``  -> 401 unless an authenticated user exists
+- ``get_current_user``  -> 401 unless an authenticated, non-revoked user exists
 - ``require_roles``     -> 403 unless the user's role is allowed
 - ``get_active_tenant`` -> 401/403/429 unless the authenticated user may act on
   the resolved tenant and that tenant is active and under quota
@@ -19,6 +19,7 @@ from collections.abc import Awaitable, Callable
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.revocation import is_access_token_revoked
 from app.db import get_session
 from app.errors import AppError
 from app.models.tenant import Tenant
@@ -40,6 +41,10 @@ async def get_current_user(request: Request, session: AsyncSession = Depends(get
     user_id = getattr(request.state, "user_id", None)
     if not user_id:
         raise AppError(401, "UNAUTHORIZED", "Authentication required")
+    if await is_access_token_revoked(
+        getattr(request.app.state, "redis", None), getattr(request.state, "jti", None)
+    ):
+        raise AppError(401, "TOKEN_REVOKED", "Access token revoked")
 
     user = await session.get(User, _parse_uuid(user_id, "UNAUTHORIZED"))
     if user is None or user.status != "active":

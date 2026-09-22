@@ -25,10 +25,11 @@ TEST_DATABASE_URL = os.environ.get(
 
 
 class FakeRedis:
-    """In-memory stand-in for the Redis commands the OIDC state store uses."""
+    """In-memory stand-in for the Redis commands the app issues."""
 
     def __init__(self) -> None:
         self._data: dict[str, str] = {}
+        self._ttls: dict[str, int | None] = {}
 
     async def set(
         self, name: str, value: str, *, nx: bool = False, ex: int | None = None
@@ -36,10 +37,19 @@ class FakeRedis:
         if nx and name in self._data:
             return None
         self._data[name] = value
+        self._ttls[name] = ex
         return True
 
+    async def get(self, name: str) -> str | None:
+        return self._data.get(name)
+
     async def getdel(self, name: str) -> str | None:
+        self._ttls.pop(name, None)
         return self._data.pop(name, None)
+
+    def recorded_ttl(self, name: str) -> int | None:
+        """The expiry handed to ``SET EX``, so tests can assert the TTL policy."""
+        return self._ttls.get(name)
 
 
 def _drop_tables(conn: object) -> None:

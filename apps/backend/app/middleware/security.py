@@ -38,6 +38,7 @@ def _set_identity(
     user_id: str | None = None,
     tenant_id: str | None = None,
     role: str | None = None,
+    jti: str | None = None,
 ) -> None:
     """Stash identity context on the request scope and structlog contextvars."""
     state = scope.setdefault("state", {})
@@ -50,6 +51,10 @@ def _set_identity(
     if role is not None:
         state["role"] = role
         structlog.contextvars.bind_contextvars(role=role)
+    if jti is not None:
+        # Token-scoped rather than identity-scoped, so it stays off the log
+        # context; revocation checks read it from ``request.state``.
+        state["jti"] = jti
 
 
 def _header(scope: Scope, name: str) -> str | None:
@@ -223,7 +228,8 @@ class JWTMiddleware:
     The signature is always verified (RS256). Without ``jwt_public_key`` no
     token can be authenticated, so identity stays unset rather than trusting an
     unverified payload. Authorization decisions belong to the OIDC/JWT and RBAC
-    work.
+    work; the decoded ``jti`` is passed through for the revocation check in
+    ``get_current_user``.
     """
 
     def __init__(self, app: ASGIApp, settings: Settings) -> None:
@@ -244,6 +250,7 @@ class JWTMiddleware:
                     user_id=claims.get("sub"),
                     tenant_id=claims.get("tenantId") or claims.get("tenant_id"),
                     role=claims.get("role"),
+                    jti=claims.get("jti"),
                 )
 
         await self.app(scope, receive, send)

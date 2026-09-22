@@ -16,8 +16,9 @@ from fastapi.testclient import TestClient
 
 from app.auth.oidc import OidcClient, code_challenge_from_verifier, generate_code_verifier
 from app.auth.refresh import RefreshService
+from app.auth.revocation import revoked_jti_key
 from app.auth.state_store import OidcStateStore
-from app.auth.tokens import issue_access_token
+from app.auth.tokens import ACCESS_TOKEN_TTL_SECONDS, issue_access_token
 from app.config import Settings
 from app.core.exceptions import AuthError
 from app.db import get_session
@@ -258,9 +259,13 @@ class _FakeIdP:
 
 
 async def _start_callback_flow(
-    idp: _FakeIdP, session_factory
+    idp: _FakeIdP, session_factory, *, redis: FakeRedis | None = None
 ) -> tuple[httpx.AsyncClient, httpx.AsyncClient]:
-    """Seed a tenant, wire the app to the fake IdP, return (http, mock_http)."""
+    """Seed a tenant, wire the app to the fake IdP, return (http, mock_http).
+
+    The same Redis fake backs the OIDC state store and the revocation registry,
+    mirroring production where one client serves both.
+    """
     async with session_factory() as session:
         session.add(Tenant(name="Acme", slug="acme", sso_domain="acme.com"))
         await session.commit()
@@ -268,8 +273,10 @@ async def _start_callback_flow(
     settings = _settings()
     app = create_app(settings)
     mock_http = httpx.AsyncClient(transport=httpx.MockTransport(idp))
+    fake_redis = redis if redis is not None else FakeRedis()
+    app.state.redis = fake_redis
     app.state.oidc = OidcClient(settings, client=mock_http)
-    app.state.state_store = OidcStateStore(FakeRedis())  # type: ignore[arg-type]
+    app.state.state_store = OidcStateStore(fake_redis)  # type: ignore[arg-type]
     app.state.refresh_service = RefreshService(settings)
 
     async def override_get_session():
@@ -492,6 +499,54 @@ async def test_logout_revokes_family_and_clears_cookie(session_factory) -> None:
             headers={"Cookie": f"refresh_token={active}"},
         )
         assert replay.status_code == 401, replay.text
+    finally:
+        await http.aclose()
+        await mock_http.aclose()
+
+
+def _jti(token: str) -> str:
+    """Read a token's ``jti`` without verifying it (test-side claim inspection)."""
+    claims = jwt.decode(token, options={"verify_signature": False})
+    jti = claims["jti"]
+    assert isinstance(jti, str)
+    return jti
+
+
+@pytest.mark.asyncio
+async def test_logout_revokes_only_the_presented_access_token(session_factory) -> None:  # type: ignore[no-untyped-def]
+    """Logout kills the bearer token it was given and leaves other tokens usable.
+
+    The access token stays cryptographically valid until ``exp``, so logout must
+    register its ``jti`` for exactly its remaining lifetime; a second token
+    minted from the same session must keep working (no blanket revocation).
+    """
+    idp = _FakeIdP()
+    redis = FakeRedis()
+    http, mock_http = await _start_callback_flow(idp, session_factory, redis=redis)
+    try:
+        state, nonce = await _begin_login(http)
+        idp.nonce = nonce
+        await http.get(f"/api/auth/callback?code=c1&state={state}", follow_redirects=False)
+
+        first = (await http.post("/api/auth/refresh")).json()["data"]["accessToken"]
+        second = (await http.post("/api/auth/refresh")).json()["data"]["accessToken"]
+        assert first != second
+
+        logout = await http.post("/api/auth/logout", headers={"Authorization": f"Bearer {first}"})
+        assert logout.status_code == 200, logout.text
+
+        revoked = await http.get("/api/me", headers={"Authorization": f"Bearer {first}"})
+        assert revoked.status_code == 401, revoked.text
+        assert revoked.json()["error"]["code"] == "TOKEN_REVOKED"
+
+        # The registry entry is scoped to the revoked token's own jti and to its
+        # remaining lifetime, so it expires with the token it revokes.
+        key = revoked_jti_key(_jti(first))
+        assert redis.recorded_ttl(key) is not None
+        assert 0 < redis.recorded_ttl(key) <= ACCESS_TOKEN_TTL_SECONDS
+
+        survivor = await http.get("/api/me", headers={"Authorization": f"Bearer {second}"})
+        assert survivor.status_code == 200, survivor.text
     finally:
         await http.aclose()
         await mock_http.aclose()
