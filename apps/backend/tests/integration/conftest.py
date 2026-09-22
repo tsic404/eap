@@ -52,6 +52,13 @@ from app.services.conversation import ConversationService
 from app.services.knowledge import KnowledgeService
 from app.services.tool_proxy import ToolProxy
 
+# Ryuk 是 testcontainers 的资源回收容器，在共享 cgroup 的宿主机上无法启动
+# （operation not permitted），会让整个集成套件卡在容器启动超时。它只是测试
+# 进程被强杀时的兜底清理，正常退出时 context manager 已负责停容器，故默认关闭。
+# testcontainers 在容器 start() 时才惰性读取该变量（见 config.ryuk_disabled），
+# 因此在 import 之后设置依然生效；需要兜底清理时显式设 false 覆盖。
+os.environ.setdefault("TESTCONTAINERS_RYUK_DISABLED", "true")
+
 Role = str
 
 
