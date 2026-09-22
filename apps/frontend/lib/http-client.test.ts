@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { postMock, responseUse, clientMock } = vi.hoisted(() => {
+const { postMock, requestUse, responseUse, clientMock } = vi.hoisted(() => {
   const postMock = vi.fn();
   const requestUse = vi.fn();
   const responseUse = vi.fn();
@@ -10,7 +10,7 @@ const { postMock, responseUse, clientMock } = vi.hoisted(() => {
       response: { use: responseUse },
     },
   });
-  return { postMock, responseUse, clientMock };
+  return { postMock, requestUse, responseUse, clientMock };
 });
 
 vi.mock("axios", () => ({
@@ -102,6 +102,29 @@ describe("refreshAccessToken", () => {
     const token = await refreshAccessToken();
 
     expect(token).toBeNull();
+  });
+});
+
+describe("request interceptor", () => {
+  // Logout revokes the access token by the `jti` of the bearer token it
+  // receives, so the token must reach the request as a header.
+  it("attaches the stored access token to the logout request", () => {
+    setAccessToken("logout-token");
+    const onRequest = requestUse.mock.calls[0][0];
+    const headersSet = vi.fn();
+
+    onRequest({ url: "/auth/logout", headers: { set: headersSet } });
+
+    expect(headersSet).toHaveBeenCalledWith("Authorization", "Bearer logout-token");
+  });
+
+  it("sends no Authorization header when no token is stored", () => {
+    const onRequest = requestUse.mock.calls[0][0];
+    const headersSet = vi.fn();
+
+    onRequest({ url: "/auth/logout", headers: { set: headersSet } });
+
+    expect(headersSet).not.toHaveBeenCalled();
   });
 });
 
