@@ -7,6 +7,10 @@ const withNextIntl = createNextIntlPlugin("./i18n/request.ts");
 const nextConfig = {
   output: "standalone",
   reactStrictMode: true,
+  // Docker build opts out (NEXT_SKIP_ESLINT_IN_BUILD); linting is already a CI gate.
+  eslint: {
+    ignoreDuringBuilds: process.env.NEXT_SKIP_ESLINT_IN_BUILD === "1",
+  },
 };
 
 // Compose outermost-first: Sentry wraps the Next.js config produced by the

@@ -13,6 +13,9 @@ COPY . .
 COPY --from=deps /repo/node_modules ./node_modules
 COPY --from=deps /repo/apps/frontend/node_modules ./apps/frontend/node_modules
 COPY --from=deps /repo/packages/api-contract/node_modules ./packages/api-contract/node_modules
+# `next build` would repeat the ESLint pass that CI already runs as its own
+# gate; skipping it here keeps this container build off the memory ceiling.
+ENV NEXT_SKIP_ESLINT_IN_BUILD=1
 RUN pnpm --filter @eap/frontend build
 
 FROM node:22-alpine AS runner
