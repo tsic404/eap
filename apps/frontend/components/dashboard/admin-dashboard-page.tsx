@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { Activity, AlertTriangle, Bot, Clock } from "lucide-react";
 
 import { AlertList } from "@/components/dashboard/alert-list";
+import { DashboardSkeleton } from "@/components/dashboard/dashboard-skeleton";
 import { HealthStatusPanel } from "@/components/dashboard/health-status-panel";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { ModelList } from "@/components/dashboard/model-list";
@@ -23,21 +24,6 @@ const TrendChart = dynamic(
   () => import("@/components/dashboard/trend-chart").then((m) => m.TrendChart),
   { ssr: false, loading: () => <Skeleton className="h-64 w-full" /> },
 );
-
-function DashboardSkeleton() {
-  return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-6 px-6 py-8">
-      <Skeleton className="h-10 w-32" />
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {Array.from({ length: 4 }, (_, index) => (
-          <Skeleton key={index} className="h-20 w-full" />
-        ))}
-      </div>
-      <Skeleton className="h-72 w-full" />
-      <Skeleton className="h-40 w-full" />
-    </div>
-  );
-}
 
 function ModelsSection() {
   const { data, error, isLoading, mutate } = useModels();
