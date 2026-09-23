@@ -222,6 +222,74 @@ async def test_publish_sets_published_and_emits_event(session_factory) -> None: 
 
 
 @pytest.mark.asyncio
+async def test_publish_missing_agent_raises_404_not_found(session_factory) -> None:  # type: ignore[no-untyped-def]
+    console = _console_mock()
+    async with session_factory() as session:
+        tenant, user = await _seed_tenant_user(session)
+        service = AgentService(session, console)
+
+        with pytest.raises(AppError) as exc:
+            await service.publish("ghost-bot", version=1, tenant_id=tenant.id, actor_id=user.id)
+
+        assert exc.value.status_code == 404
+        assert exc.value.code == "NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_publish_deleted_agent_raises_404_not_found(session_factory) -> None:  # type: ignore[no-untyped-def]
+    console = _console_mock()
+    async with session_factory() as session:
+        tenant, user = await _seed_tenant_user(session)
+        service = AgentService(session, console)
+        agent = await service.register(
+            CreateAgentDto(agentId="bot-deleted", name="Bot"),
+            tenant_id=tenant.id,
+            actor_id=user.id,
+        )
+        await service.delete(agent.agent_id, tenant_id=tenant.id, actor_id=user.id)
+
+        with pytest.raises(AppError) as exc:
+            await service.publish(agent.agent_id, version=1, tenant_id=tenant.id, actor_id=user.id)
+
+        assert exc.value.status_code == 404
+        assert exc.value.code == "NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_publish_offline_agent_raises_409_invalid_state(session_factory) -> None:  # type: ignore[no-untyped-def]
+    console = _console_mock()
+    event_bus = EventBus()
+    async with session_factory() as session:
+        tenant, user = await _seed_tenant_user(session)
+        service = AgentService(session, console, event_bus=event_bus)
+        agent = await service.register(
+            CreateAgentDto(agentId="bot-offline", name="Bot"),
+            tenant_id=tenant.id,
+            actor_id=user.id,
+        )
+        await service.offline(agent.agent_id, tenant_id=tenant.id, actor_id=user.id)
+
+        published_events: list[dict[str, object]] = []
+
+        async def on_published(sender: str, **payload: object) -> None:
+            published_events.append(payload)
+
+        event_bus.subscribe(AGENT_PUBLISHED, on_published)
+
+        with pytest.raises(AppError) as exc:
+            await service.publish(
+                agent.agent_id,
+                version=agent.version,
+                tenant_id=tenant.id,
+                actor_id=user.id,
+            )
+
+        assert exc.value.status_code == 409
+        assert exc.value.code == "INVALID_STATE"
+        assert published_events == []
+
+
+@pytest.mark.asyncio
 async def test_find_many_is_tenant_scoped(session_factory) -> None:  # type: ignore[no-untyped-def]
     async with session_factory() as session:
         tenant_a, _ = await _seed_tenant_user(session, role="agent_admin")

@@ -17,8 +17,11 @@ vi.mock("./http-client", () => ({
 import type { Agent } from "./agent-types";
 import {
   deleteAgent,
+  extractApiErrorCode,
   extractApiErrorMessage,
   isConflictError,
+  isDuplicateAgentError,
+  isInvalidStateError,
   listAllAgents,
   offlineAgent,
   publishAgent,
@@ -121,10 +124,34 @@ describe("agent lifecycle calls", () => {
 });
 
 describe("error helpers", () => {
-  it("detects a 409 optimistic-lock conflict", () => {
-    expect(isConflictError(axiosError(409))).toBe(true);
+  it("detects a 409 optimistic-lock conflict by error code", () => {
+    expect(isConflictError(axiosError(409, { error: { code: "CONFLICT" } }))).toBe(true);
+    expect(isConflictError(axiosError(409, { error: { code: "INVALID_STATE" } }))).toBe(false);
+    expect(isConflictError(axiosError(409))).toBe(false);
     expect(isConflictError(axiosError(400))).toBe(false);
     expect(isConflictError(new Error("nope"))).toBe(false);
+  });
+
+  it("detects a 409 invalid-state rejection by error code", () => {
+    expect(isInvalidStateError(axiosError(409, { error: { code: "INVALID_STATE" } }))).toBe(true);
+    expect(isInvalidStateError(axiosError(409, { error: { code: "CONFLICT" } }))).toBe(false);
+    // Auth reuses INVALID_STATE at 400, so the status must still match.
+    expect(isInvalidStateError(axiosError(400, { error: { code: "INVALID_STATE" } }))).toBe(false);
+  });
+
+  it("detects a duplicate agent id conflict by error code", () => {
+    expect(isDuplicateAgentError(axiosError(409, { error: { code: "DUPLICATE_AGENT_ID" } }))).toBe(
+      true,
+    );
+    expect(isDuplicateAgentError(axiosError(409, { error: { code: "CONFLICT" } }))).toBe(false);
+  });
+
+  it("extracts the machine-readable error code", () => {
+    expect(extractApiErrorCode(axiosError(409, { error: { code: "INVALID_STATE" } }))).toBe(
+      "INVALID_STATE",
+    );
+    expect(extractApiErrorCode(axiosError(409))).toBeUndefined();
+    expect(extractApiErrorCode(new Error("nope"))).toBeUndefined();
   });
 
   it("extracts the backend message from the error envelope", () => {

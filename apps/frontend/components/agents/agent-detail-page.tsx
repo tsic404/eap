@@ -20,6 +20,7 @@ import {
   deleteAgent,
   extractApiErrorMessage,
   isConflictError,
+  isInvalidStateError,
   offlineAgent,
   publishAgent,
 } from "@/lib/platform-service";
@@ -84,6 +85,13 @@ export function AgentDetailPage() {
     } catch (error) {
       if (isConflictError(error)) {
         setConflictOpen(true);
+      } else if (isInvalidStateError(error)) {
+        // Offline agents reject publish with 409 INVALID_STATE — not a stale version.
+        toast({
+          type: "error",
+          title: "无法发布",
+          description: "该智能体已下线，不可发布",
+        });
       } else {
         toast({
           type: "error",

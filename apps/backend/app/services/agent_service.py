@@ -31,6 +31,11 @@ _TYPE_TO_DIFY_MODE: dict[str, str] = {
 
 _DUPLICATE_AGENT_CONSTRAINTS = frozenset({"pk_agent_registry", "uq_agent_registry_tenant_agent_id"})
 
+# ``offline`` is the only state that must not be publishable: it is the
+# deliberate "taken down" state, so a publish there is a state conflict rather
+# than a missing resource. Unknown future states fail closed.
+_PUBLISHABLE_STATUSES = frozenset({"draft", "testing", "published"})
+
 # camelCase DTO keys that differ from the ORM column name on ``AgentRegistry``.
 # ``update`` maps these before handing the payload to ``update_with_version`` so
 # SQLAlchemy never sees an unmapped attribute (e.g. ``modelId`` → ``model_id``).
@@ -178,6 +183,15 @@ class AgentService:
         agent = await self._repo.find_by_id(tenant_id, agent_id)
         if agent is None:
             raise AppError(404, "NOT_FOUND", "Agent not found")
+
+        # A missing/archived id is a 404 (above); an existing agent whose state
+        # forbids publish is a 409 state conflict, so clients can tell them apart.
+        if agent.status not in _PUBLISHABLE_STATUSES:
+            raise AppError(
+                409,
+                "INVALID_STATE",
+                f"Agent in status '{agent.status}' cannot be published",
+            )
 
         updated = await self._repo.update_with_version(
             tenant_id,
