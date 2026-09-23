@@ -26,7 +26,7 @@ import { ROUTES } from "@/lib/api-routes";
 import {
   createAgent,
   extractApiErrorMessage,
-  isConflictError,
+  isDuplicateAgentError,
   listTools,
 } from "@/lib/platform-service";
 import { cn } from "@/lib/utils";
@@ -273,7 +273,7 @@ export function AgentCreateForm() {
       toast({ type: "success", title: "创建成功" });
       router.push(ROUTES.adminAgentDetail(agent.agentId));
     } catch (error) {
-      const message = isConflictError(error)
+      const message = isDuplicateAgentError(error)
         ? "智能体标识已存在，请更换后重试"
         : extractApiErrorMessage(error);
       toast({ type: "error", title: "创建失败", description: message });

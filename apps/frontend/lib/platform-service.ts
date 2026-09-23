@@ -3,7 +3,8 @@
  *
  * All functions return the unwrapped `data` payload of the backend's standard
  * `{ code, data, message }` envelope; errors are re-thrown as Axios errors so
- * callers can branch on `response.status` (e.g. 409 → optimistic-lock conflict).
+ * callers can branch on `response.status` plus `error.code` — several distinct
+ * failures share HTTP 409.
  */
 
 import axios from "axios";
@@ -125,7 +126,32 @@ export function extractApiErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "请求失败，请稍后重试";
 }
 
-/** Whether an error is an optimistic-lock conflict (HTTP 409). */
+/** Stable machine-readable `error.code` from a failed request, if the backend sent one. */
+export function extractApiErrorCode(error: unknown): string | undefined {
+  if (!axios.isAxiosError(error)) return undefined;
+  const envelope = error.response?.data as ErrorEnvelope | undefined;
+  return envelope?.error?.code;
+}
+
+function isApiError(error: unknown, status: number, code: string): boolean {
+  return (
+    axios.isAxiosError(error) &&
+    error.response?.status === status &&
+    extractApiErrorCode(error) === code
+  );
+}
+
+/** Whether an error is an optimistic-lock version conflict (HTTP 409 `CONFLICT`). */
 export function isConflictError(error: unknown): boolean {
-  return axios.isAxiosError(error) && error.response?.status === 409;
+  return isApiError(error, 409, "CONFLICT");
+}
+
+/** Whether an action was rejected because the resource state forbids it (409 `INVALID_STATE`). */
+export function isInvalidStateError(error: unknown): boolean {
+  return isApiError(error, 409, "INVALID_STATE");
+}
+
+/** Whether an agent id already exists (HTTP 409 `DUPLICATE_AGENT_ID`). */
+export function isDuplicateAgentError(error: unknown): boolean {
+  return isApiError(error, 409, "DUPLICATE_AGENT_ID");
 }
