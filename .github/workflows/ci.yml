@@ -37,6 +37,47 @@ jobs:
       - name: Build
         run: pnpm -r build
 
+  compose:
+    name: Compose config (env template consistency)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # A fresh checkout must validate as-is: every `${VAR:?}` in the compose
+      # files has to be satisfiable from the committed `.env.example`.
+      - name: Validate compose configs against .env.example
+        run: |
+          cp .env.example .env
+          docker compose -f docker-compose.prod.yml config -q
+          docker compose -f docker-compose.yml config -q
+
+      # `make setup-env` is what keeps the template placeholders out of a real
+      # deployment, so pin its contract: replace placeholders, stay idempotent,
+      # never overwrite a value someone filled in by hand.
+      - name: Check setup-env replaces placeholders and keeps real values
+        run: |
+          keys='WEAVIATE_API_KEY|DIFY_SECRET_KEY|PLUGIN_DAEMON_KEY|PLUGIN_DIFY_INNER_API_KEY'
+          make setup-env
+          if grep -Eq "^(${keys})=replace-me" .env; then
+            echo "::error::make setup-env left template placeholders in .env"
+            exit 1
+          fi
+          docker compose -f docker-compose.prod.yml config -q
+
+          before="$(grep -E "^(${keys})=" .env | sort)"
+          make setup-env
+          if [[ "$(grep -E "^(${keys})=" .env | sort)" != "${before}" ]]; then
+            echo "::error::make setup-env regenerated keys that were already generated"
+            exit 1
+          fi
+
+          sed -i 's/^WEAVIATE_API_KEY=.*/WEAVIATE_API_KEY=hand-written-key/' .env
+          make setup-env
+          if ! grep -q '^WEAVIATE_API_KEY=hand-written-key$' .env; then
+            echo "::error::make setup-env overwrote a hand-written key"
+            exit 1
+          fi
+
   backend:
     name: Backend (lint / typecheck / test / migration / build)
     runs-on: ubuntu-latest

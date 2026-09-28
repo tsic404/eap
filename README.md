@@ -37,11 +37,15 @@ make setup-env         # 从 .env.example 生成 .env，并补全必填密钥
 docker compose up -d
 ```
 
-`make setup-env` 幂等：`.env` 不存在时从 `.env.example` 复制，否则原地补全仍为空的
+`make setup-env` 幂等：`.env` 不存在时从 `.env.example` 复制，否则原地补全仍为空、或仍是
+`.env.example` 占位值（`replace-me-*`）的
 `WEAVIATE_API_KEY` / `DIFY_SECRET_KEY` / `PLUGIN_DAEMON_KEY` / `PLUGIN_DIFY_INNER_API_KEY`
-（`openssl rand -hex 32`），已填写的值不会被覆盖。
-若 shell 已导出同名空变量（如 `export WEAVIATE_API_KEY=`），其优先级高于 `.env` 会让 compose
-仍硬失败，脚本会报错退出——先 `unset WEAVIATE_API_KEY DIFY_SECRET_KEY PLUGIN_DAEMON_KEY PLUGIN_DIFY_INNER_API_KEY` 再重跑。
+（`openssl rand -hex 32`），已填写的真实值不会被覆盖。
+不要跳过这一步：占位值能让 compose 的 `${VAR:?}` 校验通过，但 Weaviate / Dify / plugin-daemon
+的共享内部鉴权会退化成模板里公开已知的占位密钥（dev 下这些服务只在 compose 网络内可达）。
+若 shell 已导出同名空变量或模板占位值（如 `export WEAVIATE_API_KEY=`，或 `set -a; . ./.env`
+把占位值导出的情形），其优先级高于 `.env` 会让 compose 仍硬失败，脚本会报错退出——先
+`unset WEAVIATE_API_KEY DIFY_SECRET_KEY PLUGIN_DAEMON_KEY PLUGIN_DIFY_INNER_API_KEY` 再重跑。
 
 常驻容器：`nginx`、`frontend`、`backend`、`dify-api`、`dify-worker`、`plugin-daemon`、
 `postgres`、`redis`、`weaviate`。另有两个一次性引导容器，成功即退出：
@@ -152,10 +156,17 @@ schema 变更通过 Alembic 管理（`apps/backend/alembic/`）。迁移脚本�
 ### 生产部署
 
 ```bash
-make setup-env                # 生成 .env 并补全 WEAVIATE_API_KEY / DIFY_SECRET_KEY
-                              # 其余必需变量（DB/Redis/Dify 凭据/OIDC/JWT）仍需手工填写
+cp .env.example .env          # 占位值与开发默认值都按 deploy/checklist.md 逐项替换
+make setup-env                # 把 WEAVIATE_API_KEY / DIFY_SECRET_KEY /
+                              # PLUGIN_DAEMON_KEY / PLUGIN_DIFY_INNER_API_KEY 的占位值
+                              # 换成随机密钥（openssl rand -hex 32）
+# 手工填写 OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_CLIENT_SECRET、OIDC_REDIRECT_URI（真实公网
+# https 回调，COOKIE_SECURE=true 下 http 回调会被浏览器丢弃 cookie）、JWT_PRIVATE_KEY /
+# JWT_PUBLIC_KEY（生成方式见 deploy/checklist.md）、DIFY_CONSOLE_EMAIL / DIFY_CONSOLE_PASSWORD，
+# 并把 POSTGRES_PASSWORD 连同内嵌同一口令的 DATABASE_URL 一起换掉
+docker compose -f docker-compose.prod.yml config -q   # 校验必填项，期望退出码 0
 docker compose -f docker-compose.prod.yml up -d --build
 curl http://localhost/api/health/ready   # 期望 200
 ```
 
-生产 compose（`docker-compose.prod.yml`）以非 root 用户运行后端镜像，所有密钥通过 `${VAR:?...}` 强制注入、无硬编码回退。完整步骤见 [`deploy/checklist.md`](deploy/checklist.md)。
+生产 compose（`docker-compose.prod.yml`）以非 root 用户运行后端镜像，所有密钥通过 `${VAR:?...}` 强制注入、无硬编码回退。`.env.example` 的占位值只保证模板自身可校验（`cp` 后 `config -q` 即通过），**不代表可以直接上线**：未替换时 SSO 登录、令牌签发与 Dify 管理功能会失败，模板里的 `eap_password` 弱口令与 `http://localhost` 回调也会被原样带进生产。完整步骤见 [`deploy/checklist.md`](deploy/checklist.md)。

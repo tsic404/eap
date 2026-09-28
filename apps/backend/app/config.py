@@ -55,9 +55,10 @@ class Settings(BaseSettings):
     # JWT (RS256 key material; empty until OIDC/SSO is configured)
     jwt_private_key: str = ""
     jwt_public_key: str = ""
-    # Optional file paths to the key material. Containers mount PEM files and
-    # point these at them, because multi-line PEM cannot travel through .env or
-    # compose `environment:` values. A non-empty inline key takes precedence.
+    # Optional file paths to the key material (mounted secrets; the qa compose
+    # uses them). Inline keys are equally supported: a double-quoted multi-line
+    # value in `.env` survives compose interpolation into the container intact.
+    # A non-empty inline key takes precedence over the file.
     jwt_private_key_file: str | None = None
     jwt_public_key_file: str | None = None
 
