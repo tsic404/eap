@@ -77,15 +77,23 @@ def worker_index(request: pytest.FixtureRequest) -> str:
 # ── containers ──────────────────────────────────────────────────────────────
 
 
+# Docker API calls go through the host daemon, which docker-py aborts after its
+# 60s default read timeout; under load that surfaced as ReadTimeout out of these
+# session fixtures and failed the whole suite. Bounded, but not eager to give up.
+_DOCKER_CLIENT_KW: dict[str, int] = {"timeout": 300}
+
+
 @pytest.fixture(scope="session")
 def postgres_container() -> Iterator[PostgresContainer]:
-    with PostgresContainer("pgvector/pgvector:pg16") as container:
+    with PostgresContainer(
+        "pgvector/pgvector:pg16", docker_client_kw=_DOCKER_CLIENT_KW
+    ) as container:
         yield container
 
 
 @pytest.fixture(scope="session")
 def redis_container() -> Iterator[RedisContainer]:
-    with RedisContainer("redis:7-alpine") as container:
+    with RedisContainer("redis:7-alpine", docker_client_kw=_DOCKER_CLIENT_KW) as container:
         yield container
 
 
