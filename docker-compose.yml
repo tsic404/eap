@@ -135,8 +135,13 @@ services:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:5001/health"]
       interval: 30s
       timeout: 10s
-      start_period: 60s
-      retries: 5
+      # Cold start (migrations + gunicorn warmup) has been measured at ~9 min on
+      # this host, so the old 60s + 5×30s window expired mid-boot and flagged the
+      # container unhealthy while it was still working. /health still flips to
+      # healthy the moment it answers; the wider window only delays the
+      # "unhealthy" verdict.
+      start_period: 600s
+      retries: 10
     restart: unless-stopped
 
   dify-worker:
