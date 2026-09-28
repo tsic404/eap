@@ -1,5 +1,10 @@
 name: eap
 
+# Local development stack. SSO runs against the in-repo mock IdP (`mock-idp`)
+# unless the MOCK_IDP_* values are blanked, so `make setup-env && docker compose
+# up -d` yields a working login without a real IdP; see the OIDC block in
+# .env.example for pointing it at a real one.
+#
 # Shared environment for both Dify processes. The Dify api image runs either
 # `MODE: api` (HTTP) or `MODE: worker` (Celery) from the same image. In Dify 1.x
 # model/tool plugins run out-of-process in `plugin-daemon`, which keeps its own
@@ -38,6 +43,13 @@ x-dify-env: &dify-env
   # daemon's 5003 published on the host plus a browser-reachable host value, so
   # PLUGIN_REMOTE_INSTALL_HOST/PORT are left at Dify's defaults.
   PLUGIN_MAX_PACKAGE_SIZE: ${PLUGIN_MAX_PACKAGE_SIZE:-52428800}
+
+# SSO wiring for the local stack. The MOCK_IDP_* trio (.env.example keeps it
+# pointing at the in-repo stub) takes precedence; blanking all three falls back
+# to the OIDC block, so a real IdP needs no change here.
+x-oidc-issuer: &oidc-issuer ${MOCK_IDP_ISSUER:-${OIDC_ISSUER}}
+x-oidc-discovery: &oidc-discovery ${MOCK_IDP_DISCOVERY_URL:-${OIDC_DISCOVERY_URL:-${OIDC_ISSUER}}}
+x-oidc-client-id: &oidc-client-id ${MOCK_IDP_CLIENT_ID:-${OIDC_CLIENT_ID:-e2e-client}}
 
 services:
   nginx:
@@ -90,10 +102,25 @@ services:
       DIFY_API_KEY: ${DIFY_API_KEY:-}
       DIFY_CONSOLE_EMAIL: ${DIFY_CONSOLE_EMAIL:-}
       DIFY_CONSOLE_PASSWORD: ${DIFY_CONSOLE_PASSWORD:-}
-      OIDC_ISSUER: ${OIDC_ISSUER:-}
-      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      # SSO: the MOCK_IDP_* trio (x-oidc-* above) picks between the stub and the
+      # OIDC block; the redirect URI and the origin allow-list derive from the
+      # URL the browser actually uses — NGINX_PORT only maps the published port,
+      # so PUBLIC_ORIGIN has to name it.
+      OIDC_ISSUER: *oidc-issuer
+      OIDC_DISCOVERY_URL: *oidc-discovery
+      OIDC_CLIENT_ID: *oidc-client-id
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
-      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-http://localhost/api/auth/callback}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-${PUBLIC_ORIGIN:-http://localhost}/api/auth/callback}
+      CORS_ALLOWED_ORIGINS: '${CORS_ALLOWED_ORIGINS:-["${PUBLIC_ORIGIN:-http://localhost}", "http://localhost:3000", "http://127.0.0.1:3000"]}'
+      # The dev stack signs with the keypair `make setup-env` generates into
+      # deploy/keys (mounted read-only below); the inline JWT_PRIVATE_KEY /
+      # JWT_PUBLIC_KEY path belongs to deployments that inject PEMs into the
+      # environment — docker-compose.prod.yml does.
+      JWT_PRIVATE_KEY_FILE: /run/secrets/jwt_private
+      JWT_PUBLIC_KEY_FILE: /run/secrets/jwt_public
+    secrets:
+      - jwt_private
+      - jwt_public
     depends_on:
       postgres:
         condition: service_healthy
@@ -112,6 +139,69 @@ services:
       start_period: 10s
       retries: 5
     restart: unless-stopped
+
+  # Local-dev SSO: the same stub IdP the e2e/QA stacks use, serving discovery /
+  # JWKS / authorize / token / userinfo. It is published on MOCK_IDP_PORT so the
+  # *browser* can reach its authorize endpoint, while the backend reaches the
+  # server-to-server endpoints over the compose network (OIDC_DISCOVERY_URL) and
+  # still validates id_tokens against the browser-facing issuer — the split
+  # mock-idp.mjs's MOCK_IDP_ISSUER / MOCK_IDP_BACKEND_BASE contract exists for.
+  mock-idp:
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - ./apps/frontend/e2e/mock-idp.mjs:/app/mock-idp.mjs:ro
+    environment:
+      MOCK_IDP_PORT: "${MOCK_IDP_PORT:-4000}"
+      MOCK_IDP_ISSUER: http://localhost:${MOCK_IDP_PORT:-4000}
+      MOCK_IDP_BACKEND_BASE: http://mock-idp:${MOCK_IDP_PORT:-4000}
+      # Same value as the backend: the stub signs id_tokens with this aud, so
+      # the two have to agree (x-oidc-client-id above).
+      OIDC_CLIENT_ID: *oidc-client-id
+    command: ["node", "mock-idp.mjs"]
+    ports:
+      - "${MOCK_IDP_PORT:-4000}:${MOCK_IDP_PORT:-4000}"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-qO-",
+          "http://127.0.0.1:${MOCK_IDP_PORT:-4000}/.well-known/openid-configuration",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # One-shot: the mock IdP's alice@acme.com resolves to a tenant by email
+  # domain (sso_domain), so the `acme.com` tenant and alice's agent_admin user
+  # must exist before the first SSO login. Idempotent; waits for the backend so
+  # the migrated schema is in place.
+  db-seed:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-eap_password}
+    volumes:
+      - ./deploy/postgres/seed-mock-idp.sql:/seed-mock-idp.sql:ro
+    command:
+      [
+        "psql",
+        "-h",
+        "postgres",
+        "-U",
+        "${POSTGRES_USER:-eap}",
+        "-d",
+        "${POSTGRES_DB:-eap}",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-f",
+        "/seed-mock-idp.sql",
+      ]
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: "no"
 
   dify-api:
     image: langgenius/dify-api:1.17.0
@@ -329,6 +419,14 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+
+# RS256 keypair mounted read-only into the backend; `make setup-env` writes it
+# to deploy/keys/ (gitignored), the same way the QA stack mounts its own pair.
+secrets:
+  jwt_private:
+    file: ./deploy/keys/jwt_private.pem
+  jwt_public:
+    file: ./deploy/keys/jwt_public.pem
 
 volumes:
   pgdata:
