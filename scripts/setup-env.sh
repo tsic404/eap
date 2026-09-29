@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Bootstrap .env from .env.example and fill required secrets that are still empty.
+# Bootstrap .env from .env.example and fill required secrets that are still empty
+# or still hold their `.env.example` placeholder.
 set -euo pipefail
 
 ENV_FILE="${ENV_FILE:-.env}"
@@ -7,7 +8,8 @@ ENV_EXAMPLE="${ENV_EXAMPLE:-.env.example}"
 
 # Secrets docker compose enforces via `${VAR:?...}`. A value only counts as set
 # after surrounding whitespace and one pair of quotes are stripped, so an empty
-# or whitespace-only (even quoted) value is regenerated.
+# or whitespace-only (even quoted) value is regenerated — as is a value still
+# equal to the `.env.example` placeholder.
 REQUIRED_SECRETS=(WEAVIATE_API_KEY DIFY_SECRET_KEY PLUGIN_DAEMON_KEY PLUGIN_DIFY_INNER_API_KEY)
 
 normalize_value() {
@@ -32,6 +34,16 @@ file_value() {
   normalize_value "${value}"
 }
 
+# A value that is empty or still equal to the `.env.example` template is a
+# placeholder the user has not replaced yet, not a secret — treat it as unset.
+is_placeholder() {
+  local var="$1" value="$2" template=""
+  if [[ -r "${ENV_EXAMPLE}" ]]; then
+    template="$(file_value "${ENV_EXAMPLE}" "${var}")"
+  fi
+  [[ -z "${value}" || "${value}" == "${template}" ]]
+}
+
 write_value() {
   local file="$1" var="$2" key="$3"
   if grep -qE "^[[:space:]]*${var}[[:space:]]*=" "${file}"; then
@@ -52,20 +64,21 @@ if [[ ! -f "${ENV_FILE}" ]]; then
 fi
 
 for var in "${REQUIRED_SECRETS[@]}"; do
-  # A shell-exported value overrides .env in docker compose; an empty export
-  # still trips `${VAR:?}` after .env is filled, so fail fast instead of
-  # reporting a success that will not stick.
+  # A shell-exported value overrides .env in docker compose; an empty export —
+  # or the template placeholder re-exported by `set -a; . ./.env` — still trips
+  # `${VAR:?}` (or ships a known key) after .env is filled, so fail fast instead
+  # of reporting a success that will not stick.
   if [[ -n "${!var+x}" ]]; then
-    if [[ -z "$(normalize_value "${!var}")" ]]; then
-      printf 'error: %s is exported but empty; docker compose uses it over .env.\n' "${var}" >&2
+    if is_placeholder "${var}" "$(normalize_value "${!var}")"; then
+      printf 'error: %s is exported empty or as the .env.example placeholder; docker compose uses it over .env.\n' "${var}" >&2
       printf '       run `unset %s` (or `env -u %s make setup-env`) and retry.\n' "${var}" "${var}" >&2
       exit 1
     fi
     continue
   fi
 
-  [[ -n "$(file_value "${ENV_FILE}" "${var}")" ]] && continue
+  is_placeholder "${var}" "$(file_value "${ENV_FILE}" "${var}")" || continue
   write_value "${ENV_FILE}" "${var}" "$(openssl rand -hex 32)"
 done
 
-echo ".env ready: required secrets generated where empty."
+echo ".env ready: required secrets generated where empty or left at the template placeholder."
