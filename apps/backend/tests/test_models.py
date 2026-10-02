@@ -50,7 +50,7 @@ def test_user_memory_embedding_is_pgvector_1536() -> None:
     ("table", "expected"),
     [
         ("users", {"uq_users_tenant_sso_sub", "uq_users_tenant_email", "uq_users_tenant_id_id"}),
-        ("tenants", {"uq_tenants_slug"}),
+        ("tenants", {"uq_tenants_slug", "uq_tenants_sso_domain"}),
         ("refresh_tokens", {"uq_refresh_tokens_token_hash"}),
         ("run_logs", {"uq_run_logs_trace_id"}),
         ("agent_registry", {"uq_agent_registry_tenant_agent_id"}),

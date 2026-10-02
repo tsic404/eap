@@ -110,7 +110,7 @@ services:
     environment:
       PGPASSWORD: eap_password
     volumes:
-      - ./deploy/qa/seed-acme-tenant.sql:/seed-acme-tenant.sql:ro
+      - ./deploy/postgres/seed-mock-idp.sql:/seed-mock-idp.sql:ro
     command:
       [
         "psql",
@@ -123,7 +123,7 @@ services:
         "-v",
         "ON_ERROR_STOP=1",
         "-f",
-        "/seed-acme-tenant.sql",
+        "/seed-mock-idp.sql",
       ]
     depends_on:
       backend:
