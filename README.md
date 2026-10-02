@@ -166,7 +166,7 @@ make setup-env                # 把 WEAVIATE_API_KEY / DIFY_SECRET_KEY /
 # 并把 POSTGRES_PASSWORD 连同内嵌同一口令的 DATABASE_URL 一起换掉
 docker compose -f docker-compose.prod.yml config -q   # 校验必填项，期望退出码 0
 docker compose -f docker-compose.prod.yml up -d --build
-curl http://localhost/api/health/ready   # 期望 200
+curl http://localhost/api/health/ready   # 期望 200（dify 项还要求控制台账号可登录且已配置模型供应商）
 ```
 
 生产 compose（`docker-compose.prod.yml`）以非 root 用户运行后端镜像，所有密钥通过 `${VAR:?...}` 强制注入、无硬编码回退。`.env.example` 的占位值只保证模板自身可校验（`cp` 后 `config -q` 即通过），**不代表可以直接上线**：未替换时 SSO 登录、令牌签发与 Dify 管理功能会失败，模板里的 `eap_password` 弱口令与 `http://localhost` 回调也会被原样带进生产。完整步骤见 [`deploy/checklist.md`](deploy/checklist.md)。
