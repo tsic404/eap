@@ -307,7 +307,8 @@ services:
     restart: unless-stopped
 
   weaviate:
-    image: semitechnologies/weaviate:1.24.10
+    # Dify 1.17's weaviate-client rejects servers below 1.27.0; stay on the 1.27 line it ships.
+    image: semitechnologies/weaviate:1.27.27
     environment:
       AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "false"
       AUTHENTICATION_APIKEY_ENABLED: "true"

@@ -103,3 +103,64 @@ schema 变更由 Alembic 管理（`apps/backend/alembic/`），部署时执行 `
    ```
 
 两步同时通过（差集为空且全部 `convalidated = t`）才表示约束集合完整且已校验。
+
+## Weaviate 向量库升级（1.24.x → 1.27.x）
+
+dev 与 prod compose 均固定 `semitechnologies/weaviate:1.27.27`。Dify 1.17 内置的
+`weaviate-client` 在连接时做版本门禁（`weaviate/connect/v4.py`），拒绝低于 `1.27.0`
+的服务端；旧固定值 `1.24.10` 会让文档索引必然失败
+（`GET /api/knowledge-bases/{kb_id}/documents/{document_id}/status` 恒为 `failed`）。
+
+下文命令以 dev 为例（`docker-compose.yml`，project 名 `eap`，卷 `eap_weaviadata`）；
+prod 每条命令都带 `-f docker-compose.prod.yml`，project 名换成 `eap-prod`
+（`docker-compose.prod.yml` 首行 `name: eap-prod`），卷换成 `eap-prod_weaviadata`。
+
+### 存量部署升级步骤
+
+0. **先备份向量卷。** 本仓 weaviate 未启用 backup 模块，用卷级打包（`stop` 同时保证刷盘后
+   数据一致；回滚 = 把 tar 解回同名卷后换回旧镜像）：
+
+   ```bash
+   docker compose stop weaviate
+   # prod：卷名为 eap-prod_weaviadata，stop/start 都带 -f docker-compose.prod.yml
+   docker run --rm -v eap_weaviadata:/data alpine tar cz -C /data . > weaviate-$(date +%F).tgz
+   docker compose start weaviate
+   ```
+
+1. 停旧容器用优雅停止（`docker compose stop weaviate`，或直接 `docker compose up -d`
+   由 compose 发 SIGTERM），不要用 `docker rm -f`：未刷盘的 WAL 尾段不会被恢复。
+2. 重建容器并确认版本：`docker compose up -d` → `docker compose ps` 中 weaviate healthy，
+   version ≥ `1.27.0`。读取要在 compose 网络内并带 API key——weaviate 未映射宿主端口，
+   且关闭了匿名访问（`AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "false"`），宿主机直连
+   `:8080` 会连不上或 401：
+
+   ```bash
+   docker compose exec -T weaviate sh -c \
+     'wget -qO- --header="Authorization: Bearer $AUTHENTICATION_APIKEY_ALLOWED_KEYS" http://127.0.0.1:8080/v1/meta'
+   ```
+
+3. 校验存量数据：同一条命令把 `/v1/meta` 换成 `/v1/schema`，应仍列出原有 collection；
+   再对同一知识库跑一次召回测试，确认仍能命中既有分块。
+
+Docker 单节点部署下 Raft 元数据与旧 schema 迁移是自动的；实测 1.24.10 → 1.27.27 直跳后
+collection、对象与向量检索均保持可用。Weaviate 官方仍建议逐个小版本升级
+（1.24 → 1.25 → 1.26 → 1.27，每档取最新 patch）。
+
+### 向量数据不可信时重建
+
+升级前索引一直失败的部署，向量库里可能没有可用数据（collection 已建但无对象）。此时清空向量卷重建：
+
+```bash
+# dev（project 名 eap）
+docker compose down                       # 不带 -v：postgres / dify 数据必须保留
+docker volume rm eap_weaviadata
+docker compose up -d
+
+# prod（project 名 eap-prod）
+docker compose -f docker-compose.prod.yml down
+docker volume rm eap-prod_weaviadata
+docker compose -f docker-compose.prod.yml up -d
+```
+
+知识库与文档元数据存放在 Dify 的 postgres（`datasets` / `documents`），不受向量卷重建影响；
+之后对 `failed` / `indexing` 状态的文档触发重试或重新上传，索引会在首次写入时按需重建 collection。
