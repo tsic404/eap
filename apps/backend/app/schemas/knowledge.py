@@ -78,6 +78,7 @@ class RetrieveTestCitationDto(BaseModel):
     content: str
     score: float
     source_name: str | None = None
+    kb_name: str | None = None
 
 
 class RetrieveTestResultDto(BaseModel):

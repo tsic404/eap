@@ -485,6 +485,7 @@ async def test_retrieval_test_returns_citations_score_and_latency() -> None:
                     {
                         "segment": {"content": "chunk one", "document": {"name": "report.pdf"}},
                         "score": 0.98,
+                        "dataset_name": "DS Alpha",
                     },
                     {
                         "segment": {"content": "chunk two", "document": {"name": "report.pdf"}},
@@ -506,6 +507,8 @@ async def test_retrieval_test_returns_citations_score_and_latency() -> None:
     assert [c.content for c in result.citations] == ["chunk one", "chunk two"]
     assert result.citations[0].score == 0.98
     assert result.citations[0].source_name == "report.pdf"
+    assert result.citations[0].kb_name == "DS Alpha"
+    assert result.citations[1].kb_name == "Knowledge"
     assert result.score == 0.98
     assert result.latencyMs >= 0
     await retriever.aclose()
