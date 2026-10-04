@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import CheckConstraint, DateTime, Integer, String, func
+from sqlalchemy import CheckConstraint, DateTime, Integer, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -66,6 +66,10 @@ class Tenant(Base):
     )
 
     __table_args__ = (
+        # One tenant per SSO domain: a second row matching the same email domain
+        # makes ``_resolve_user`` reject every login with TENANT_AMBIGUOUS. NULL
+        # stays free for tenants that do not use SSO.
+        UniqueConstraint("sso_domain", name="uq_tenants_sso_domain"),
         CheckConstraint(
             "quota_limit >= 0 AND quota_used >= 0", name="ck_tenants_quota_non_negative"
         ),

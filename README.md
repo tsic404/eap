@@ -16,7 +16,7 @@ packages/
   api-contract/        # 前后端共享 API 契约（TypeScript）
 deploy/
   nginx/               # 反向代理配置
-docker-compose.yml     # 本地开发环境（9 常驻 + 2 一次性引导容器）
+docker-compose.yml     # 本地开发环境（10 常驻 + 3 一次性引导容器）
 .env.example           # 环境变量模板
 .github/workflows/ci.yml  # CI 骨架
 ```
@@ -28,31 +28,43 @@ docker-compose.yml     # 本地开发环境（9 常驻 + 2 一次性引导容器
 - Node.js >= 20、pnpm 11（版本由根 `packageManager` 字段固定，建议通过 corepack 启用）
 - Python >= 3.12、uv（后端依赖由 `apps/backend/uv.lock` 锁定）
 - Docker / Podman
-- GNU make + bash + OpenSSL（`make setup-env` 自动补全必填密钥）
+- GNU make + bash + OpenSSL（`make setup-env` 自动补全必填密钥并生成 JWT 密钥对）
 
 ### 启动全部容器
 
 ```bash
-make setup-env         # 从 .env.example 生成 .env，并补全必填密钥
+make setup-env         # 生成 .env、补全必填密钥、生成 JWT 密钥对
 docker compose up -d
 ```
 
 `make setup-env` 幂等：`.env` 不存在时从 `.env.example` 复制，否则原地补全仍为空、或仍是
 `.env.example` 占位值（`replace-me-*`）的
 `WEAVIATE_API_KEY` / `DIFY_SECRET_KEY` / `PLUGIN_DAEMON_KEY` / `PLUGIN_DIFY_INNER_API_KEY`
-（`openssl rand -hex 32`），已填写的真实值不会被覆盖。
+（`openssl rand -hex 32`），并生成 RS256 JWT 密钥对到 `deploy/keys/`（gitignored，compose
+以只读 secret 挂载给 backend）；已填写/已生成的值不会被覆盖。
 不要跳过这一步：占位值能让 compose 的 `${VAR:?}` 校验通过，但 Weaviate / Dify / plugin-daemon
 的共享内部鉴权会退化成模板里公开已知的占位密钥（dev 下这些服务只在 compose 网络内可达）。
 若 shell 已导出同名空变量或模板占位值（如 `export WEAVIATE_API_KEY=`，或 `set -a; . ./.env`
 把占位值导出的情形），其优先级高于 `.env` 会让 compose 仍硬失败，脚本会报错退出——先
 `unset WEAVIATE_API_KEY DIFY_SECRET_KEY PLUGIN_DAEMON_KEY PLUGIN_DIFY_INNER_API_KEY` 再重跑。
 
-常驻容器：`nginx`、`frontend`、`backend`、`dify-api`、`dify-worker`、`plugin-daemon`、
-`postgres`、`redis`、`weaviate`。另有两个一次性引导容器，成功即退出：
+SSO 默认走 compose 内的 `mock-idp`（与 e2e / QA 栈同一个桩 IdP）：`.env` 的 `MOCK_IDP_ISSUER` /
+`MOCK_IDP_DISCOVERY_URL` / `MOCK_IDP_CLIENT_ID` 非空时（模板默认）compose 就用它们，OIDC 区块里的
+prod 占位值不参与；单机 `docker compose up -d` 即可用 `alice@acme.com` 完成登录，JWT 用
+`make setup-env` 生成到 `deploy/keys/` 的密钥对。浏览器入口另看 `NGINX_PORT` + `PUBLIC_ORIGIN`
+（默认 80 / `http://localhost`，两处需指向同一地址；`OIDC_REDIRECT_URI` 与 CORS 允许来源由它推出）。
+接真实 IdP 时把这三个 `MOCK_IDP_*` 值置空并填 `OIDC_ISSUER` / `OIDC_CLIENT_ID` /
+`OIDC_CLIENT_SECRET`；后端若要用另一个网络名访问 IdP，再设 `OIDC_DISCOVERY_URL`。
+`db-seed` 会幂等种入 `acme.com` 租户与 alice（agent_admin），登录后可直接进入管理端。
+
+常驻容器：`nginx`、`frontend`、`backend`、`mock-idp`、`dify-api`、`dify-worker`、
+`plugin-daemon`、`postgres`、`redis`、`weaviate`。另有三个一次性引导容器，成功即退出：
 
 - `dify-db-init`：幂等创建 `dify` 与 `dify_plugin` 两个库（后者供 plugin daemon 使用），
   每次 `up` 都跑，因此旧数据卷也能补建。
 - `init_permissions`：把 plugin daemon 存储卷 chown 给 uid 1001（该镜像以非 root 运行）。
+- `db-seed`：幂等种入 mock IdP 身份映射的 `acme.com` 租户与 `alice@acme.com`（agent_admin）；
+  在 backend healthy（schema 迁移完成）后执行。
 
 Dify 1.x 的模型/工具插件不在 api 进程内，而由 `plugin-daemon` 托管，并使用独立的
 `dify_plugin` 库；api / worker 通过 `PLUGIN_DAEMON_URL` + `PLUGIN_DAEMON_KEY` 访问它，
@@ -60,6 +72,7 @@ daemon 再以 `INNER_API_KEY_FOR_PLUGIN` 回调 api。缺任一环，知识库�
 流式对话都会以 "Failed to request plugin daemon" 失败。
 
 - 前端首页：http://localhost
+- 登录入口：http://localhost/login → `SSO 登录`（mock IdP 用户 `alice@acme.com`）
 - 健康检查：http://localhost/api/health/live
 
 ### 单独运行前端 / 后端
