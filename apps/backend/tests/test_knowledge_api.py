@@ -88,6 +88,13 @@ class _Repo:
             return self.kb
         return None
 
+    async def get_by_name_for_tenant(
+        self, session: Any, tenant_id: uuid.UUID, name: str
+    ) -> KnowledgeBaseRegistry | None:
+        if self.kb is not None and self.kb.tenant_id == tenant_id and self.kb.name == name:
+            return self.kb
+        return None
+
     async def list_for_tenant(
         self, session: Any, tenant_id: uuid.UUID, *, offset: int, limit: int
     ) -> tuple[list[KnowledgeBaseRegistry], int]:
@@ -208,6 +215,25 @@ def test_create_knowledge_base_returns_201() -> None:
     assert body["name"] == "KB"
     assert body["kb_id"]
     assert body["indexing_status"] == "ready"
+
+
+def test_create_knowledge_base_duplicate_name_returns_409() -> None:
+    tenant = _make_tenant()
+    dify = AsyncMock()
+    service = _service(dify, repo=_Repo(_kb(tenant)))  # existing KB named "Knowledge"
+    client, token = _authed_client(service, role="knowledge_admin", tenant=tenant)
+
+    resp = client.post(
+        "/api/knowledge-bases",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Knowledge"},
+    )
+
+    assert resp.status_code == 409
+    body = resp.json()["error"]
+    assert body["code"] == "KB_NAME_EXISTS"
+    assert body["message"] == "知识库名称已存在"
+    dify.create_dataset.assert_not_awaited()
 
 
 def test_list_knowledge_bases_returns_items_and_total() -> None:

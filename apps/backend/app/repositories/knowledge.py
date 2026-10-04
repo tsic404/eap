@@ -51,6 +51,16 @@ class KnowledgeRepository:
         )
         return cast(KnowledgeBaseRegistry | None, await session.scalar(stmt))
 
+    async def get_by_name_for_tenant(
+        self, session: AsyncSession, tenant_id: uuid.UUID, name: str
+    ) -> KnowledgeBaseRegistry | None:
+        """Fetch a KB by name within ``tenant_id`` (name-uniqueness pre-check)."""
+        stmt = select(KnowledgeBaseRegistry).where(
+            KnowledgeBaseRegistry.tenant_id == tenant_id,
+            KnowledgeBaseRegistry.name == name,
+        )
+        return cast(KnowledgeBaseRegistry | None, await session.scalar(stmt))
+
     async def list_for_tenant(
         self, session: AsyncSession, tenant_id: uuid.UUID, *, offset: int, limit: int
     ) -> tuple[list[KnowledgeBaseRegistry], int]:
