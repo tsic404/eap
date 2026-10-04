@@ -1,9 +1,10 @@
 /**
  * Knowledge-base API access layer. All functions return the unwrapped `data`
  * payload of the `{ code, data, message }` envelope; errors surface as Axios
- * errors so callers can branch on `response.status`.
+ * errors so callers can branch on `response.status` plus `error.code`.
  */
 
+import axios from "axios";
 import type { AxiosProgressEvent } from "axios";
 
 import { API_ROUTES } from "./api-routes";
@@ -19,7 +20,7 @@ import type {
   RetrieveTestInput,
   RetrievalTestResult,
 } from "./knowledge-types";
-import { getAgent, listAllAgents } from "./platform-service";
+import { extractApiErrorCode, getAgent, listAllAgents } from "./platform-service";
 
 export async function listKnowledgeBases(
   page = 1,
@@ -40,6 +41,15 @@ export async function createKnowledgeBase(
     input,
   );
   return response.data.data;
+}
+
+/** Whether a knowledge-base name is already taken in this tenant (HTTP 409 `KB_NAME_EXISTS`). */
+export function isKbNameExistsError(error: unknown): boolean {
+  return (
+    axios.isAxiosError(error) &&
+    error.response?.status === 409 &&
+    extractApiErrorCode(error) === "KB_NAME_EXISTS"
+  );
 }
 
 export async function getKnowledgeBase(kbId: string): Promise<KnowledgeBase> {

@@ -5,13 +5,24 @@ const { listAllAgentsMock, getAgentMock } = vi.hoisted(() => ({
   getAgentMock: vi.fn(),
 }));
 
-vi.mock("./platform-service", () => ({
+import * as platformServiceModule from "./platform-service";
+
+vi.mock("./platform-service", async (importOriginal) => ({
+  // Keep the real error helpers; the duplicate-name predicate exercises them.
+  ...(await importOriginal<typeof platformServiceModule>()),
   listAllAgents: listAllAgentsMock,
   getAgent: getAgentMock,
 }));
 
 import type { Agent, AgentDetail } from "./agent-types";
-import { listAgentsBoundToKnowledge } from "./knowledge-service";
+import {
+  isKbNameExistsError,
+  listAgentsBoundToKnowledge,
+} from "./knowledge-service";
+
+function axiosError(status: number, data?: unknown): unknown {
+  return { isAxiosError: true, response: { status, data }, message: "Request failed" };
+}
 
 function agentStub(agentId: string, name: string): Agent {
   return {
@@ -75,5 +86,20 @@ describe("listAgentsBoundToKnowledge", () => {
     await expect(listAgentsBoundToKnowledge("kb-1")).rejects.toThrow(
       "network down",
     );
+  });
+});
+
+describe("isKbNameExistsError", () => {
+  it("matches only the 409 duplicate-name conflict", () => {
+    expect(
+      isKbNameExistsError(axiosError(409, { error: { code: "KB_NAME_EXISTS" } })),
+    ).toBe(true);
+    expect(
+      isKbNameExistsError(axiosError(409, { error: { code: "CONFLICT" } })),
+    ).toBe(false);
+    expect(
+      isKbNameExistsError(axiosError(500, { error: { code: "KB_NAME_EXISTS" } })),
+    ).toBe(false);
+    expect(isKbNameExistsError(new Error("network down"))).toBe(false);
   });
 });

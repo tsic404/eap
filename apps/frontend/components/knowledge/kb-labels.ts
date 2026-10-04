@@ -19,3 +19,6 @@ export const INDEXING_STATUS_VARIANT: Record<string, BadgeVariant> = {
 export const KB_TYPE_LABEL: Record<string, string> = {
   business: "业务",
 };
+
+/** AC-15 wording echoed at the name field on a duplicate-name 409 (`KB_NAME_EXISTS`). */
+export const KB_NAME_EXISTS_MESSAGE = "知识库名称已存在";
