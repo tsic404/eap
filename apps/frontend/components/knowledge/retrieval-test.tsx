@@ -11,9 +11,9 @@ import { extractApiErrorMessage } from "@/lib/platform-service";
 
 import { ChunkList } from "./chunk-list";
 
-const MIN_TOP_K = 1;
+const MIN_TOP_K = 5;
 const MAX_TOP_K = 10;
-const DEFAULT_TOP_K = 3;
+const DEFAULT_TOP_K = 5;
 
 export interface RetrievalTestProps {
   kbId: string;

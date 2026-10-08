@@ -63,6 +63,7 @@ export interface RetrievalCitation {
   content: string;
   score: number;
   source_name: string | null;
+  kb_name: string | null;
 }
 
 /** Retrieval test result: citations plus the top score and round-trip latency. */
