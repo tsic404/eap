@@ -8,8 +8,12 @@ service/repository internals.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from rq import Queue
+
+from app.dify_console import DifyConsoleError
 
 # ── auth / me ───────────────────────────────────────────────────────────────
 
@@ -304,6 +308,110 @@ async def test_upload_exe_returns_422_unsupported(api) -> None:
 
     assert resp.status_code == 422
     assert resp.json()["error"]["code"] == "UNSUPPORTED_FORMAT"
+
+
+@pytest.mark.asyncio
+async def test_delete_document_returns_204_and_releases_kb_counts(api, wait_for_indexed) -> None:
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    await api.client.post(
+        "/api/knowledge-bases/kb-1/documents",
+        headers=headers,
+        files={"file": ("report.pdf", b"%PDF-1.7 content", "application/pdf")},
+    )
+    # Let the document finish indexing first: the KB then carries its document
+    # and its segments, and the delete has to take both back out.
+    assert await wait_for_indexed(api.client, headers, "kb-1", "doc-1") == "completed"
+    counted = await api.client.get("/api/knowledge-bases/kb-1", headers=headers)
+    assert counted.json()["data"]["doc_count"] == 1
+    assert counted.json()["data"]["chunk_count"] == 5
+
+    resp = await api.client.delete("/api/knowledge-bases/kb-1/documents/doc-1", headers=headers)
+
+    assert resp.status_code == 204
+    api.console.delete_document.assert_awaited_once_with("ds-kb-1", "doc-1")
+    detail = await api.client.get("/api/knowledge-bases/kb-1", headers=headers)
+    assert detail.json()["data"]["doc_count"] == 0
+    assert detail.json()["data"]["chunk_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_document_reclaims_nothing_when_completion_is_unobserved(api) -> None:
+    """A document Dify finished but the platform never recorded as completed.
+
+    The KB total only grows on a recorded terminal transition, so deleting a
+    document whose completion was never observed must leave ``chunk_count``
+    untouched — the eligibility check reads the local row, not Dify.
+    """
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    uploaded = await api.client.post(
+        "/api/knowledge-bases/kb-1/documents",
+        headers=headers,
+        files={"file": ("report.pdf", b"%PDF-1.7 content", "application/pdf")},
+    )
+    assert uploaded.status_code == 201
+
+    # Dify would report the document as completed with 5 segments, but the
+    # platform never polls it (no listing, no status call): the local row is
+    # still ``indexing`` and nothing was ever added to the KB total.
+    resp = await api.client.delete("/api/knowledge-bases/kb-1/documents/doc-1", headers=headers)
+
+    assert resp.status_code == 204
+    api.console.get_document_indexing_status.assert_not_awaited()
+    detail = await api.client.get("/api/knowledge-bases/kb-1", headers=headers)
+    assert detail.json()["data"]["doc_count"] == 0
+    assert detail.json()["data"]["chunk_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_document_while_indexing_returns_400(api) -> None:
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    await api.client.post(
+        "/api/knowledge-bases/kb-1/documents",
+        headers=headers,
+        files={"file": ("report.pdf", b"%PDF-1.7 content", "application/pdf")},
+    )
+    api.console.delete_document.side_effect = DifyConsoleError(
+        400,
+        json.dumps(
+            {
+                "code": "document_indexing_error",
+                "message": "Cannot delete document during indexing.",
+            }
+        ),
+    )
+
+    resp = await api.client.delete("/api/knowledge-bases/kb-1/documents/doc-1", headers=headers)
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["message"] == "Cannot delete document during indexing."
+    detail = await api.client.get("/api/knowledge-bases/kb-1", headers=headers)
+    assert detail.json()["data"]["doc_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_document_mutations_hide_foreign_tenant_kb(api) -> None:
+    tenant, user = await api.seed(role="knowledge_admin")
+    other_tenant, _ = await api.seed(role="knowledge_admin", suffix="other")
+    await api.seed_kb(tenant, kb_id="kb-2")
+    await api.seed_kb(other_tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+
+    retried = await api.client.post(
+        "/api/knowledge-bases/kb-1/documents/doc-1/retry", headers=headers
+    )
+    deleted = await api.client.delete("/api/knowledge-bases/kb-1/documents/doc-1", headers=headers)
+
+    assert retried.status_code == 404
+    assert deleted.status_code == 404
+    assert retried.json()["error"]["code"] == "KB_NOT_FOUND"
+    api.console.retry_document_indexing.assert_not_awaited()
+    api.console.delete_document.assert_not_awaited()
 
 
 # ── conversations ───────────────────────────────────────────────────────────

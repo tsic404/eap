@@ -147,6 +147,16 @@ def _encode_password(password: str) -> str:
     return base64.b64encode(password.encode("utf-8")).decode("ascii")
 
 
+def _path_id(value: str) -> str:
+    """Percent-encode an id used as a single URL path segment.
+
+    Dots are encoded too: httpx normalizes RFC 3986 dot-segments, so a raw
+    ``..`` would collapse the path onto its parent and call a different Dify
+    endpoint, while a raw ``?`` would start the query string.
+    """
+    return quote(value, safe="").replace(".", "%2E")
+
+
 def _parse_response(response: httpx.Response) -> Any:
     text = response.text
     if not text:
@@ -457,7 +467,25 @@ class DifyConsoleClient:
     async def get_document_indexing_status(self, dataset_id: str, document_id: str) -> Any:
         return await self._request(
             "GET",
-            f"/console/api/datasets/{dataset_id}/documents/{document_id}/indexing-status",
+            f"/console/api/datasets/{dataset_id}/documents/{_path_id(document_id)}/indexing-status",
+        )
+
+    async def retry_document_indexing(self, dataset_id: str, document_ids: list[str]) -> None:
+        """Restart indexing for the given documents (Dify 1.17.0 ``DocumentRetryApi``).
+
+        Dify always answers 204 and silently skips ids it will not re-index, so
+        the caller cannot infer per-document success from the response.
+        """
+        await self._request(
+            "POST",
+            f"/console/api/datasets/{dataset_id}/documents/retry",
+            json_body={"document_ids": document_ids},
+        )
+
+    async def delete_document(self, dataset_id: str, document_id: str) -> None:
+        """Delete a document from the dataset (Dify 1.17.0 ``DocumentApi.delete``)."""
+        await self._request(
+            "DELETE", f"/console/api/datasets/{dataset_id}/documents/{_path_id(document_id)}"
         )
 
     # ────────── API key management ──────────

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -220,7 +221,7 @@ class KnowledgeService:
             raise AppError(502, "DIFY_UPLOAD_FAILED", "Dify returned no document")
         document = documents[0]
 
-        kb.doc_count += 1
+        await self._repository.add_document_count(session, kb_id=kb.kb_id)
         await self._repository.insert_document(
             session,
             kb_id=kb.kb_id,
@@ -277,6 +278,7 @@ class KnowledgeService:
         document_id: str,
     ) -> DocumentStatusDto:
         kb = await self._require_kb(session, tenant, kb_id)
+        _require_document_id(document_id)
         status = await self._dify_console.get_document_indexing_status(
             kb.dify_dataset_id, document_id
         )
@@ -300,6 +302,58 @@ class KnowledgeService:
             await self._emit_terminal_event(kb.kb_id, document_id, new_status, error)
 
         return DocumentStatusDto(id=document_id, status=new_status, error=error)
+
+    async def retry_document(
+        self,
+        session: AsyncSession,
+        tenant: Tenant,
+        kb_id: str,
+        document_id: str,
+    ) -> None:
+        """Restart indexing for a failed document; Dify owns the resulting state."""
+        kb = await self._require_kb(session, tenant, kb_id)
+        _require_document_id(document_id)
+        try:
+            await self._dify_console.retry_document_indexing(kb.dify_dataset_id, [document_id])
+        except DifyConsoleError as exc:
+            raise _document_operation_error(exc, code="DOCUMENT_RETRY_FAILED") from exc
+
+    async def delete_document(
+        self,
+        session: AsyncSession,
+        tenant: Tenant,
+        kb_id: str,
+        document_id: str,
+    ) -> None:
+        kb = await self._require_kb(session, tenant, kb_id)
+        _require_document_id(document_id)
+        # Eligibility mirrors the accumulator: segments were added only when a
+        # recorded transition into ``completed`` succeeded, so the local row —
+        # not Dify's live status — decides whether anything is owed back. A
+        # document that finished in Dify but was never observed locally stays
+        # out of the subtraction (its segments were never added).
+        tracked = await self._repository.get_document(
+            session, kb_id=kb.kb_id, document_id=document_id
+        )
+        counted = tracked is not None and tracked.status == "completed"
+        try:
+            # The amount still comes from Dify, read while it holds the document.
+            segments = 0
+            if counted:
+                status = await self._dify_console.get_document_indexing_status(
+                    kb.dify_dataset_id, document_id
+                )
+                segments = _segment_count(status)
+            await self._dify_console.delete_document(kb.dify_dataset_id, document_id)
+        except DifyConsoleError as exc:
+            raise _document_operation_error(exc, code="DOCUMENT_DELETE_FAILED") from exc
+        # Dify dropped the document; retire the local row and its share of both
+        # KB totals, so the card stops counting a document that is gone.
+        if await self._repository.delete_document(session, kb_id=kb.kb_id, document_id=document_id):
+            await self._repository.release_document_counts(
+                session, kb_id=kb.kb_id, segments=segments
+            )
+        await session.commit()
 
     # ── retrieval test ──
 
@@ -461,3 +515,58 @@ def _citation_kb_name(record: dict[str, Any], kb_name: str | None) -> str | None
     # belongs to the KB under test; map its dataset_id to the registry name.
     dataset_name = record.get("dataset_name")
     return str(dataset_name) if dataset_name else kb_name
+
+
+def _require_document_id(document_id: str) -> None:
+    """Refuse ids that cannot address one Dify document path segment.
+
+    httpx normalizes RFC 3986 dot-segments and treats a raw ``?`` as the query
+    separator, so an id carrying ``..`` or a separator would retarget the
+    upstream call at a different Dify endpoint — deleting the whole dataset,
+    for the delete call.
+    """
+    invalid = (
+        not document_id
+        or document_id in {".", ".."}
+        or "/" in document_id
+        or "\\" in document_id
+    )
+    if invalid:
+        raise AppError(404, "DOCUMENT_NOT_FOUND", "Document not found")
+
+
+def _document_operation_error(exc: DifyConsoleError, *, code: str) -> AppError:
+    """Translate a Dify dataset-document failure into the platform error envelope.
+
+    Only 4xx that fault the *request* map to 400, carrying Dify's ``message``
+    for the frontend to render — e.g. deleting a document it is still indexing
+    fails with "Cannot delete document during indexing.". A rejected session
+    (401/403), throttling (429) or any upstream fault is a Dify-side failure
+    and must not read as "the user's request was wrong".
+    """
+    if exc.status_code == 404:
+        return AppError(404, "DOCUMENT_NOT_FOUND", "Document not found")
+    if exc.status_code in (401, 403):
+        return AppError(502, "DIFY_ERROR", "Dify request failed")
+    if exc.status_code == 429:
+        return AppError(503, "DIFY_RATE_LIMITED", "Dify rate limited the request")
+    if 400 <= exc.status_code < 500:
+        return AppError(400, code, _dify_error_message(exc.body))
+    return AppError(502, "DIFY_ERROR", "Dify request failed")
+
+
+def _dify_error_message(body: str) -> str:
+    """Dify's ``message`` field when the body carries one, else fixed text.
+
+    Non-JSON bodies (a proxy or gateway HTML error page) are never echoed back
+    into the API response — the caller only learns that Dify rejected it.
+    """
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        message = payload.get("message")
+        if isinstance(message, str) and message:
+            return message
+    return "Dify rejected the request"

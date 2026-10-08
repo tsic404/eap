@@ -517,3 +517,83 @@ async def test_get_dataset_api_keys_hits_endpoint() -> None:
 
     assert keys["data"][0]["token"] == "dataset-secret"
     assert captured == {"method": "GET", "path": "/console/api/datasets/api-keys"}
+
+
+@pytest.mark.asyncio
+async def test_retry_document_indexing_posts_document_ids() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/console/api/login":
+            return _login_response()
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["body"] = _json_body(request)
+        return httpx.Response(204)
+
+    client, _ = _make_client(handler)
+    await client.retry_document_indexing("ds-1", ["doc-1"])
+
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/console/api/datasets/ds-1/documents/retry"
+    assert captured["body"] == {"document_ids": ["doc-1"]}
+
+
+@pytest.mark.asyncio
+async def test_delete_document_hits_endpoint() -> None:
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/console/api/login":
+            return _login_response()
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        return httpx.Response(204)
+
+    client, _ = _make_client(handler)
+    await client.delete_document("ds-1", "doc-1")
+
+    assert captured == {"method": "DELETE", "path": "/console/api/datasets/ds-1/documents/doc-1"}
+
+
+@pytest.mark.asyncio
+async def test_delete_document_propagates_indexing_conflict() -> None:
+    body = json.dumps(
+        {
+            "code": "document_indexing_error",
+            "message": "Cannot delete document during indexing.",
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/console/api/login":
+            return _login_response()
+        return httpx.Response(400, content=body.encode())
+
+    client, _ = _make_client(handler)
+    with pytest.raises(DifyConsoleError) as exc_info:
+        await client.delete_document("ds-1", "doc-1")
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.body == body
+
+
+@pytest.mark.asyncio
+async def test_document_ids_are_encoded_into_one_path_segment() -> None:
+    """Ids that would collapse the path (``..``) or split it (``/``, ``?``) are encoded."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/console/api/login":
+            return _login_response()
+        seen.append(request.url.raw_path.decode())
+        return httpx.Response(204)
+
+    client, _ = _make_client(handler)
+    await client.delete_document("ds-1", "..")
+    await client.get_document_indexing_status("ds-1", "a/b?c")
+
+    assert seen == [
+        "/console/api/datasets/ds-1/documents/%2E%2E",
+        "/console/api/datasets/ds-1/documents/a%2Fb%3Fc/indexing-status",
+    ]

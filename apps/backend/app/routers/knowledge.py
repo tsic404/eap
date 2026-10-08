@@ -121,6 +121,30 @@ async def get_document_status(
     return await service.get_document_status(session, tenant, kb_id, document_id)
 
 
+@router.post("/{kb_id}/documents/{document_id}/retry", status_code=204)
+async def retry_document(
+    kb_id: str,
+    document_id: str,
+    service: KnowledgeServiceDep,
+    tenant: ActiveTenant,
+    _: KnowledgeAdmin,
+    session: Session,
+) -> None:
+    await service.retry_document(session, tenant, kb_id, document_id)
+
+
+@router.delete("/{kb_id}/documents/{document_id}", status_code=204)
+async def delete_document(
+    kb_id: str,
+    document_id: str,
+    service: KnowledgeServiceDep,
+    tenant: ActiveTenant,
+    _: KnowledgeAdmin,
+    session: Session,
+) -> None:
+    await service.delete_document(session, tenant, kb_id, document_id)
+
+
 @router.post("/{kb_id}/retrieval-test", response_model=RetrieveTestResultDto)
 async def retrieval_test(
     kb_id: str,
