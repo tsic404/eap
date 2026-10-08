@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
 
 import { KBCard } from "@/components/knowledge/kb-card";
+import { KB_NAME_EXISTS_MESSAGE } from "@/components/knowledge/kb-labels";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorBanner } from "@/components/ui/error-banner";
@@ -13,7 +14,10 @@ import { Modal } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { ROUTES } from "@/lib/api-routes";
-import { createKnowledgeBase } from "@/lib/knowledge-service";
+import {
+  createKnowledgeBase,
+  isKbNameExistsError,
+} from "@/lib/knowledge-service";
 import { extractApiErrorMessage } from "@/lib/platform-service";
 import { useKnowledgeBases } from "@/lib/use-knowledge";
 
@@ -38,6 +42,18 @@ export function KnowledgeListPage() {
   const [description, setDescription] = useState("");
   const [type, setType] = useState("business");
   const [creating, setCreating] = useState(false);
+  const [nameError, setNameError] = useState<string | null>(null);
+
+  const closeCreateModal = () => {
+    setCreateOpen(false);
+    setNameError(null);
+  };
+
+  // In-flight create: keep the dialog open so a late 409 cannot land on a closed or edited form.
+  const handleDialogClose = () => {
+    if (creating) return;
+    closeCreateModal();
+  };
 
   const handleCreate = async () => {
     const trimmedName = name.trim();
@@ -53,17 +69,22 @@ export function KnowledgeListPage() {
         type,
       });
       toast({ type: "success", title: "知识库已创建" });
-      setCreateOpen(false);
+      closeCreateModal();
       setName("");
       setDescription("");
       setType("business");
       await mutate();
     } catch (createError) {
-      toast({
-        type: "error",
-        title: "创建失败",
-        description: extractApiErrorMessage(createError),
-      });
+      // Duplicate names echo at the name field (AC-15); other failures toast.
+      if (isKbNameExistsError(createError)) {
+        setNameError(KB_NAME_EXISTS_MESSAGE);
+      } else {
+        toast({
+          type: "error",
+          title: "创建失败",
+          description: extractApiErrorMessage(createError),
+        });
+      }
     } finally {
       setCreating(false);
     }
@@ -126,13 +147,13 @@ export function KnowledgeListPage() {
 
       <Modal
         open={createOpen}
-        onClose={() => setCreateOpen(false)}
+        onClose={handleDialogClose}
         title="新建知识库"
         footer={
           <>
             <Button
               variant="outline"
-              onClick={() => setCreateOpen(false)}
+              onClick={closeCreateModal}
               disabled={creating}
             >
               取消
@@ -148,7 +169,12 @@ export function KnowledgeListPage() {
             label="名称"
             placeholder="例如：产品手册知识库"
             value={name}
-            onChange={(event) => setName(event.target.value)}
+            error={nameError ?? undefined}
+            disabled={creating}
+            onChange={(event) => {
+              setName(event.target.value);
+              setNameError(null);
+            }}
           />
           <Input
             label="描述"
