@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.models.knowledge import KnowledgeBaseRegistry, KnowledgeDocument
 from app.models.tenant import Tenant
+from app.repositories.knowledge import KnowledgeRepository
 
 
 @pytest.mark.asyncio
@@ -54,3 +55,29 @@ async def test_delete_kb_cascades_documents_via_db(session_factory) -> None:  # 
             )
         ).all()
         assert remaining == []
+
+
+@pytest.mark.asyncio
+async def test_get_by_name_for_tenant_is_tenant_scoped(session_factory) -> None:  # type: ignore[no-untyped-def]
+    """Same name in another tenant must not surface as a duplicate."""
+    repo = KnowledgeRepository()
+    async with session_factory() as session:
+        tenant_a = Tenant(name="A", slug=f"t-{uuid.uuid4().hex[:8]}", sso_provider="local")
+        tenant_b = Tenant(name="B", slug=f"t-{uuid.uuid4().hex[:8]}", sso_provider="local")
+        session.add_all([tenant_a, tenant_b])
+        await session.flush()
+        session.add(
+            KnowledgeBaseRegistry(
+                kb_id="kb-1",
+                tenant_id=tenant_a.id,
+                dify_dataset_id="ds-1",
+                name="KB",
+                type="business",
+            )
+        )
+        await session.commit()
+
+        found = await repo.get_by_name_for_tenant(session, tenant_a.id, "KB")
+        assert found is not None and found.kb_id == "kb-1"
+        assert await repo.get_by_name_for_tenant(session, tenant_b.id, "KB") is None
+        assert await repo.get_by_name_for_tenant(session, tenant_a.id, "Other") is None

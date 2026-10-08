@@ -103,6 +103,14 @@ class _FakeRepository:
             return kb
         return None
 
+    async def get_by_name_for_tenant(
+        self, session: Any, tenant_id: uuid.UUID, name: str
+    ) -> KnowledgeBaseRegistry | None:
+        for kb in self._kbs.values():
+            if kb.tenant_id == tenant_id and kb.name == name:
+                return kb
+        return None
+
     async def list_for_tenant(
         self, session: Any, tenant_id: uuid.UUID, *, offset: int, limit: int
     ) -> tuple[list[KnowledgeBaseRegistry], int]:
@@ -255,6 +263,52 @@ async def test_create_compensates_deletes_dataset_on_commit_failure() -> None:
         await service.create(session, tenant, CreateKnowledgeBaseDto(name="KB"))
 
     dify.delete_dataset.assert_awaited_once_with("ds-1")
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_duplicate_name_before_dify_call() -> None:
+    tenant = _tenant()
+    repo = _FakeRepository((_kb(tenant),))  # existing KB named "Knowledge"
+    dify = AsyncMock()
+    service = _service(dify, repo=repo)
+
+    with pytest.raises(AppError) as exc_info:
+        await service.create(AsyncMock(), tenant, CreateKnowledgeBaseDto(name="Knowledge"))
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.code == "KB_NAME_EXISTS"
+    assert exc_info.value.message == "知识库名称已存在"
+    dify.create_dataset.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_maps_dify_name_conflict_to_409() -> None:
+    tenant = _tenant()
+    dify = AsyncMock()
+    dify.create_dataset.side_effect = DifyConsoleError(409, "Dataset name already exists")
+    service = _service(dify)
+
+    with pytest.raises(AppError) as exc_info:
+        await service.create(AsyncMock(), tenant, CreateKnowledgeBaseDto(name="KB"))
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.code == "KB_NAME_EXISTS"
+    assert exc_info.value.message == "知识库名称已存在"
+    # The dataset was never created, so there is nothing to compensate.
+    dify.delete_dataset.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_propagates_non_conflict_dify_error() -> None:
+    tenant = _tenant()
+    dify = AsyncMock()
+    dify.create_dataset.side_effect = DifyConsoleError(503, "upstream down")
+    service = _service(dify)
+
+    with pytest.raises(DifyConsoleError):
+        await service.create(AsyncMock(), tenant, CreateKnowledgeBaseDto(name="KB"))
+
+    dify.delete_dataset.assert_not_awaited()
 
 
 @pytest.mark.asyncio

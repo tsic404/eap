@@ -88,13 +88,25 @@ class KnowledgeService:
         tenant: Tenant,
         dto: CreateKnowledgeBaseDto,
     ) -> KnowledgeBaseDto:
-        dataset = await self._dify_console.create_dataset(
-            CreateDatasetParams(
-                name=dto.name,
-                description=dto.description,
-                indexing_technique=_DEFAULT_INDEXING_TECHNIQUE,
+        # Reject a duplicate name before any Dify dataset exists, so the
+        # client gets a displayable 409 and nothing needs compensation.
+        existing = await self._repository.get_by_name_for_tenant(session, tenant.id, dto.name)
+        if existing is not None:
+            raise AppError(409, "KB_NAME_EXISTS", "知识库名称已存在")
+        try:
+            dataset = await self._dify_console.create_dataset(
+                CreateDatasetParams(
+                    name=dto.name,
+                    description=dto.description,
+                    indexing_technique=_DEFAULT_INDEXING_TECHNIQUE,
+                )
             )
-        )
+        except DifyConsoleError as exc:
+            # A concurrent duplicate can slip past the pre-check; Dify answers
+            # 409 and it must map to the same conflict, not bubble up as a 500.
+            if exc.status_code == 409:
+                raise AppError(409, "KB_NAME_EXISTS", "知识库名称已存在") from exc
+            raise
         dify_dataset_id = dataset["id"]
         try:
             api_key = await self._get_or_create_dataset_api_key()
