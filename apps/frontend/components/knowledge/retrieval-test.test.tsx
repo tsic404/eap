@@ -30,10 +30,10 @@ const RESULT: RetrievalTestResult = {
   latencyMs: 12,
 };
 
-function renderForm() {
+function renderForm({ disabled = false }: { disabled?: boolean } = {}) {
   return renderWithIntl(
     <ToastProvider>
-      <RetrievalTest kbId="kb-1" />
+      <RetrievalTest kbId="kb-1" disabled={disabled} />
     </ToastProvider>,
   );
 }
@@ -89,5 +89,25 @@ describe("RetrievalTest", () => {
       query: "退款政策",
       retrieval_model: { top_k: 10 },
     });
+  });
+
+  it("greys the run button and names the reason while the knowledge base is indexing", () => {
+    renderForm({ disabled: true });
+
+    const runButton = screen.getByRole("button", {
+      name: "运行测试",
+    }) as HTMLButtonElement;
+    expect(runButton.disabled).toBe(true);
+    expect(screen.getByText("知识库正在索引中…")).toBeTruthy();
+  });
+
+  it("keeps the run button available and shows no indexing hint when nothing is indexing", () => {
+    renderForm({ disabled: false });
+
+    const runButton = screen.getByRole("button", {
+      name: "运行测试",
+    }) as HTMLButtonElement;
+    expect(runButton.disabled).toBe(false);
+    expect(screen.queryByText("知识库正在索引中…")).toBeNull();
   });
 });
