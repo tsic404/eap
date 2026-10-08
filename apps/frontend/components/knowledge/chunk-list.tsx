@@ -30,10 +30,11 @@ function Highlight({ text, query }: { text: string; query: string }) {
   );
 }
 
-function scoreVariant(score: number): "success" | "warning" | "default" {
-  if (score >= 0.8) return "success";
-  if (score >= 0.5) return "warning";
-  return "default";
+/** Score buckets: ≥0.8 deep green / ≥0.5 light green / <0.5 yellow. */
+function scoreBadgeClass(score: number): string {
+  if (score >= 0.8) return "bg-success text-success-foreground";
+  if (score >= 0.5) return "bg-success-subtle text-success";
+  return "bg-warning-subtle text-warning";
 }
 
 export interface ChunkListProps {
@@ -77,15 +78,18 @@ export function ChunkList({
             onClick={() => setSelected(citation)}
             className="flex flex-col gap-2"
           >
-            <div className="flex items-center justify-between">
-              <Badge variant={scoreVariant(citation.score)}>
+            <div className="flex items-start justify-between gap-3">
+              <Badge className={scoreBadgeClass(citation.score)}>
                 分数 {citation.score.toFixed(3)}
               </Badge>
-              {citation.source_name && (
-                <span className="truncate text-xs text-muted-foreground">
-                  {citation.source_name}
-                </span>
-              )}
+              <div className="flex min-w-0 flex-col items-end text-xs text-muted-foreground">
+                {citation.source_name && (
+                  <span className="truncate">{citation.source_name}</span>
+                )}
+                {citation.kb_name && (
+                  <span className="truncate">{citation.kb_name}</span>
+                )}
+              </div>
             </div>
             <CardContent className="p-0">
               <p className="line-clamp-3 text-sm text-muted-foreground">
@@ -104,13 +108,18 @@ export function ChunkList({
       >
         {selected && (
           <div className="flex flex-col gap-3">
-            <div className="flex items-center gap-3">
-              <Badge variant={scoreVariant(selected.score)}>
+            <div className="flex flex-wrap items-center gap-3">
+              <Badge className={scoreBadgeClass(selected.score)}>
                 分数 {selected.score.toFixed(3)}
               </Badge>
               {selected.source_name && (
                 <span className="text-sm text-muted-foreground">
                   {selected.source_name}
+                </span>
+              )}
+              {selected.kb_name && (
+                <span className="text-sm text-muted-foreground">
+                  {selected.kb_name}
                 </span>
               )}
             </div>

@@ -326,6 +326,7 @@ class KnowledgeService:
                 content=_citation_content(record),
                 score=float(record.get("score") or 0.0),
                 source_name=_citation_source(record),
+                kb_name=_citation_kb_name(record, kb.name),
             )
             for record in result.get("records", [])
         ]
@@ -371,3 +372,10 @@ def _citation_source(record: dict[str, Any]) -> str | None:
     document = segment.get("document") or {}
     name = document.get("name") or segment.get("document_id")
     return str(name) if name else None
+
+
+def _citation_kb_name(record: dict[str, Any], kb_name: str | None) -> str | None:
+    # Retrieve targets one dataset, so a record without dataset_name still
+    # belongs to the KB under test; map its dataset_id to the registry name.
+    dataset_name = record.get("dataset_name")
+    return str(dataset_name) if dataset_name else kb_name
