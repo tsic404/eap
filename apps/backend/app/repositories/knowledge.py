@@ -131,3 +131,17 @@ class KnowledgeRepository:
         )
         result = await session.execute(stmt)
         return result.scalar_one_or_none() is not None
+
+    async def add_chunk_count(self, session: AsyncSession, *, kb_id: str, delta: int) -> None:
+        """Add ``delta`` segments to the KB's chunk total.
+
+        The addition happens in SQL (``chunk_count = chunk_count + :delta``) so
+        concurrent document completions accumulate instead of overwriting each
+        other the way a read-modify-write on the ORM attribute would.
+        """
+        stmt = (
+            update(KnowledgeBaseRegistry)
+            .where(KnowledgeBaseRegistry.kb_id == kb_id)
+            .values(chunk_count=KnowledgeBaseRegistry.chunk_count + delta)
+        )
+        await session.execute(stmt)
