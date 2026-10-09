@@ -6,7 +6,7 @@ name: eap-prod
 #
 #   cp .env.example .env  # fill in every `${VAR:?...}` secret
 #   docker compose -f docker-compose.prod.yml up -d --build
-#   curl http://localhost/api/health/ready   # expect 200
+#   curl http://localhost/api/health/ready   # expect 200 (dify also needs a working console login and a configured model provider)
 
 x-dify-env: &dify-env
   LOG_LEVEL: ${DIFY_LOG_LEVEL:-INFO}
