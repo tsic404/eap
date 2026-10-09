@@ -61,6 +61,15 @@ def _document_status(indexing_status: str | None) -> DocumentStatus:
     return "indexing"
 
 
+def _segment_count(status: dict[str, Any]) -> int:
+    """Segments Dify holds for a document; 0 when the payload omits the field.
+
+    ``total_segments`` is the document's live ``document_segments`` row count —
+    the quantity the KB card's chunk count reports.
+    """
+    return int(status.get("total_segments") or 0)
+
+
 class KnowledgeService:
     """Coordinates the knowledge-base repository, Dify clients, and event bus."""
 
@@ -239,15 +248,26 @@ class KnowledgeService:
     ) -> DocumentPageDto:
         kb = await self._require_kb(session, tenant, kb_id)
         result = await self._dify_console.list_documents(kb.dify_dataset_id, page=page, limit=limit)
-        items = [
-            DocumentDto(
-                id=doc["id"],
-                name=doc.get("name") or "",
-                status=_document_status(doc.get("indexing_status")),
+        observed = [
+            (
+                DocumentDto(
+                    id=doc["id"],
+                    name=doc.get("name") or "",
+                    status=_document_status(doc.get("indexing_status")),
+                ),
+                doc.get("error"),
             )
             for doc in result.get("data", [])
         ]
-        return DocumentPageDto(items=items, total=int(result.get("total") or 0))
+        # The UI polls this listing while documents index and never calls the
+        # per-document status endpoint, so a terminal status is usually first
+        # observed here: record it, or the completion state machine (and the
+        # KB's chunk total) stays frozen at ``indexing`` in the product flow.
+        await self._record_listed_terminals(session, kb, observed)
+        return DocumentPageDto(
+            items=[item for item, _ in observed],
+            total=int(result.get("total") or 0),
+        )
 
     async def get_document_status(
         self,
@@ -263,32 +283,21 @@ class KnowledgeService:
         new_status = _document_status(status.get("indexing_status"))
         error = status.get("error")
 
-        # Atomic conditional update: the row only changes on a genuine
-        # transition, so concurrent polls cannot double-emit. Commit first so
-        # the event only fires once the state change is durable.
+        # Commit first so the event only fires once the state change is durable.
         transitioned = False
         if new_status in _TERMINAL_STATUSES:
-            transitioned = await self._repository.transition_document_status(
+            transitioned = await self._record_terminal_status(
                 session,
-                kb_id=kb.kb_id,
+                kb,
                 document_id=document_id,
                 status=new_status,
                 error=error,
+                segments=_segment_count(status) if new_status == "completed" else None,
             )
             await session.commit()
 
         if transitioned:
-            if new_status == "completed":
-                await self._bus.emit(
-                    DOCUMENT_INDEXED_EVENT, kb_id=kb.kb_id, document_id=document_id
-                )
-            else:
-                await self._bus.emit(
-                    DOCUMENT_INDEX_FAILED_EVENT,
-                    kb_id=kb.kb_id,
-                    document_id=document_id,
-                    error=error,
-                )
+            await self._emit_terminal_event(kb.kb_id, document_id, new_status, error)
 
         return DocumentStatusDto(id=document_id, status=new_status, error=error)
 
@@ -339,6 +348,79 @@ class KnowledgeService:
         )
 
     # ── helpers ──
+
+    async def _record_listed_terminals(
+        self,
+        session: AsyncSession,
+        kb: KnowledgeBaseRegistry,
+        observed: list[tuple[DocumentDto, str | None]],
+    ) -> None:
+        """Persist the terminal states a document listing reported.
+
+        Transition and count share one transaction, so a document is never
+        recorded as completed without its segments; the guarded update inside
+        ``_record_terminal_status`` keeps concurrent listings from double-counting.
+        """
+        recorded: list[tuple[DocumentDto, str | None]] = []
+        for item, error in observed:
+            if item.status not in _TERMINAL_STATUSES:
+                continue
+            if await self._record_terminal_status(
+                session, kb, document_id=item.id, status=item.status, error=error
+            ):
+                recorded.append((item, error))
+        if not recorded:
+            return
+        await session.commit()
+        for item, error in recorded:
+            await self._emit_terminal_event(kb.kb_id, item.id, item.status, error)
+
+    async def _record_terminal_status(
+        self,
+        session: AsyncSession,
+        kb: KnowledgeBaseRegistry,
+        *,
+        document_id: str,
+        status: DocumentStatus,
+        error: str | None,
+        segments: int | None = None,
+    ) -> bool:
+        """Persist one terminal document status; ``True`` only on a real transition.
+
+        The conditional update runs first, so a document whose stored status
+        already matches costs no upstream call — its segment count is fetched
+        from Dify only when the transition is genuine (``segments`` lets a caller
+        that already holds the indexing-status payload pass it in).
+        """
+        transitioned = await self._repository.transition_document_status(
+            session, kb_id=kb.kb_id, document_id=document_id, status=status, error=error
+        )
+        if not transitioned:
+            return False
+        if status == "completed":
+            if segments is None:
+                payload = await self._dify_console.get_document_indexing_status(
+                    kb.dify_dataset_id, document_id
+                )
+                segments = _segment_count(payload)
+            # Each document contributes its own segments to the KB-wide total;
+            # only a status change adds them, so repeat polls and re-indexes
+            # never count the same segments twice.
+            await self._repository.add_chunk_count(session, kb_id=kb.kb_id, delta=segments)
+        return True
+
+    async def _emit_terminal_event(
+        self, kb_id: str, document_id: str, status: DocumentStatus, error: str | None
+    ) -> None:
+        if status == "completed":
+            await self._bus.emit(DOCUMENT_INDEXED_EVENT, kb_id=kb_id, document_id=document_id)
+        else:
+            await self._bus.emit(
+                DOCUMENT_INDEX_FAILED_EVENT,
+                kb_id=kb_id,
+                document_id=document_id,
+                error=error,
+            )
 
     async def _get_or_create_dataset_api_key(self) -> str:
         """Reuse the tenant's existing dataset API key, creating one only if absent.

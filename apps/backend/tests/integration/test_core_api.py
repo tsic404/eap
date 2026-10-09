@@ -230,6 +230,68 @@ async def test_upload_pdf_returns_201_indexing(api, wait_for_indexed) -> None:
 
 
 @pytest.mark.asyncio
+async def test_status_poll_records_completion_and_chunk_count(api, wait_for_indexed) -> None:
+    """Direct status polling also records the completion and the segment count."""
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+
+    uploaded = await api.client.post(
+        "/api/knowledge-bases/kb-1/documents",
+        headers=headers,
+        files={"file": ("kb-sample.txt", b"kb sample body", "text/plain")},
+    )
+    assert uploaded.status_code == 201
+    assert await wait_for_indexed(api.client, headers, "kb-1", "doc-1") == "completed"
+
+    listed = await api.client.get("/api/knowledge-bases", headers=headers)
+    # The Dify mock reports 5 segments for the document.
+    assert listed.json()["data"]["items"][0]["chunk_count"] == 5
+
+    # Re-polling a finished document must not add its segments twice.
+    await api.client.get("/api/knowledge-bases/kb-1/documents/doc-1/status", headers=headers)
+    again = await api.client.get("/api/knowledge-bases", headers=headers)
+    assert again.json()["data"]["items"][0]["chunk_count"] == 5
+
+
+@pytest.mark.asyncio
+async def test_product_flow_document_listing_drives_kb_chunk_count(api) -> None:
+    """UI flow: upload → poll the document listing → the KB reports the count.
+
+    The frontend polls ``GET /knowledge-bases/{id}/documents`` every 3s while
+    indexing and never calls the per-document status endpoint, so this test
+    deliberately never polls status: it fails if the listing does not record the
+    terminal status itself.
+    """
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+
+    uploaded = await api.client.post(
+        "/api/knowledge-bases/kb-1/documents",
+        headers=headers,
+        files={"file": ("kb-sample.txt", b"kb sample body", "text/plain")},
+    )
+    assert uploaded.status_code == 201
+
+    # Dify finished indexing; the UI's next listing poll is what observes it.
+    api.console.list_documents.return_value = {
+        "data": [{"id": "doc-1", "name": "kb-sample.txt", "indexing_status": "completed"}],
+        "total": 1,
+    }
+    listed = await api.client.get("/api/knowledge-bases/kb-1/documents", headers=headers)
+    assert listed.json()["data"]["items"][0]["status"] == "completed"
+
+    kb = await api.client.get("/api/knowledge-bases", headers=headers)
+    assert kb.json()["data"]["items"][0]["chunk_count"] == 5
+
+    # The next poll of the listing must not add the segments again.
+    await api.client.get("/api/knowledge-bases/kb-1/documents", headers=headers)
+    again = await api.client.get("/api/knowledge-bases", headers=headers)
+    assert again.json()["data"]["items"][0]["chunk_count"] == 5
+
+
+@pytest.mark.asyncio
 async def test_upload_exe_returns_422_unsupported(api) -> None:
     tenant, user = await api.seed(role="knowledge_admin")
     await api.seed_kb(tenant, kb_id="kb-1")

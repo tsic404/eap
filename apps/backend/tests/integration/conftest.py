@@ -351,7 +351,12 @@ def default_console() -> Any:
         "documents": [{"id": "doc-1", "indexing_status": "indexing"}]
     }
     console.list_documents.return_value = {"data": [], "total": 0}
-    console.get_document_indexing_status.return_value = {"indexing_status": "completed"}
+    # Dify reports the document's segment count on the same indexing-status
+    # payload the KB chunk total is accumulated from.
+    console.get_document_indexing_status.return_value = {
+        "indexing_status": "completed",
+        "total_segments": 5,
+    }
     console.get_model_providers.return_value = {
         "data": [
             {

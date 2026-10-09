@@ -101,3 +101,20 @@ async def test_transition_document_status_missing_row_returns_false(session_fact
         assert not await repo.transition_document_status(
             session, kb_id="kb-1", document_id="nope", status="completed"
         )
+
+
+@pytest.mark.asyncio
+async def test_add_chunk_count_accumulates_across_calls(session_factory) -> None:  # type: ignore[no-untyped-def]
+    """Each completed document adds its segments to the KB-wide total."""
+    await _seed_kb(session_factory)
+    repo = KnowledgeRepository()
+
+    async with session_factory() as session:
+        await repo.add_chunk_count(session, kb_id="kb-1", delta=5)
+        await repo.add_chunk_count(session, kb_id="kb-1", delta=3)
+        await session.commit()
+
+    async with session_factory() as session:
+        kb = await session.get(KnowledgeBaseRegistry, "kb-1")
+        assert kb is not None
+        assert kb.chunk_count == 8

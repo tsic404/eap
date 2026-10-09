@@ -94,6 +94,7 @@ class _FakeRepository:
         self._kbs = {kb.kb_id: kb for kb in kbs}
         self._documents = {(d.kb_id, d.document_id): d for d in documents}
         self.deleted: list[str] = []
+        self.chunk_additions: list[tuple[str, int]] = []
 
     async def get_for_tenant(
         self, session: Any, kb_id: str, tenant_id: uuid.UUID
@@ -174,6 +175,12 @@ class _FakeRepository:
         doc.status = status
         doc.error = error
         return True
+
+    async def add_chunk_count(self, session: Any, *, kb_id: str, delta: int) -> None:
+        self.chunk_additions.append((kb_id, delta))
+        kb = self._kbs.get(kb_id)
+        if kb is not None:
+            kb.chunk_count += delta
 
 
 def _collector() -> tuple[list[_Event], Any]:
@@ -341,6 +348,94 @@ async def test_list_documents_returns_page_with_total() -> None:
     assert page.total == 7
     assert [d.id for d in page.items] == ["doc-1", "doc-2"]
     assert page.items[0].status == "completed"
+    # No local row for either document: nothing to record, nothing fetched.
+    dify.get_document_indexing_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_list_documents_records_completion_and_chunk_count() -> None:
+    tenant = _tenant()
+    kb = _kb(tenant)
+    dify = AsyncMock()
+    dify.list_documents.return_value = {
+        "data": [{"id": "doc-1", "name": "kb-sample.txt", "indexing_status": "completed"}],
+        "total": 1,
+    }
+    dify.get_document_indexing_status.return_value = {
+        "indexing_status": "completed",
+        "total_segments": 5,
+    }
+    events, handler = _collector()
+    bus = EventBus()
+    bus.subscribe(DOCUMENT_INDEXED_EVENT, handler)
+    repo = _FakeRepository((kb,), (_doc("kb-1", "doc-1", "indexing"),))
+    service = _service(dify, repo=repo, bus=bus)
+
+    page = await service.list_documents(AsyncMock(), tenant, "kb-1", page=1, limit=20)
+
+    assert [d.status for d in page.items] == ["completed"]
+    dify.get_document_indexing_status.assert_awaited_once_with("ds-1", "doc-1")
+    assert repo.chunk_additions == [("kb-1", 5)]
+    assert kb.chunk_count == 5
+    assert events == [(DOCUMENT_INDEXED_EVENT, {"kb_id": "kb-1", "document_id": "doc-1"})]
+
+
+@pytest.mark.asyncio
+async def test_list_documents_does_not_recount_recorded_completion() -> None:
+    tenant = _tenant()
+    kb = _kb(tenant)
+    kb.chunk_count = 5
+    dify = AsyncMock()
+    dify.list_documents.return_value = {
+        "data": [{"id": "doc-1", "name": "a.pdf", "indexing_status": "completed"}],
+        "total": 1,
+    }
+    events, handler = _collector()
+    bus = EventBus()
+    bus.subscribe(DOCUMENT_INDEXED_EVENT, handler)
+    repo = _FakeRepository((kb,), (_doc("kb-1", "doc-1", "completed"),))
+    service = _service(dify, repo=repo, bus=bus)
+
+    await service.list_documents(AsyncMock(), tenant, "kb-1", page=1, limit=20)
+
+    assert repo.chunk_additions == []
+    assert kb.chunk_count == 5
+    assert events == []
+    dify.get_document_indexing_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_list_documents_records_failure_without_counting() -> None:
+    tenant = _tenant()
+    kb = _kb(tenant)
+    dify = AsyncMock()
+    dify.list_documents.return_value = {
+        "data": [
+            {
+                "id": "doc-1",
+                "name": "a.pdf",
+                "indexing_status": "error",
+                "error": "parse failed",
+            }
+        ],
+        "total": 1,
+    }
+    events, handler = _collector()
+    bus = EventBus()
+    bus.subscribe(DOCUMENT_INDEX_FAILED_EVENT, handler)
+    repo = _FakeRepository((kb,), (_doc("kb-1", "doc-1", "indexing"),))
+    service = _service(dify, repo=repo, bus=bus)
+
+    await service.list_documents(AsyncMock(), tenant, "kb-1", page=1, limit=20)
+
+    assert repo.chunk_additions == []
+    assert kb.chunk_count == 0
+    assert events == [
+        (
+            DOCUMENT_INDEX_FAILED_EVENT,
+            {"kb_id": "kb-1", "document_id": "doc-1", "error": "parse failed"},
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -474,34 +569,107 @@ async def test_upload_document_success_returns_indexing_and_emits_event() -> Non
 async def test_get_document_status_emits_indexed_on_transition() -> None:
     tenant = _tenant()
     dify = AsyncMock()
-    dify.get_document_indexing_status.return_value = {"indexing_status": "completed"}
+    dify.get_document_indexing_status.return_value = {
+        "indexing_status": "completed",
+        "total_segments": 5,
+    }
     events, handler = _collector()
     bus = EventBus()
     bus.subscribe(DOCUMENT_INDEXED_EVENT, handler)
-    repo = _FakeRepository((_kb(tenant),), (_doc("kb-1", "doc-1", "indexing"),))
+    kb = _kb(tenant)
+    repo = _FakeRepository((kb,), (_doc("kb-1", "doc-1", "indexing"),))
     service = _service(dify, repo=repo, bus=bus)
 
     result = await service.get_document_status(AsyncMock(), tenant, "kb-1", "doc-1")
 
     assert result.status == "completed"
     assert events == [(DOCUMENT_INDEXED_EVENT, {"kb_id": "kb-1", "document_id": "doc-1"})]
+    assert repo.chunk_additions == [("kb-1", 5)]
+    assert kb.chunk_count == 5
+
+
+@pytest.mark.asyncio
+async def test_get_document_status_accumulates_chunk_count_across_documents() -> None:
+    tenant = _tenant()
+    dify = AsyncMock()
+    dify.get_document_indexing_status.return_value = {
+        "indexing_status": "completed",
+        "total_segments": 3,
+    }
+    kb = _kb(tenant)
+    # doc-1 already contributed its 4 segments; doc-2's completion adds on top
+    # rather than replacing the KB-wide total.
+    kb.chunk_count = 4
+    repo = _FakeRepository(
+        (kb,),
+        (_doc("kb-1", "doc-1", "completed"), _doc("kb-1", "doc-2", "indexing")),
+    )
+    service = _service(dify, repo=repo)
+
+    await service.get_document_status(AsyncMock(), tenant, "kb-1", "doc-2")
+
+    assert kb.chunk_count == 7
+
+
+@pytest.mark.asyncio
+async def test_get_document_status_counts_reindexed_document_once() -> None:
+    tenant = _tenant()
+    dify = AsyncMock()
+    dify.get_document_indexing_status.return_value = {
+        "indexing_status": "completed",
+        "total_segments": 4,
+    }
+    kb = _kb(tenant)
+    # A failed first attempt contributed nothing; the re-index that completes
+    # contributes its segments exactly once.
+    repo = _FakeRepository((kb,), (_doc("kb-1", "doc-1", "failed"),))
+    service = _service(dify, repo=repo)
+
+    await service.get_document_status(AsyncMock(), tenant, "kb-1", "doc-1")
+
+    assert repo.chunk_additions == [("kb-1", 4)]
+    assert kb.chunk_count == 4
 
 
 @pytest.mark.asyncio
 async def test_get_document_status_does_not_reemit_on_repeat_poll() -> None:
     tenant = _tenant()
     dify = AsyncMock()
-    dify.get_document_indexing_status.return_value = {"indexing_status": "completed"}
+    dify.get_document_indexing_status.return_value = {
+        "indexing_status": "completed",
+        "total_segments": 5,
+    }
     events, handler = _collector()
     bus = EventBus()
     bus.subscribe(DOCUMENT_INDEXED_EVENT, handler)
-    repo = _FakeRepository((_kb(tenant),), (_doc("kb-1", "doc-1", "completed"),))
+    kb = _kb(tenant)
+    repo = _FakeRepository((kb,), (_doc("kb-1", "doc-1", "completed"),))
     service = _service(dify, repo=repo, bus=bus)
 
     result = await service.get_document_status(AsyncMock(), tenant, "kb-1", "doc-1")
 
     assert result.status == "completed"
     assert events == []
+    assert repo.chunk_additions == []
+    assert kb.chunk_count == 0
+
+
+@pytest.mark.asyncio
+async def test_get_document_status_without_segment_count_keeps_chunk_count() -> None:
+    tenant = _tenant()
+    dify = AsyncMock()
+    # A payload without the segment count (Dify omits it when it cannot report
+    # one) must leave the recorded total alone rather than zeroing it.
+    dify.get_document_indexing_status.return_value = {"indexing_status": "completed"}
+    kb = _kb(tenant)
+    kb.chunk_count = 5
+    repo = _FakeRepository((kb,), (_doc("kb-1", "doc-1", "indexing"),))
+    service = _service(dify, repo=repo)
+
+    result = await service.get_document_status(AsyncMock(), tenant, "kb-1", "doc-1")
+
+    assert result.status == "completed"
+    assert kb.chunk_count == 5
 
 
 @pytest.mark.asyncio
@@ -512,7 +680,8 @@ async def test_get_document_status_emits_index_failed_on_error() -> None:
     events, handler = _collector()
     bus = EventBus()
     bus.subscribe(DOCUMENT_INDEX_FAILED_EVENT, handler)
-    repo = _FakeRepository((_kb(tenant),), (_doc("kb-1", "doc-1", "indexing"),))
+    kb = _kb(tenant)
+    repo = _FakeRepository((kb,), (_doc("kb-1", "doc-1", "indexing"),))
     service = _service(dify, repo=repo, bus=bus)
 
     result = await service.get_document_status(AsyncMock(), tenant, "kb-1", "doc-1")
@@ -522,6 +691,8 @@ async def test_get_document_status_emits_index_failed_on_error() -> None:
     assert events == [
         (DOCUMENT_INDEX_FAILED_EVENT, {"kb_id": "kb-1", "document_id": "doc-1", "error": "boom"})
     ]
+    assert repo.chunk_additions == []
+    assert kb.chunk_count == 0
 
 
 @pytest.mark.asyncio
