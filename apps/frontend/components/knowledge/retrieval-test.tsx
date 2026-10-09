@@ -10,6 +10,7 @@ import type { RetrievalTestResult } from "@/lib/knowledge-types";
 import { extractApiErrorMessage } from "@/lib/platform-service";
 
 import { ChunkList } from "./chunk-list";
+import { INDEXING_IN_PROGRESS_MESSAGE } from "./kb-labels";
 
 const MIN_TOP_K = 5;
 const MAX_TOP_K = 10;
@@ -94,14 +95,16 @@ export function RetrievalTest({ kbId, disabled = false }: RetrievalTestProps) {
         </div>
       </div>
 
-      <Button
-        onClick={run}
-        loading={running}
-        disabled={disabled}
-        className="self-start"
-      >
-        运行测试
-      </Button>
+      <div className="flex items-center gap-3">
+        <Button onClick={run} loading={running} disabled={disabled}>
+          运行测试
+        </Button>
+        {disabled && (
+          <p className="text-sm text-muted-foreground">
+            {INDEXING_IN_PROGRESS_MESSAGE}
+          </p>
+        )}
+      </div>
 
       {error && <ErrorBanner description={error} />}
 

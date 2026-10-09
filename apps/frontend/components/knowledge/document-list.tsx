@@ -9,7 +9,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { KnowledgeDocument } from "@/lib/knowledge-types";
 import { extractApiErrorMessage } from "@/lib/platform-service";
 
-import { INDEXING_STATUS_LABEL, INDEXING_STATUS_VARIANT } from "./kb-labels";
+import {
+  INDEXING_FAILED_MESSAGE,
+  INDEXING_STATUS_LABEL,
+  INDEXING_STATUS_VARIANT,
+} from "./kb-labels";
 
 function DocumentListSkeleton() {
   return (
@@ -72,8 +76,15 @@ export function DocumentList({
             className="flex items-center gap-3 px-4 py-3"
           >
             <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-              {document.name}
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate text-sm text-foreground">
+                {document.name}
+              </span>
+              {document.status === "failed" && (
+                <span className="text-xs text-danger">
+                  {INDEXING_FAILED_MESSAGE}
+                </span>
+              )}
             </span>
             {document.status === "indexing" && (
               <div className="h-2 w-24 overflow-hidden rounded-full bg-muted">
