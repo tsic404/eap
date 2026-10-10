@@ -23,6 +23,9 @@ RUN groupadd --system app && useradd --system --gid app --no-create-home app
 WORKDIR /app
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --chown=app:app app ./app
+# One-off operational scripts (e.g. recompute_kb_counts) run inside this image
+# with `python -m scripts.<name>`.
+COPY --chown=app:app scripts ./scripts
 # Alembic needs its config and script tree in the image to run migrations at
 # container start (see docker-entrypoint.sh).
 COPY --chown=app:app alembic.ini ./
