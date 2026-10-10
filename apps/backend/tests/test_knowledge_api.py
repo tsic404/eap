@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -15,8 +16,9 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.db import get_session
+from app.dify_console import DifyConsoleError
 from app.main import create_app
-from app.models.knowledge import KnowledgeBaseRegistry
+from app.models.knowledge import KnowledgeBaseRegistry, KnowledgeDocument
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.services.knowledge import KnowledgeService
@@ -144,6 +146,20 @@ class _Repo:
         error: str | None = None,
     ) -> bool:
         return True
+
+    async def delete_document(self, session: Any, *, kb_id: str, document_id: str) -> bool:
+        return True
+
+    async def get_document(
+        self, session: Any, *, kb_id: str, document_id: str
+    ) -> KnowledgeDocument | None:
+        return None
+
+    async def add_document_count(self, session: Any, *, kb_id: str) -> None:
+        return None
+
+    async def release_document_counts(self, session: Any, *, kb_id: str, segments: int) -> None:
+        return None
 
 
 def _authed_client(
@@ -321,3 +337,109 @@ def test_get_document_status_returns_polled_status() -> None:
 
     assert resp.status_code == 200
     assert resp.json()["data"] == {"id": "doc-1", "status": "indexing", "error": None}
+
+
+def test_retry_document_returns_204() -> None:
+    tenant = _make_tenant()
+    dify = AsyncMock()
+    service = _service(dify, repo=_Repo(_kb(tenant)))
+    client, token = _authed_client(service, role="knowledge_admin", tenant=tenant)
+
+    resp = client.post(
+        "/api/knowledge-bases/kb-1/documents/doc-1/retry",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 204
+    assert resp.content == b""
+    dify.retry_document_indexing.assert_awaited_once_with("ds-1", ["doc-1"])
+
+
+def test_retry_document_unknown_kb_returns_404() -> None:
+    tenant = _make_tenant()
+    dify = AsyncMock()
+    service = _service(dify, repo=_Repo())
+    client, token = _authed_client(service, role="knowledge_admin", tenant=tenant)
+
+    resp = client.post(
+        "/api/knowledge-bases/kb-9/documents/doc-1/retry",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "KB_NOT_FOUND"
+    dify.retry_document_indexing.assert_not_awaited()
+
+
+def test_delete_document_returns_204() -> None:
+    tenant = _make_tenant()
+    dify = AsyncMock()
+    service = _service(dify, repo=_Repo(_kb(tenant)))
+    client, token = _authed_client(service, role="knowledge_admin", tenant=tenant)
+
+    resp = client.delete(
+        "/api/knowledge-bases/kb-1/documents/doc-1",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 204
+    assert resp.content == b""
+    dify.delete_document.assert_awaited_once_with("ds-1", "doc-1")
+
+
+def test_delete_document_requires_knowledge_admin() -> None:
+    tenant = _make_tenant()
+    dify = AsyncMock()
+    service = _service(dify, repo=_Repo(_kb(tenant)))
+    client, token = _authed_client(service, role="employee", tenant=tenant)
+
+    resp = client.delete(
+        "/api/knowledge-bases/kb-1/documents/doc-1",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "FORBIDDEN"
+    dify.delete_document.assert_not_awaited()
+
+
+def test_delete_document_rejects_id_that_escapes_the_path_segment() -> None:
+    tenant = _make_tenant()
+    dify = AsyncMock()
+    service = _service(dify, repo=_Repo(_kb(tenant)))
+    client, token = _authed_client(service, role="knowledge_admin", tenant=tenant)
+
+    resp = client.delete(
+        "/api/knowledge-bases/kb-1/documents/%2E%2E",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "DOCUMENT_NOT_FOUND"
+    dify.delete_document.assert_not_awaited()
+
+
+def test_delete_document_during_indexing_returns_400_with_message() -> None:
+    tenant = _make_tenant()
+    dify = AsyncMock()
+    dify.delete_document.side_effect = DifyConsoleError(
+        400,
+        json.dumps(
+            {
+                "code": "document_indexing_error",
+                "message": "Cannot delete document during indexing.",
+            }
+        ),
+    )
+    service = _service(dify, repo=_Repo(_kb(tenant)))
+    client, token = _authed_client(service, role="knowledge_admin", tenant=tenant)
+
+    resp = client.delete(
+        "/api/knowledge-bases/kb-1/documents/doc-1",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 400
+    body = resp.json()["error"]
+    assert body["code"] == "DOCUMENT_DELETE_FAILED"
+    assert body["message"] == "Cannot delete document during indexing."

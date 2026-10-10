@@ -95,6 +95,8 @@ class _FakeRepository:
         self._documents = {(d.kb_id, d.document_id): d for d in documents}
         self.deleted: list[str] = []
         self.chunk_additions: list[tuple[str, int]] = []
+        self.document_additions: list[str] = []
+        self.releases: list[tuple[str, int]] = []
 
     async def get_for_tenant(
         self, session: Any, kb_id: str, tenant_id: uuid.UUID
@@ -176,11 +178,32 @@ class _FakeRepository:
         doc.error = error
         return True
 
+    async def get_document(
+        self, session: Any, *, kb_id: str, document_id: str
+    ) -> KnowledgeDocument | None:
+        return self._documents.get((kb_id, document_id))
+
     async def add_chunk_count(self, session: Any, *, kb_id: str, delta: int) -> None:
         self.chunk_additions.append((kb_id, delta))
         kb = self._kbs.get(kb_id)
         if kb is not None:
             kb.chunk_count += delta
+
+    async def add_document_count(self, session: Any, *, kb_id: str) -> None:
+        self.document_additions.append(kb_id)
+        kb = self._kbs.get(kb_id)
+        if kb is not None:
+            kb.doc_count += 1
+
+    async def release_document_counts(self, session: Any, *, kb_id: str, segments: int) -> None:
+        self.releases.append((kb_id, segments))
+        kb = self._kbs.get(kb_id)
+        if kb is not None:
+            kb.doc_count = max(kb.doc_count - 1, 0)
+            kb.chunk_count = max(kb.chunk_count - segments, 0)
+
+    async def delete_document(self, session: Any, *, kb_id: str, document_id: str) -> bool:
+        return self._documents.pop((kb_id, document_id), None) is not None
 
 
 def _collector() -> tuple[list[_Event], Any]:
@@ -554,6 +577,9 @@ async def test_upload_document_success_returns_indexing_and_emits_event() -> Non
     assert result == DocumentDto(id="doc-1", name="report.pdf", status="indexing")
     dify.upload_file.assert_awaited_once()
     dify.create_document.assert_awaited_once()
+    # The count moves through the repository's SQL increment, not an ORM
+    # read-modify-write on the KB row.
+    assert repo.document_additions == ["kb-1"]
     assert kb.doc_count == 1
     stored = repo._documents.get(("kb-1", "doc-1"))
     assert stored is not None and stored.status == "indexing"
@@ -693,6 +719,269 @@ async def test_get_document_status_emits_index_failed_on_error() -> None:
     ]
     assert repo.chunk_additions == []
     assert kb.chunk_count == 0
+
+
+@pytest.mark.asyncio
+async def test_retry_document_wraps_single_id_in_document_ids() -> None:
+    tenant = _tenant()
+    dify = AsyncMock()
+    service = _service(
+        dify, repo=_FakeRepository((_kb(tenant),), (_doc("kb-1", "doc-1", "failed"),))
+    )
+
+    await service.retry_document(AsyncMock(), tenant, "kb-1", "doc-1")
+
+    # Dify's retry endpoint only accepts the batch shape; a single document is
+    # still sent as a one-element list.
+    dify.retry_document_indexing.assert_awaited_once_with("ds-1", ["doc-1"])
+
+
+@pytest.mark.asyncio
+async def test_retry_document_maps_dify_rejection_to_400_with_message() -> None:
+    tenant = _tenant()
+    dify = AsyncMock()
+    dify.retry_document_indexing.side_effect = DifyConsoleError(
+        400, json.dumps({"message": "Document is already completed."})
+    )
+    service = _service(dify, repo=_FakeRepository((_kb(tenant),)))
+
+    with pytest.raises(AppError) as exc:
+        await service.retry_document(AsyncMock(), tenant, "kb-1", "doc-1")
+
+    assert exc.value.status_code == 400
+    assert exc.value.code == "DOCUMENT_RETRY_FAILED"
+    assert exc.value.message == "Document is already completed."
+
+
+@pytest.mark.asyncio
+async def test_retry_document_maps_missing_document_to_404() -> None:
+    tenant = _tenant()
+    dify = AsyncMock()
+    dify.retry_document_indexing.side_effect = DifyConsoleError(
+        404, json.dumps({"message": "Document Not Exists."})
+    )
+    service = _service(dify, repo=_FakeRepository((_kb(tenant),)))
+
+    with pytest.raises(AppError) as exc:
+        await service.retry_document(AsyncMock(), tenant, "kb-1", "doc-1")
+
+    assert exc.value.status_code == 404
+    assert exc.value.code == "DOCUMENT_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_delete_document_retires_local_row_and_kb_counts() -> None:
+    tenant = _tenant()
+    kb = _kb(tenant)
+    kb.doc_count = 1
+    kb.chunk_count = 5
+    dify = AsyncMock()
+    dify.get_document_indexing_status.return_value = {
+        "indexing_status": "completed",
+        "total_segments": 5,
+    }
+    repo = _FakeRepository((kb,), (_doc("kb-1", "doc-1", "completed"),))
+    service = _service(dify, repo=repo)
+
+    await service.delete_document(AsyncMock(), tenant, "kb-1", "doc-1")
+
+    dify.delete_document.assert_awaited_once_with("ds-1", "doc-1")
+    assert ("kb-1", "doc-1") not in repo._documents
+    assert repo.releases == [("kb-1", 5)]
+    assert kb.doc_count == 0
+    assert kb.chunk_count == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_document_reclaims_no_segments_for_unfinished_document() -> None:
+    """A document that never completed contributed nothing, so nothing comes back."""
+    tenant = _tenant()
+    kb = _kb(tenant)
+    kb.doc_count = 1
+    kb.chunk_count = 4
+    dify = AsyncMock()
+    repo = _FakeRepository((kb,), (_doc("kb-1", "doc-1", "failed"),))
+    service = _service(dify, repo=repo)
+
+    await service.delete_document(AsyncMock(), tenant, "kb-1", "doc-1")
+
+    assert repo.releases == [("kb-1", 0)]
+    assert kb.doc_count == 0
+    assert kb.chunk_count == 4
+    # Nothing was counted, so there is no segment count to read from Dify.
+    dify.get_document_indexing_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_document_reclaims_nothing_when_completion_is_unobserved() -> None:
+    """Dify finished the document but the platform never recorded it as completed.
+
+    The accumulator only adds on a recorded transition, so the delete must not
+    deduct segments for a document that was never counted — the per-document
+    status read is skipped entirely.
+    """
+    tenant = _tenant()
+    kb = _kb(tenant)
+    kb.doc_count = 1
+    kb.chunk_count = 3
+    dify = AsyncMock()
+    dify.get_document_indexing_status.return_value = {
+        "indexing_status": "completed",
+        "total_segments": 5,
+    }
+    repo = _FakeRepository((kb,), (_doc("kb-1", "doc-1", "indexing"),))
+    service = _service(dify, repo=repo)
+
+    await service.delete_document(AsyncMock(), tenant, "kb-1", "doc-1")
+
+    dify.delete_document.assert_awaited_once_with("ds-1", "doc-1")
+    dify.get_document_indexing_status.assert_not_awaited()
+    assert repo.releases == [("kb-1", 0)]
+    assert kb.doc_count == 0
+    assert kb.chunk_count == 3
+
+
+@pytest.mark.asyncio
+async def test_delete_document_leaves_counts_alone_without_local_row() -> None:
+    """A document the platform never tracked was never counted either."""
+    tenant = _tenant()
+    kb = _kb(tenant)
+    kb.doc_count = 0
+    kb.chunk_count = 5
+    dify = AsyncMock()
+    repo = _FakeRepository((kb,))  # no local document row
+    service = _service(dify, repo=repo)
+
+    await service.delete_document(AsyncMock(), tenant, "kb-1", "doc-1")
+
+    dify.delete_document.assert_awaited_once_with("ds-1", "doc-1")
+    dify.get_document_indexing_status.assert_not_awaited()
+    assert repo.releases == []
+    assert kb.doc_count == 0
+    assert kb.chunk_count == 5
+
+
+@pytest.mark.asyncio
+async def test_delete_document_maps_indexing_conflict_to_400() -> None:
+    tenant = _tenant()
+    kb = _kb(tenant)
+    kb.doc_count = 1
+    dify = AsyncMock()
+    dify.delete_document.side_effect = DifyConsoleError(
+        400,
+        json.dumps(
+            {
+                "code": "document_indexing_error",
+                "message": "Cannot delete document during indexing.",
+            }
+        ),
+    )
+    repo = _FakeRepository((kb,), (_doc("kb-1", "doc-1", "indexing"),))
+    service = _service(dify, repo=repo)
+
+    with pytest.raises(AppError) as exc:
+        await service.delete_document(AsyncMock(), tenant, "kb-1", "doc-1")
+
+    assert exc.value.status_code == 400
+    assert exc.value.code == "DOCUMENT_DELETE_FAILED"
+    assert exc.value.message == "Cannot delete document during indexing."
+    assert ("kb-1", "doc-1") in repo._documents
+    assert kb.doc_count == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_document_keeps_local_state_when_dify_fails() -> None:
+    tenant = _tenant()
+    kb = _kb(tenant)
+    kb.doc_count = 1
+    dify = AsyncMock()
+    dify.delete_document.side_effect = DifyConsoleError(503, "dify unavailable")
+    repo = _FakeRepository((kb,), (_doc("kb-1", "doc-1", "failed"),))
+    service = _service(dify, repo=repo)
+
+    with pytest.raises(AppError) as exc:
+        await service.delete_document(AsyncMock(), tenant, "kb-1", "doc-1")
+
+    assert exc.value.status_code == 502
+    assert exc.value.code == "DIFY_ERROR"
+    assert ("kb-1", "doc-1") in repo._documents
+    assert kb.doc_count == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_document_maps_missing_document_to_404_before_deleting() -> None:
+    """A counted document that vanished in Dify surfaces as 404 before any delete."""
+    tenant = _tenant()
+    dify = AsyncMock()
+    dify.get_document_indexing_status.side_effect = DifyConsoleError(
+        404, json.dumps({"message": "Document Not Exists."})
+    )
+    repo = _FakeRepository(
+        (_kb(tenant),), (_doc("kb-1", "doc-1", "completed"),)
+    )
+    service = _service(dify, repo=repo)
+
+    with pytest.raises(AppError) as exc:
+        await service.delete_document(AsyncMock(), tenant, "kb-1", "doc-1")
+
+    assert exc.value.status_code == 404
+    assert exc.value.code == "DOCUMENT_NOT_FOUND"
+    dify.delete_document.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_document_operations_reject_ids_that_escape_the_path_segment() -> None:
+    """``..``/separators must never reach Dify: httpx would retarget the call."""
+    tenant = _tenant()
+    dify = AsyncMock()
+    service = _service(dify, repo=_FakeRepository((_kb(tenant),)))
+
+    for bad_id in ("..", ".", "a/b", "a\\b", ""):
+        for call in (service.retry_document, service.delete_document, service.get_document_status):
+            with pytest.raises(AppError) as exc:
+                await call(AsyncMock(), tenant, "kb-1", bad_id)
+            assert exc.value.status_code == 404
+            assert exc.value.code == "DOCUMENT_NOT_FOUND"
+
+    dify.retry_document_indexing.assert_not_awaited()
+    dify.delete_document.assert_not_awaited()
+    dify.get_document_indexing_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_document_operations_map_upstream_failures_away_from_400() -> None:
+    """A rejected session or throttling is a Dify fault, not a bad request."""
+    tenant = _tenant()
+    cases = ((401, 502, "DIFY_ERROR"), (403, 502, "DIFY_ERROR"), (429, 503, "DIFY_RATE_LIMITED"))
+
+    for status_code, expected_status, expected_code in cases:
+        dify = AsyncMock()
+        dify.retry_document_indexing.side_effect = DifyConsoleError(status_code, "upstream")
+        service = _service(dify, repo=_FakeRepository((_kb(tenant),)))
+
+        with pytest.raises(AppError) as exc:
+            await service.retry_document(AsyncMock(), tenant, "kb-1", "doc-1")
+
+        assert exc.value.status_code == expected_status
+        assert exc.value.code == expected_code
+
+
+@pytest.mark.asyncio
+async def test_document_operations_never_echo_a_non_json_upstream_body() -> None:
+    tenant = _tenant()
+    dify = AsyncMock()
+    dify.delete_document.side_effect = DifyConsoleError(
+        400, "<html><body>502 Bad Gateway</body></html>"
+    )
+    repo = _FakeRepository((_kb(tenant),), (_doc("kb-1", "doc-1", "failed"),))
+    service = _service(dify, repo=repo)
+
+    with pytest.raises(AppError) as exc:
+        await service.delete_document(AsyncMock(), tenant, "kb-1", "doc-1")
+
+    assert exc.value.status_code == 400
+    assert exc.value.message == "Dify rejected the request"
+    assert "Bad Gateway" not in exc.value.message
 
 
 @pytest.mark.asyncio

@@ -118,3 +118,54 @@ async def test_add_chunk_count_accumulates_across_calls(session_factory) -> None
         kb = await session.get(KnowledgeBaseRegistry, "kb-1")
         assert kb is not None
         assert kb.chunk_count == 8
+
+
+@pytest.mark.asyncio
+async def test_add_document_count_accumulates_across_calls(session_factory) -> None:  # type: ignore[no-untyped-def]
+    """Each upload counts one document, in SQL, so none of them is lost."""
+    await _seed_kb(session_factory)
+    repo = KnowledgeRepository()
+
+    async with session_factory() as session:
+        await repo.add_document_count(session, kb_id="kb-1")
+        await repo.add_document_count(session, kb_id="kb-1")
+        await session.commit()
+
+    async with session_factory() as session:
+        kb = await session.get(KnowledgeBaseRegistry, "kb-1")
+        assert kb is not None
+        assert kb.doc_count == 2
+
+
+@pytest.mark.asyncio
+async def test_release_document_counts_decrements_and_floors_at_zero(session_factory) -> None:  # type: ignore[no-untyped-def]
+    """A delete gives back one document and its segments, never a negative total."""
+    await _seed_kb(session_factory)
+    repo = KnowledgeRepository()
+
+    async with session_factory() as session:
+        await repo.add_document_count(session, kb_id="kb-1")
+        await repo.add_chunk_count(session, kb_id="kb-1", delta=5)
+        await session.commit()
+
+    async with session_factory() as session:
+        await repo.release_document_counts(session, kb_id="kb-1", segments=5)
+        await session.commit()
+
+    async with session_factory() as session:
+        kb = await session.get(KnowledgeBaseRegistry, "kb-1")
+        assert kb is not None
+        assert kb.doc_count == 0
+        assert kb.chunk_count == 0
+
+    # Releasing again on an empty KB must hold at zero: both columns carry a
+    # non-negative check constraint the guard and ``greatest`` keep satisfied.
+    async with session_factory() as session:
+        await repo.release_document_counts(session, kb_id="kb-1", segments=5)
+        await session.commit()
+
+    async with session_factory() as session:
+        kb = await session.get(KnowledgeBaseRegistry, "kb-1")
+        assert kb is not None
+        assert kb.doc_count == 0
+        assert kb.chunk_count == 0

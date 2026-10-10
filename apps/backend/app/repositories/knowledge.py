@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import cast
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -105,6 +105,21 @@ class KnowledgeRepository:
         )
         await session.execute(stmt)
 
+    async def get_document(
+        self, session: AsyncSession, *, kb_id: str, document_id: str
+    ) -> KnowledgeDocument | None:
+        """Fetch a tracked document row inside the caller's transaction.
+
+        Callers that must decide from the *recorded* state (rather than Dify's
+        live state) read it here, so the decision matches what an earlier
+        transition wrote.
+        """
+        stmt = select(KnowledgeDocument).where(
+            KnowledgeDocument.kb_id == kb_id,
+            KnowledgeDocument.document_id == document_id,
+        )
+        return cast(KnowledgeDocument | None, await session.scalar(stmt))
+
     async def transition_document_status(
         self,
         session: AsyncSession,
@@ -145,3 +160,50 @@ class KnowledgeRepository:
             .values(chunk_count=KnowledgeBaseRegistry.chunk_count + delta)
         )
         await session.execute(stmt)
+
+    async def add_document_count(self, session: AsyncSession, *, kb_id: str) -> None:
+        """Count one more document on the KB.
+
+        The increment happens in SQL so concurrent uploads accumulate instead of
+        overwriting each other the way a read-modify-write on the ORM attribute
+        would.
+        """
+        stmt = (
+            update(KnowledgeBaseRegistry)
+            .where(KnowledgeBaseRegistry.kb_id == kb_id)
+            .values(doc_count=KnowledgeBaseRegistry.doc_count + 1)
+        )
+        await session.execute(stmt)
+
+    async def release_document_counts(
+        self, session: AsyncSession, *, kb_id: str, segments: int
+    ) -> None:
+        """Take one deleted document out of the KB's document and chunk totals.
+
+        Both counters move in SQL, so a concurrent upload or a sibling document
+        completing cannot lose its update. ``doc_count`` is guarded at zero and
+        ``chunk_count`` floored through ``greatest`` — the table's non-negative
+        check constraint would otherwise reject the decrement.
+        """
+        await session.execute(
+            update(KnowledgeBaseRegistry)
+            .where(KnowledgeBaseRegistry.kb_id == kb_id, KnowledgeBaseRegistry.doc_count > 0)
+            .values(doc_count=KnowledgeBaseRegistry.doc_count - 1)
+        )
+        await session.execute(
+            update(KnowledgeBaseRegistry)
+            .where(KnowledgeBaseRegistry.kb_id == kb_id)
+            .values(chunk_count=func.greatest(KnowledgeBaseRegistry.chunk_count - segments, 0))
+        )
+
+    async def delete_document(self, session: AsyncSession, *, kb_id: str, document_id: str) -> bool:
+        """Delete a tracked document row; ``True`` only when a row was removed."""
+        result = await session.execute(
+            delete(KnowledgeDocument)
+            .where(
+                KnowledgeDocument.kb_id == kb_id,
+                KnowledgeDocument.document_id == document_id,
+            )
+            .returning(KnowledgeDocument.document_id)
+        )
+        return result.scalar_one_or_none() is not None
