@@ -24,18 +24,29 @@ def test_localized_label_prefers_zh_then_en() -> None:
     assert _localized_label({}) is None
 
 
-def test_count_models_ignores_deprecated_and_non_models() -> None:
+def test_count_models_reads_custom_models() -> None:
+    """Custom-configuration payloads carry the provider's model rows here."""
     config = {
-        "models": [
-            {"model": "gpt-4o", "deprecated": False},
-            {"model": "gpt-3.5", "deprecated": True},
+        "status": "active",
+        "custom_models": [
+            {"model": "gpt-4o", "model_type": "llm", "credentials": None},
+            {"model": "gpt-4o-mini", "model_type": "llm", "credentials": None},
             "not-a-dict",
-            {"model": "gpt-4o-mini"},
-        ]
+        ],
     }
     assert _count_models(config) == 2
+    # A provider without custom models gets an empty list from Dify; the DTO's
+    # nullable field is what covers an explicit null (or an absent key).
+    assert _count_models({"status": "no-configure", "custom_models": []}) == 0
+    assert _count_models({"status": "no-configure", "custom_models": None}) == 0
+    assert _count_models({"custom_models": "nope"}) == 0
     assert _count_models(None) == 0
-    assert _count_models({"models": "nope"}) == 0
+
+
+def test_count_models_ignores_legacy_models_key() -> None:
+    # ``models`` is not a key of Dify's custom-configuration payload, so it is
+    # not read as a fallback.
+    assert _count_models({"models": [{"model": "gpt-4o"}, {"model": "gpt-4o-mini"}]}) == 0
 
 
 def test_normalize_providers_handles_data_envelope_and_list() -> None:
@@ -45,13 +56,20 @@ def test_normalize_providers_handles_data_envelope_and_list() -> None:
                 "provider": "openai",
                 "label": {"zh_Hans": "OpenAI"},
                 "preferred_provider_type": "custom",
-                "custom_configuration": {"models": [{"model": "gpt-4o"}, {"model": "gpt-4o-mini"}]},
+                "custom_configuration": {
+                    "status": "active",
+                    "custom_models": [
+                        {"model": "gpt-4o", "model_type": "llm"},
+                        {"model": "gpt-4o-mini", "model_type": "llm"},
+                    ],
+                },
             },
             {
                 "provider": "anthropic",
                 "label": {"en_US": "Anthropic"},
                 "preferred_provider_type": "system",
-                "system_configuration": {"models": [{"model": "claude-3"}]},
+                # System providers expose no model list, so their count is 0.
+                "system_configuration": {"enabled": True},
             },
         ]
     }
@@ -61,7 +79,7 @@ def test_normalize_providers_handles_data_envelope_and_list() -> None:
     assert providers[0].deploymentType == "custom"
     assert providers[0].modelCount == 2
     assert providers[1].deploymentType == "system"
-    assert providers[1].modelCount == 1
+    assert providers[1].modelCount == 0
 
 
 def test_normalize_providers_skips_malformed_entries() -> None:
