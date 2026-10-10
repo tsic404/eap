@@ -99,3 +99,27 @@ class KnowledgeDocument(Base):
             name="ck_knowledge_documents_status",
         ),
     )
+
+
+class KbChunkCountSnapshot(Base):
+    """A knowledge base's ``chunk_count`` as it stood before a recompute run.
+
+    ``scripts/recompute_kb_counts.py`` rebuilds totals that documents completing
+    before the accumulator shipped never incremented. Every changed KB gets one
+    row here before it is overwritten, and all rows of one run share a
+    ``snapshot_id`` — the handle ``--rollback`` restores from. The composite PK
+    also serves the per-snapshot lookup, so no separate index is needed.
+    """
+
+    __tablename__ = "kb_chunk_count_snapshots"
+
+    snapshot_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    kb_id: Mapped[str] = mapped_column(
+        String(100),
+        ForeignKey("knowledge_base_registry.kb_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    previous_chunk_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

@@ -14,6 +14,7 @@ EXPECTED_TABLES = {
     "agent_tool_bindings",
     "audit_logs",
     "conversations",
+    "kb_chunk_count_snapshots",
     "knowledge_base_registry",
     "knowledge_documents",
     "refresh_tokens",
