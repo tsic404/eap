@@ -36,10 +36,17 @@ def _localized_label(label: Any) -> str | None:
 
 
 def _count_models(configuration: Any) -> int:
-    """Count non-deprecated models inside one provider configuration."""
+    """Count non-deprecated models inside one provider configuration.
+
+    Dify 1.17.0 names the list ``custom_models`` and sends ``null`` when the
+    provider exposes none; ``models`` is accepted as a fallback for payloads
+    that predate that key.
+    """
     if not isinstance(configuration, dict):
         return 0
-    models = configuration.get("models")
+    models = configuration.get("custom_models")
+    if models is None:
+        models = configuration.get("models")
     if not isinstance(models, list):
         return 0
     return sum(1 for model in models if isinstance(model, dict) and not model.get("deprecated"))

@@ -24,18 +24,30 @@ def test_localized_label_prefers_zh_then_en() -> None:
     assert _localized_label({}) is None
 
 
-def test_count_models_ignores_deprecated_and_non_models() -> None:
+def test_count_models_reads_custom_models() -> None:
+    """Dify 1.17.0 sends the provider model list as ``custom_models``."""
     config = {
-        "models": [
-            {"model": "gpt-4o", "deprecated": False},
-            {"model": "gpt-3.5", "deprecated": True},
+        "custom_models": [
+            {"model": "gpt-4o", "model_type": "llm"},
+            {"model": "gpt-4o-mini", "model_type": "llm"},
+            {"model": "gpt-3.5-turbo", "model_type": "llm", "deprecated": True},
             "not-a-dict",
-            {"model": "gpt-4o-mini"},
         ]
     }
     assert _count_models(config) == 2
+    assert _count_models({"custom_models": None}) == 0
+    assert _count_models({"custom_models": "nope"}) == 0
     assert _count_models(None) == 0
+
+
+def test_count_models_falls_back_to_legacy_models_key() -> None:
+    assert _count_models({"models": [{"model": "gpt-4o"}, {"model": "gpt-4o-mini"}]}) == 2
     assert _count_models({"models": "nope"}) == 0
+    # An explicit null must fall back too — Dify 1.17.0 sends null, not a
+    # missing key, when a provider has no custom models configured.
+    assert _count_models({"custom_models": None, "models": [{"model": "gpt-4o"}]}) == 1
+    # When the current key carries a list it wins over the legacy one.
+    assert _count_models({"custom_models": [{"model": "a"}], "models": [{"model": "b"}]}) == 1
 
 
 def test_normalize_providers_handles_data_envelope_and_list() -> None:
@@ -45,7 +57,13 @@ def test_normalize_providers_handles_data_envelope_and_list() -> None:
                 "provider": "openai",
                 "label": {"zh_Hans": "OpenAI"},
                 "preferred_provider_type": "custom",
-                "custom_configuration": {"models": [{"model": "gpt-4o"}, {"model": "gpt-4o-mini"}]},
+                "custom_configuration": {
+                    "status": "active",
+                    "custom_models": [
+                        {"model": "gpt-4o", "model_type": "llm"},
+                        {"model": "gpt-4o-mini", "model_type": "llm"},
+                    ],
+                },
             },
             {
                 "provider": "anthropic",
