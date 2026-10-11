@@ -113,7 +113,11 @@ def test_list_models_returns_providers_for_admin(monkeypatch) -> None:
                     "label": {"zh_Hans": "OpenAI"},
                     "preferred_provider_type": "custom",
                     "custom_configuration": {
-                        "models": [{"model": "gpt-4o"}, {"model": "gpt-4o-mini"}]
+                        "status": "active",
+                        "custom_models": [
+                            {"model": "gpt-4o", "model_type": "llm"},
+                            {"model": "gpt-4o-mini", "model_type": "llm"},
+                        ],
                     },
                 }
             ]

@@ -363,7 +363,12 @@ def default_console() -> Any:
                 "provider": "openai",
                 "label": {"en_US": "OpenAI"},
                 "preferred_provider_type": "custom",
-                "custom_configuration": {"models": [{"deprecated": False}]},
+                "custom_configuration": {
+                    "status": "active",
+                    "custom_models": [
+                        {"model": "gpt-4o", "model_type": "llm", "credentials": None}
+                    ],
+                },
             }
         ]
     }
