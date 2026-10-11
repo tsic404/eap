@@ -14,6 +14,7 @@ EXPECTED_TABLES = {
     "agent_tool_bindings",
     "audit_logs",
     "conversations",
+    "kb_chunk_count_snapshots",
     "knowledge_base_registry",
     "knowledge_documents",
     "refresh_tokens",
@@ -124,6 +125,11 @@ def test_check_constraints_present() -> None:
     }
     assert "ck_user_memories_ranges" in {
         c.name for c in tables["user_memories"].constraints if isinstance(c, CheckConstraint)
+    }
+    assert "ck_kb_chunk_count_snapshots_counts_non_negative" in {
+        c.name
+        for c in tables["kb_chunk_count_snapshots"].constraints
+        if isinstance(c, CheckConstraint)
     }
 
 
