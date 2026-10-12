@@ -1,7 +1,8 @@
 // P1 baseline: chat first-token latency (POST /api/conversations/{id}/messages).
 //
 // Prerequisites (see docs/perf-baseline.md for the full runbook):
-// - Backend up and Dify reachable (`GET /api/health/ready` → 200).
+// - Backend up, and Dify reachable with a configured model provider in its
+//   workspace (`GET /api/health/ready` → 200).
 // - The target agent bound to a Dify app (its `dify_api_key` is stored in the
 //   backend, not injected here).
 // - A live conversation + agent id for the authenticated tenant.

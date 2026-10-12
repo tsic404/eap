@@ -19,7 +19,8 @@
    安装：<https://grafana.com/docs/k6/latest/set-up/install-k6/>。
 2. **后端就绪**：`curl http://localhost/api/health/live` 返回 200。
 3. **Dify 就绪（仅 first-token）**：`curl http://localhost/api/health/ready` 返回
-   200（`/ready` 会探测 PostgreSQL / Redis / Dify，任一不可达返回 503）。
+   200（`/ready` 探测 PostgreSQL / Redis / Dify；`dify` 项还要求控制台账号可登录
+   且工作区已配置模型供应商，任一不满足即 503）。
 4. **dify_api_key 注入（仅 first-token）**：目标智能体已在后端绑定其 Dify 应用
    密钥（`dify_api_key` 存于后端，不注入 k6 脚本）。未绑定时消息流会以 Dify
    侧错误返回，first-token 样本不可信。

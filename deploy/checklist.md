@@ -19,7 +19,7 @@
 - [ ] Dify API 已部署并可通过内网访问（`curl http://dify-api:5001/v1/info`）
 - [ ] Dify Worker 已部署（异步索引任务必需）
 - [ ] Dify Plugin Daemon 已部署并可访问（`curl http://plugin-daemon:5002/health/check`；知识库与对话依赖它托管模型插件）
-- [ ] Dify 已配置模型供应商（控制台安装模型插件并设置默认 embedding / LLM 模型；否则知识库创建返回 `Default model not found for text-embedding`，对话无法生成）
+- [ ] Dify 已配置模型供应商（控制台安装模型插件并设置默认 embedding / LLM 模型；否则知识库创建返回 `Default model not found for text-embedding`，对话无法生成，且 `/api/health/ready` 的 `dify` 项报 `error`）
 - [ ] Weaviate 已部署（向量检索必需）
 
 ## 部署步骤
@@ -28,7 +28,7 @@
 2. **构建前端**：`cd apps/frontend && pnpm build`
 3. **构建后端镜像**：`cd apps/backend && docker build -t eap-backend .`
 4. **启动服务**：`docker compose -f docker-compose.prod.yml up -d`
-5. **验证健康**：`curl http://localhost/api/health/ready` → 200，且 `checks` 中 `database`/`redis`/`dify` 均为 `ok`
+5. **验证健康**：`curl http://localhost/api/health/ready` → 200，且 `checks` 中 `database`/`redis`/`dify` 均为 `ok`（`dify` 为 `ok` 要求 `DIFY_CONSOLE_EMAIL` / `DIFY_CONSOLE_PASSWORD` 可登录控制台，且工作区已有配置凭据的模型供应商）
 6. **创建初始租户**：`cd apps/backend && python -m app.seed`
 7. **验证登录**：浏览器访问 `http://localhost/login` → SSO 登录 → 成功跳转 `/user`
 
