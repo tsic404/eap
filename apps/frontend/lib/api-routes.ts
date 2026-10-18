@@ -17,6 +17,8 @@ export const API_ROUTES = {
   refresh: "/auth/refresh",
   logout: "/auth/logout",
   me: "/me",
+  capabilities: "/auth/capabilities",
+  localLogin: "/auth/login/local",
   agents: "/agents",
   tools: "/tools",
   tasks: "/tasks",

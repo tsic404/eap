@@ -11,6 +11,7 @@ import {
 } from "react";
 
 import { API_ROUTES, AUTH_ROUTES, ROUTES } from "@/lib/api-routes";
+import { loginWithLocalAccount } from "@/lib/auth-service";
 import type { ApiEnvelope, CurrentUser, Tenant } from "@/lib/auth-types";
 import { apiClient, refreshAccessToken } from "@/lib/http-client";
 import { resolveRole } from "@/lib/roles";
@@ -24,6 +25,7 @@ export interface AuthContextValue {
   isAuthenticated: boolean;
   error: string | null;
   login: (provider: string) => void;
+  loginWithPassword: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshToken: () => Promise<string | null>;
 }
@@ -91,6 +93,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     );
   }, []);
 
+  const loginWithPassword = useCallback(
+    async (email: string, password: string) => {
+      await loginWithLocalAccount(email, password);
+      // The login response carries the refresh cookie and no access token, so
+      // the session is opened exactly like the SSO landing: refresh channel
+      // first, then the profile.
+      const token = await refreshAccessToken();
+      if (!token) {
+        throw new Error("Local login succeeded but the refresh channel returned no access token");
+      }
+      await loadUser();
+      window.location.assign(ROUTES.home);
+    },
+    [loadUser],
+  );
+
   const logout = useCallback(async () => {
     try {
       await apiClient.post(API_ROUTES.logout);
@@ -124,10 +142,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       isAuthenticated: user !== null,
       error,
       login,
+      loginWithPassword,
       logout,
       refreshToken,
     }),
-    [user, tenant, isLoading, error, login, logout, refreshToken],
+    [user, tenant, isLoading, error, login, loginWithPassword, logout, refreshToken],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

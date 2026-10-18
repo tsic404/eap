@@ -1,0 +1,14 @@
+// Local accounts seeded by `global-setup.mjs` for the local-login journeys.
+// Shared by the plain-ESM setup and the TypeScript specs, so the credentials
+// exist once. CommonJS keeps the same module loadable from both.
+
+/** Shared password of every seeded local account. */
+const LOCAL_ACCOUNT_PASSWORD = "Local-Account-1";
+
+/** Seeded local accounts, keyed by the role they carry. */
+const LOCAL_ACCOUNTS = {
+  admin: { email: "carol@acme.com", name: "Carol", role: "agent_admin" },
+  employee: { email: "dave@acme.com", name: "Dave", role: "employee" },
+};
+
+module.exports = { LOCAL_ACCOUNT_PASSWORD, LOCAL_ACCOUNTS };
