@@ -677,14 +677,23 @@ async def _seed_agent(session_factory, tenant: Tenant, user: User, *, agent_id: 
 
 
 async def _bind_row(  # type: ignore[no-untyped-def]
-    session_factory, *, agent_id: str, kb_id: str | None = None, tool_id: str | None = None
+    session_factory,
+    tenant: Tenant,
+    *,
+    agent_id: str,
+    kb_id: str | None = None,
+    tool_id: str | None = None,
 ) -> None:
-    """Write binding rows directly, reproducing rows a pre-fix deployment stored."""
+    """Write binding rows directly, reproducing rows a pre-fix deployment stored.
+
+    The agent-identity migration backfilled each binding's tenant from
+    ``agent_registry``, so the seed states the agent's tenant itself.
+    """
     async with session_factory() as session:
         if kb_id is not None:
-            session.add(AgentKnowledgeBinding(agent_id=agent_id, kb_id=kb_id))
+            session.add(AgentKnowledgeBinding(tenant_id=tenant.id, agent_id=agent_id, kb_id=kb_id))
         if tool_id is not None:
-            session.add(AgentToolBinding(agent_id=agent_id, tool_id=tool_id))
+            session.add(AgentToolBinding(tenant_id=tenant.id, agent_id=agent_id, tool_id=tool_id))
         await session.commit()
 
 
@@ -798,7 +807,7 @@ async def test_update_rejects_a_foreign_binding_and_keeps_the_stored_set(  # typ
     await _seed_kb(session_factory, acme, kb_id="kb-acme", name="Acme Handbook")
     await _seed_tool(session_factory, tool_id="tool-globex", name="Globex CRM", tenant=globex)
     await _seed_agent(session_factory, acme, user, agent_id="bot-replace")
-    await _bind_row(session_factory, agent_id="bot-replace", kb_id="kb-acme")
+    await _bind_row(session_factory, acme, agent_id="bot-replace", kb_id="kb-acme")
 
     harness = await _start(session_factory, acme, user)
     try:
@@ -840,12 +849,13 @@ async def test_detail_hides_a_binding_that_points_at_another_tenant(  # type: ig
     await _seed_agent(session_factory, acme, user, agent_id="bot-legacy")
     await _bind_row(
         session_factory,
+        acme,
         agent_id="bot-legacy",
         kb_id="kb-globex",
         tool_id="tool-globex",
     )
-    await _bind_row(session_factory, agent_id="bot-legacy", kb_id="kb-acme")
-    await _bind_row(session_factory, agent_id="bot-legacy", tool_id="tool-shared")
+    await _bind_row(session_factory, acme, agent_id="bot-legacy", kb_id="kb-acme")
+    await _bind_row(session_factory, acme, agent_id="bot-legacy", tool_id="tool-shared")
 
     harness = await _start(session_factory, acme, user)
     try:

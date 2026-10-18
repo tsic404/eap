@@ -13,12 +13,15 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { DEFAULT_SSO_PROVIDER } from "@/lib/api-routes";
+import { fetchAuthCapabilities } from "@/lib/auth-service";
 import { useAuth } from "./auth-context";
+import { LocalLoginForm } from "./local-login-form";
 
-/** Centred login card with a single SSO entry point and an error state. */
+/** Centred login card: the enterprise entry, plus the local account form when enabled. */
 export function LoginPage() {
   const { login, error } = useAuth();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLocalLoginEnabled, setIsLocalLoginEnabled] = useState(false);
   const [queryError, setQueryError] = useState<string | null>(null);
   const t = useTranslations("login");
 
@@ -26,6 +29,21 @@ export function LoginPage() {
     if (typeof window !== "undefined") {
       setQueryError(new URLSearchParams(window.location.search).get("error"));
     }
+  }, []);
+
+  // The capability read point is the only switch (C-110). A read point that
+  // cannot be reached leaves the form hidden rather than offering an entry the
+  // deployment may not serve.
+  useEffect(() => {
+    let cancelled = false;
+    fetchAuthCapabilities()
+      .then((capabilities) => {
+        if (!cancelled) setIsLocalLoginEnabled(capabilities.localLoginEnabled);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleLogin = () => {
@@ -51,6 +69,7 @@ export function LoginPage() {
           >
             {t("sso")}
           </Button>
+          {isLocalLoginEnabled && <LocalLoginForm />}
           {displayError && (
             <p role="alert" className="text-sm text-danger">
               {displayError}
