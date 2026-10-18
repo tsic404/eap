@@ -376,7 +376,6 @@ async def test_list_is_tenant_filtered_includes_global_tools_and_detail_is_404_a
     assert cross_tenant.json()["error"]["code"] == "TOOL_NOT_FOUND"
 
 
-@pytest.mark.xfail(reason="C-65 archived-tool list filter not implemented at main@68ad4b5")
 @pytest.mark.asyncio
 async def test_list_excludes_archived_tools(api) -> None:
     tenant, admin = await api.seed(role="agent_admin")
