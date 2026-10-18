@@ -13,6 +13,8 @@ missing one and leaves no half-written row behind. Both facets serve
 
 from __future__ import annotations
 
+import json
+import logging
 import uuid
 from unittest.mock import AsyncMock
 
@@ -287,19 +289,26 @@ async def test_create_when_upstream_returns_no_app_id_returns_502_and_writes_not
 
     resp = await _create(api, headers, _payload("no-id-bot"))
 
-    assert resp.status_code == 502
-    assert resp.json()["error"]["code"] == "DIFY_ERROR"
+    assert resp.status_code == 502, resp.text
+    # C-99 also covers "engine answered without the resource": the envelope is the
+    # fixed one — no upstream payload and no `details` may ride along (F1).
+    assert resp.json() == {
+        "error": {"code": "DIFY_ERROR", "message": "Dify did not return a app id"}
+    }
     api.console.create_api_key.assert_not_awaited()
     assert await _list_agent_ids(api, headers) == []
 
 
 @pytest.mark.asyncio
-async def test_create_rolls_back_and_deletes_the_upstream_app_when_a_later_step_fails(api) -> None:
+async def test_create_rolls_back_and_deletes_the_upstream_app_when_a_later_step_fails(
+    api, caplog: pytest.LogCaptureFixture
+) -> None:
     api.console.create_api_key.side_effect = DifyConsoleError(500, "boom")
     tenant, user = await api.seed(role="agent_admin")
     headers = api.auth(user, tenant)
 
-    resp = await _create(api, headers, _payload("saga-bot"))
+    with caplog.at_level(logging.WARNING, logger="app.services.agent_service"):
+        resp = await _create(api, headers, _payload("saga-bot"))
 
     # C-31 compensation is independent of the status mapping: the upstream app
     # created before the failing step must be deleted and no half-written row may
@@ -309,15 +318,25 @@ async def test_create_rolls_back_and_deletes_the_upstream_app_when_a_later_step_
     assert await _list_agent_ids(api, headers) == []
 
     # C-99 pins every inference-engine call failure to 502 `DIFY_ERROR` (C-31
-    # repeats that for the create path). The implementation maps only
-    # `IntegrityError` and lets `DifyConsoleError` escape as the catch-all 500,
-    # so that gap is registered here instead of asserted as expected behaviour.
-    if resp.status_code == 500:
-        pytest.xfail(
-            "C-99 inference-engine call failure -> 502 DIFY_ERROR not implemented at main@68ad4b5"
-        )
+    # repeats that for the create path); the envelope is the fixed one, so the
+    # engine's own payload (here `boom`) must not reach the client (F1).
     assert resp.status_code == 502, resp.text
-    assert resp.json()["error"]["code"] == "DIFY_ERROR"
+    assert resp.json() == {
+        "error": {"code": "DIFY_ERROR", "message": "Inference engine request failed"}
+    }
+    assert "boom" not in resp.text
+
+    # F1 keeps the engine fault out of the response; this warning is the only
+    # server-side record, so it must name the app and upstream status once.
+    failed_calls = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if "agent_upstream_call_failed" in record.getMessage()
+    ]
+    assert len(failed_calls) == 1
+    assert failed_calls[0]["action"] == "agent_upstream_call_failed"
+    assert failed_calls[0]["dify_app_id"] == "dify-app-1"
+    assert failed_calls[0]["status_code"] == 500
 
 
 @pytest.mark.asyncio
