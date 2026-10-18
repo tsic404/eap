@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import cast
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -172,6 +172,31 @@ class KnowledgeRepository:
         )
         result = await session.execute(stmt)
         return result.scalar_one_or_none() is not None
+
+    async def refresh_indexing_status(self, session: AsyncSession, *, kb_id: str) -> None:
+        """Recompute the KB's aggregated indexing status from its document rows.
+
+        The rule is fixed: any still-indexing document makes the knowledge base
+        indexing; otherwise a failed one makes it failed; otherwise — no
+        documents included — it is ready. Deriving and storing the aggregate in
+        one statement keeps it from being read between two writes.
+        """
+        indexing = (
+            select(KnowledgeDocument.document_id)
+            .where(KnowledgeDocument.kb_id == kb_id, KnowledgeDocument.status == "indexing")
+            .exists()
+        )
+        failed = (
+            select(KnowledgeDocument.document_id)
+            .where(KnowledgeDocument.kb_id == kb_id, KnowledgeDocument.status == "failed")
+            .exists()
+        )
+        stmt = (
+            update(KnowledgeBaseRegistry)
+            .where(KnowledgeBaseRegistry.kb_id == kb_id)
+            .values(indexing_status=case((indexing, "indexing"), (failed, "failed"), else_="ready"))
+        )
+        await session.execute(stmt)
 
     async def add_chunk_count(self, session: AsyncSession, *, kb_id: str, delta: int) -> None:
         """Add ``delta`` segments to the KB's chunk total.

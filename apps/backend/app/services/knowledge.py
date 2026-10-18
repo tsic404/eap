@@ -261,6 +261,8 @@ class KnowledgeService:
             document_id=document["id"],
             name=filename,
         )
+        # The new document enters indexing, which the KB-level status aggregates.
+        await self._repository.refresh_indexing_status(session, kb_id=kb.kb_id)
         await session.commit()
 
         await self._bus.emit(
@@ -386,6 +388,8 @@ class KnowledgeService:
             await self._repository.release_document_counts(
                 session, kb_id=kb.kb_id, segments=segments
             )
+            # Re-fold the aggregate now that the document row is gone.
+            await self._repository.refresh_indexing_status(session, kb_id=kb.kb_id)
         await session.commit()
 
     # ── retrieval test ──
@@ -398,6 +402,9 @@ class KnowledgeService:
         dto: RetrieveTestDto,
     ) -> RetrieveTestResultDto:
         kb = await self._require_kb(session, tenant, kb_id)
+        # C-41/C-43: refuse while indexing, before the key is resolved or upstream called.
+        if kb.indexing_status == "indexing":
+            raise AppError(409, "KB_INDEXING", "知识库正在索引中，召回测试暂不可用")
 
         retriever = self._retriever
         owns_client = retriever is None
@@ -484,6 +491,8 @@ class KnowledgeService:
         )
         if not transitioned:
             return False
+        # A document leaving indexing moves the aggregate in this same transaction.
+        await self._repository.refresh_indexing_status(session, kb_id=kb.kb_id)
         if status == "completed":
             if segments is None:
                 payload = await self._dify_console.get_document_indexing_status(
