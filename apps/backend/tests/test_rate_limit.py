@@ -174,6 +174,34 @@ def test_middleware_returns_429_on_global_exhaustion() -> None:
         assert resp.json()["error"]["code"] == "RATE_LIMITED"
 
 
+# Port 1 has no listener: an unreachable shared store without a network wait.
+_UNREACHABLE_REDIS_URL = "redis://127.0.0.1:1/0"
+
+
+def test_middleware_degrades_when_shared_store_is_unreachable() -> None:
+    settings = Settings(_env_file=None, rate_limit_requests=2, rate_limit_window_seconds=3600)
+    limiter = RedisTokenBucket(_UNREACHABLE_REDIS_URL)
+    app = FastAPI()
+    app.add_middleware(RateLimitMiddleware, settings=settings, limiter=limiter)
+
+    @app.get("/api/anything")
+    def anything() -> dict[str, str]:
+        return {"ok": "yes"}
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        first = client.get("/api/anything")
+        second = client.get("/api/anything")
+        third = client.get("/api/anything")
+
+    # An unreachable shared store degrades the limiter; it must not fail the request.
+    assert first.status_code == 200
+    assert second.status_code == 200
+    # During the outage the in-process bucket keeps enforcing the same limit.
+    assert third.status_code == 429
+    assert third.json()["error"]["code"] == "RATE_LIMITED"
+    assert limiter._unavailable is True
+
+
 def _redis_available() -> bool:
     import redis
 
