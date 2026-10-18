@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import functools
 import os
 import uuid
 from collections.abc import AsyncIterator, Iterator
 
 import pytest
 import pytest_asyncio
+import redis
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
@@ -22,6 +24,48 @@ from app.models.base import Base
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL", "postgresql+asyncpg://eap:eap_password@localhost:5432/eap"
 )
+
+# The store a developer's compose stack provides. Cases needing the real thing
+# are marked ``requires_redis``; the probe is shared so the port and the probe
+# method have one home.
+_LOCAL_REDIS_URL = "redis://localhost:6379/0"
+
+
+@functools.lru_cache(maxsize=1)
+def redis_available() -> bool:
+    """Whether a shared store answers on this machine (probed once per session)."""
+    try:
+        return bool(redis.Redis.from_url(_LOCAL_REDIS_URL, socket_connect_timeout=1).ping())
+    except redis.RedisError:
+        return False
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Skip ``requires_redis`` cases when this machine has no shared store."""
+    if not any("requires_redis" in item.keywords for item in items):
+        return
+    if redis_available():
+        return
+    skip = pytest.mark.skip(reason="Redis not available")
+    for item in items:
+        if "requires_redis" in item.keywords:
+            item.add_marker(skip)
+
+
+@pytest.fixture
+def local_redis_url() -> str:
+    """URL of the shared store on this machine."""
+    return _LOCAL_REDIS_URL
+
+
+# Port 1 has no listener: an unreachable store without a network wait.
+_UNREACHABLE_REDIS_URL = "redis://127.0.0.1:1/0"
+
+
+@pytest.fixture
+def unreachable_redis_url() -> str:
+    """URL of a store that refuses connections, for degradation cases."""
+    return _UNREACHABLE_REDIS_URL
 
 
 class FakeRedis:

@@ -7,6 +7,8 @@ import redis.asyncio as aioredis
 from fastapi import FastAPI
 from prometheus_fastapi_instrumentator import Instrumentator
 
+from app.auth.local_login import LocalLoginService
+from app.auth.login_lockout import RedisLoginAttempts
 from app.auth.oidc import OidcClient
 from app.auth.refresh import RefreshService
 from app.auth.routes import router as auth_router
@@ -69,6 +71,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.oidc = oidc
     app.state.state_store = OidcStateStore(redis)
     app.state.refresh_service = RefreshService(settings)
+    # Local login shares this client: the failure lockout counts on shared storage.
+    app.state.login_attempts = RedisLoginAttempts(redis)
+    app.state.local_login_service = LocalLoginService(
+        settings, limiter=app.state.rate_limiter, attempts=app.state.login_attempts
+    )
     app.state.task_reconcile_scheduler.start()
     try:
         yield
@@ -78,6 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await redis.aclose()
         await dify_console.shutdown()
         await app.state.rate_limiter.aclose()
+        await app.state.login_attempts.aclose()
         await app.state.tool_proxy.aclose()
         log.info("shutdown")
 

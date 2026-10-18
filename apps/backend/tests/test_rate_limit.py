@@ -15,6 +15,7 @@ from app.rate_limit import (
     InMemoryTokenBucket,
     RateLimitRule,
     RedisTokenBucket,
+    bucket_key,
     build_rules,
     matches_path,
 )
@@ -64,19 +65,10 @@ def test_bucket_key_uses_user_for_per_user_rules() -> None:
         path_prefixes=("/api/conversations",),
         per_user=True,
     )
-    assert (
-        RateLimitMiddleware._bucket_key(global_rule, "1.2.3.4", "user-9")
-        == "ratelimit:global:1.2.3.4"
-    )
-    assert (
-        RateLimitMiddleware._bucket_key(conversation_rule, "1.2.3.4", "user-9")
-        == "ratelimit:conversation:user-9"
-    )
+    assert bucket_key(global_rule, "1.2.3.4", "user-9") == "ratelimit:global:1.2.3.4"
+    assert bucket_key(conversation_rule, "1.2.3.4", "user-9") == "ratelimit:conversation:user-9"
     # Anonymous falls back to the client IP.
-    assert (
-        RateLimitMiddleware._bucket_key(conversation_rule, "1.2.3.4", None)
-        == "ratelimit:conversation:1.2.3.4"
-    )
+    assert bucket_key(conversation_rule, "1.2.3.4", None) == "ratelimit:conversation:1.2.3.4"
 
 
 @pytest.mark.asyncio
@@ -174,13 +166,9 @@ def test_middleware_returns_429_on_global_exhaustion() -> None:
         assert resp.json()["error"]["code"] == "RATE_LIMITED"
 
 
-# Port 1 has no listener: an unreachable shared store without a network wait.
-_UNREACHABLE_REDIS_URL = "redis://127.0.0.1:1/0"
-
-
-def test_middleware_degrades_when_shared_store_is_unreachable() -> None:
+def test_middleware_degrades_when_shared_store_is_unreachable(unreachable_redis_url: str) -> None:
     settings = Settings(_env_file=None, rate_limit_requests=2, rate_limit_window_seconds=3600)
-    limiter = RedisTokenBucket(_UNREACHABLE_REDIS_URL)
+    limiter = RedisTokenBucket(unreachable_redis_url)
     app = FastAPI()
     app.add_middleware(RateLimitMiddleware, settings=settings, limiter=limiter)
 
@@ -202,21 +190,10 @@ def test_middleware_degrades_when_shared_store_is_unreachable() -> None:
     assert limiter._unavailable is True
 
 
-def _redis_available() -> bool:
-    import redis
-
-    try:
-        return bool(
-            redis.Redis.from_url("redis://localhost:6379/0", socket_connect_timeout=1).ping()
-        )
-    except redis.RedisError:
-        return False
-
-
-@pytest.mark.skipif(not _redis_available(), reason="Redis not available")
+@pytest.mark.requires_redis
 @pytest.mark.asyncio
-async def test_redis_bucket_grants_then_rejects() -> None:
-    limiter = RedisTokenBucket("redis://localhost:6379/0")
+async def test_redis_bucket_grants_then_rejects(local_redis_url: str) -> None:
+    limiter = RedisTokenBucket(local_redis_url)
     # Unique key so a prior run's bucket (TTL in the thousands of seconds) can
     # not leak tokens into this assertion.
     key = f"ratelimit:test:{uuid.uuid4().hex}"

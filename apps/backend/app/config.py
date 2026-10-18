@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     # Refresh-token rotation (architecture §34.1). Access tokens always live 15
     # minutes (the OIDC spec constant); refresh tokens default to 30 days.
     refresh_token_ttl_seconds: int = 2592000
+    # Local account password login (ADR-007, C-110): two states only, and an
+    # undeclared deployment gets the disabled one (``LOCAL_LOGIN_ENABLED``).
+    local_login_enabled: bool = False
     # The refresh-token cookie is Secure only when the app runs behind HTTPS
     # (production). Local HTTP development leaves it unset so browsers accept it.
     cookie_secure: bool = False

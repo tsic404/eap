@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, cast
 
 import redis.asyncio as aioredis
 import structlog
 from redis.exceptions import RedisError
+from starlette.types import Scope
 
 from app.config import Settings
 
@@ -175,6 +176,9 @@ class RateLimitRule:
     # ``True`` keys the bucket by authenticated user id (falling back to the
     # client IP); ``False`` always keys by client IP.
     per_user: bool = False
+    # Paths whose route consumes this same bucket itself, because a contractual
+    # judgement step must run before the limit applies.
+    self_limited_paths: tuple[str, ...] = ()
 
 
 # Conventional REST paths for the per-route limits. The auth / conversation /
@@ -182,6 +186,9 @@ class RateLimitRule:
 # resource naming (``/api/<plural-noun>``) so they apply the moment those routes
 # are registered.
 _LOGIN_PREFIXES = ("/api/auth/login",)
+# The local-login route sits under the login prefix but owns its own limit
+# consumption: C-111 judges the capability switch before the login rate limit.
+LOCAL_LOGIN_PATH = "/api/auth/login/local"
 _CONVERSATION_PREFIXES = ("/api/conversations", "/api/chat-messages")
 _UPLOAD_PREFIXES = ("/api/uploads", "/api/files")
 
@@ -204,6 +211,7 @@ def build_rules(settings: Settings) -> list[RateLimitRule]:
             capacity=settings.rate_limit_login_per_minute,
             refill_per_second=settings.rate_limit_login_per_minute / 60.0,
             path_prefixes=_LOGIN_PREFIXES,
+            self_limited_paths=(LOCAL_LOGIN_PATH,),
         ),
         RateLimitRule(
             name="conversation",
@@ -226,3 +234,42 @@ def build_rules(settings: Settings) -> list[RateLimitRule]:
 def matches_path(path: str, prefixes: tuple[str, ...]) -> bool:
     """Whether ``path`` equals a prefix or lives under one (``prefix/…``)."""
     return any(path == prefix or path.startswith(prefix + "/") for prefix in prefixes)
+
+
+def login_rule(settings: Settings) -> RateLimitRule | None:
+    """The C-10 login rule (client IP, per-minute bucket), or None when disabled."""
+    if not settings.rate_limit_enabled:
+        return None
+    return next((rule for rule in build_rules(settings) if rule.name == "login"), None)
+
+
+def bucket_key(rule: RateLimitRule, client_ip: str, user_id: str | None) -> str:
+    """The shared storage key holding ``rule``'s bucket for one caller."""
+    identity = (user_id or client_ip) if rule.per_user else client_ip
+    return f"ratelimit:{rule.name}:{identity}"
+
+
+def client_ip(scope: Scope, trusted_proxy_count: int) -> str:
+    """Resolve the caller's IP from a request scope.
+
+    Only honour ``X-Forwarded-For`` when a known number of trusted proxies sit
+    in front: the rightmost ``trusted_proxy_count`` entries are appended by
+    those proxies, so the real client is the entry just before them.
+    """
+    if trusted_proxy_count > 0:
+        forwarded = _header(scope, "x-forwarded-for")
+        if forwarded:
+            hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
+            if hops:
+                index = max(0, len(hops) - trusted_proxy_count)
+                return hops[index]
+    client = scope.get("client")
+    return str(client[0]) if client else "unknown"
+
+
+def _header(scope: Scope, name: str) -> str | None:
+    headers = cast(list[tuple[bytes, bytes]], scope.get("headers", []))
+    for key, value in headers:
+        if key.lower() == name.lower().encode():
+            return value.decode("latin-1")
+    return None
