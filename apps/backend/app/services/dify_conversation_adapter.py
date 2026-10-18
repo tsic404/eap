@@ -155,6 +155,10 @@ class DifyConversationAdapter:
                 )
                 for event in events:
                     yield event
+                # C-101: the error event ends the stream; upstream frames after
+                # it are not relayed, and neither is the pending buffer.
+                if any(mapped["event"] == "error" for mapped in events):
+                    return
 
         # Flush a final frame that ended without a trailing newline — e.g. the
         # closing ``message_end`` — so ``conversation.completed`` still fires.
