@@ -474,7 +474,6 @@ async def test_delete_bound_kb_returns_409_kb_in_use(api) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="C-38 bound-KB error details not implemented at main@68ad4b5")
 async def test_delete_bound_kb_details_carry_the_binding_agent_list(api) -> None:
     tenant, user = await api.seed(role="agent_admin")
     headers = api.auth(user, tenant)
@@ -489,7 +488,6 @@ async def test_delete_bound_kb_details_carry_the_binding_agent_list(api) -> None
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="C-38 cascade delete unbinding first not implemented at main@68ad4b5")
 async def test_cascade_delete_unbinds_agents_then_removes_the_kb(api) -> None:
     tenant, user = await api.seed(role="agent_admin")
     headers = api.auth(user, tenant)
@@ -506,7 +504,6 @@ async def test_cascade_delete_unbinds_agents_then_removes_the_kb(api) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="C-38 upstream delete failure 502 not implemented at main@68ad4b5")
 async def test_delete_kb_reports_upstream_failure_as_502_and_keeps_the_record(api) -> None:
     tenant, user = await api.seed(role="knowledge_admin")
     headers = api.auth(user, tenant)

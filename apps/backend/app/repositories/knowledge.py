@@ -9,6 +9,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.agent import AgentKnowledgeBinding, AgentRegistry
 from app.models.knowledge import KnowledgeBaseRegistry, KnowledgeDocument
 from app.schemas.knowledge import DocumentStatus
 
@@ -81,6 +82,31 @@ class KnowledgeRepository:
 
     async def delete(self, session: AsyncSession, kb: KnowledgeBaseRegistry) -> None:
         await session.delete(kb)
+
+    async def list_bound_agents(
+        self, session: AsyncSession, *, kb_id: str, tenant_id: uuid.UUID
+    ) -> list[tuple[str, str]]:
+        """``(agent_id, name)`` of every agent of ``tenant_id`` bound to ``kb_id``."""
+        stmt = (
+            select(AgentKnowledgeBinding.agent_id, AgentRegistry.name)
+            .join(AgentRegistry, AgentRegistry.agent_id == AgentKnowledgeBinding.agent_id)
+            .where(
+                AgentKnowledgeBinding.kb_id == kb_id,
+                AgentRegistry.tenant_id == tenant_id,
+            )
+            .order_by(AgentKnowledgeBinding.agent_id)
+        )
+        return [(agent_id, name) for agent_id, name in (await session.execute(stmt)).all()]
+
+    async def delete_bindings(self, session: AsyncSession, kb: KnowledgeBaseRegistry) -> None:
+        """Release every binding of ``kb`` ahead of the KB row's own deletion.
+
+        The rows go through the unit of work rather than a bulk DELETE behind its
+        back: the loaded collection is still tracked, so the parent delete would
+        otherwise try to clear a key on rows that are already gone.
+        """
+        for binding in list(kb.agent_bindings):
+            await session.delete(binding)
 
     async def insert_document(
         self, session: AsyncSession, *, kb_id: str, document_id: str, name: str
