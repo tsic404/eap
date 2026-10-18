@@ -238,6 +238,24 @@ class ConversationService:
         conversation.deleted_at = datetime.now(UTC)
         await session.commit()
 
+    async def restore(
+        self, session: AsyncSession, user: User, conversation_id: str
+    ) -> ConversationDto:
+        """Undo a soft delete so the conversation reads and lists again.
+
+        Only a deleted conversation can be restored; a live one (like an unknown
+        one) answers 404 — there is no deletion to undo (C-104).
+        """
+        conversation = await self._require_conversation(
+            session, user, conversation_id, deleted=True
+        )
+        conversation.deleted_at = None
+        await session.commit()
+        # The update expires the server-side ``updated_at``; load it back so the
+        # response carries the committed row instead of lazily touching IO.
+        await session.refresh(conversation)
+        return _to_dto(conversation)
+
     # ── message history ──
 
     async def list_messages(
@@ -395,13 +413,22 @@ class ConversationService:
     # ── helpers ──
 
     async def _require_conversation(
-        self, session: AsyncSession, user: User, conversation_id: str
+        self,
+        session: AsyncSession,
+        user: User,
+        conversation_id: str,
+        *,
+        deleted: bool = False,
     ) -> Conversation:
+        """Resolve one conversation of ``user``; ``deleted`` looks among soft-deleted rows."""
         try:
             conv_uuid = uuid.UUID(conversation_id)
         except (ValueError, TypeError, AttributeError):
             raise AppError(404, "NOT_FOUND", "Conversation not found") from None
-        conversation = await self._repo.get_for_user(session, conv_uuid, user.id)
+        if deleted:
+            conversation = await self._repo.get_deleted_for_user(session, conv_uuid, user.id)
+        else:
+            conversation = await self._repo.get_for_user(session, conv_uuid, user.id)
         if conversation is None:
             raise AppError(404, "NOT_FOUND", "Conversation not found")
         return conversation

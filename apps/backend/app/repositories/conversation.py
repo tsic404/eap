@@ -48,6 +48,17 @@ class ConversationRepository:
         )
         return cast(Conversation | None, await session.scalar(stmt))
 
+    async def get_deleted_for_user(
+        self, session: AsyncSession, conversation_id: uuid.UUID, user_id: uuid.UUID
+    ) -> Conversation | None:
+        """Fetch one soft-deleted conversation owned by ``user_id`` (no cross-user leak)."""
+        stmt = select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.user_id == user_id,
+            Conversation.deleted_at.is_not(None),
+        )
+        return cast(Conversation | None, await session.scalar(stmt))
+
     async def list_for_user(
         self,
         session: AsyncSession,
