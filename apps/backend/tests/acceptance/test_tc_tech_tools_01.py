@@ -814,13 +814,6 @@ async def test_circuit_opens_after_five_consecutive_failures_and_blocks_later_ca
     assert (await _task_detail(api, api.auth(admin, tenant), str(blocked.id)))["status"] == "failed"
 
 
-@pytest.mark.xfail(
-    reason=(
-        "C-68 debug-shares-the-breaker (调试同左) not implemented at "
-        "main@68ad4b5: the debug path never consults the open circuit"
-    ),
-    strict=False,
-)
 @pytest.mark.asyncio
 async def test_debug_of_a_tool_with_an_open_circuit_returns_503_tool_circuit_open(
     api, monkeypatch

@@ -261,15 +261,26 @@ class ToolProxy:
         raise AppError(502, "TOOL_UPSTREAM_ERROR", f"Tool request failed: {last_error}")
 
     async def debug(self, tool: ToolRegistry, params: dict[str, Any]) -> ExecutionResult:
-        """Run a single-shot test call (no retry, no breaker) for the debug panel."""
+        """Run a single-shot test call (no retry) for the debug panel.
+
+        Debug shares the per-tool breaker with execution: an open breaker refuses
+        the call before any request leaves the platform, and the outcome feeds
+        the same failure/success accounting.
+        """
+        self._raise_if_circuit_open(tool.tool_id)
         headers = self._inject_auth(tool)
         start = time.monotonic()
         try:
             response = await self._request(tool, params, headers)
-            status_code = response.status_code
-            body = self._mask(self._parse_body(response))
         except (httpx.TimeoutException, httpx.TransportError) as exc:
+            self._record_failure(tool.tool_id)
             raise AppError(502, "TOOL_UPSTREAM_ERROR", f"Tool request failed: {exc}") from exc
+        status_code = response.status_code
+        body = self._mask(self._parse_body(response))
+        if 200 <= status_code < 300:
+            self._record_success(tool.tool_id)
+        else:
+            self._record_failure(tool.tool_id)
         return ExecutionResult(
             status_code=status_code,
             body=body,
