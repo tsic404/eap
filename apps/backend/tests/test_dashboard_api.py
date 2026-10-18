@@ -58,12 +58,14 @@ def _signed_token(private_key: object, user: User, tenant: Tenant) -> str:
     return pyjwt.encode(payload, private_key, algorithm="RS256")
 
 
-def _make_session(user: User) -> AsyncMock:
+def _make_session(user: User, tenant: Tenant) -> AsyncMock:
     session = AsyncMock()
 
     async def _get(model: object, pk: object, **kwargs: object) -> object | None:
         if model is User:
             return user
+        if model is Tenant:
+            return tenant
         return None
 
     session.get = AsyncMock(side_effect=_get)
@@ -93,7 +95,7 @@ def _auth(token: str) -> dict[str, str]:
 def test_admin_dashboard_requires_admin_role(monkeypatch) -> None:
     tenant = _make_tenant()
     user = _make_user(tenant, role="employee")
-    client, token = _make_client(user, tenant, _make_session(user), monkeypatch)
+    client, token = _make_client(user, tenant, _make_session(user, tenant), monkeypatch)
 
     resp = client.get("/api/dashboard/admin", headers=_auth(token))
 
@@ -113,7 +115,7 @@ def test_admin_dashboard_returns_data_for_admin(monkeypatch) -> None:
         }
 
     monkeypatch.setattr(DashboardService, "get_admin_dashboard", _fake_admin_dashboard)
-    client, token = _make_client(user, tenant, _make_session(user), monkeypatch)
+    client, token = _make_client(user, tenant, _make_session(user, tenant), monkeypatch)
 
     resp = client.get("/api/dashboard/admin", headers=_auth(token))
 
@@ -132,7 +134,7 @@ def test_user_home_returns_data_for_employee(monkeypatch) -> None:
         return {"recommendedAgents": [], "recentConversations": [], "pendingTaskCount": 2}
 
     monkeypatch.setattr(DashboardService, "get_user_home", _fake_user_home)
-    client, token = _make_client(user, tenant, _make_session(user), monkeypatch)
+    client, token = _make_client(user, tenant, _make_session(user, tenant), monkeypatch)
 
     resp = client.get("/api/dashboard/user", headers=_auth(token))
 
@@ -143,7 +145,7 @@ def test_user_home_returns_data_for_employee(monkeypatch) -> None:
 def test_user_home_requires_authentication(monkeypatch) -> None:
     tenant = _make_tenant()
     user = _make_user(tenant, role="employee")
-    client, _ = _make_client(user, tenant, _make_session(user), monkeypatch)
+    client, _ = _make_client(user, tenant, _make_session(user, tenant), monkeypatch)
 
     resp = client.get("/api/dashboard/user")
 

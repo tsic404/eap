@@ -262,6 +262,87 @@ async def test_tenant_gate_is_evaluated_before_the_role_gate(api) -> None:
     assert _code(response) == "TENANT_SUSPENDED"
 
 
+# ── C-13 ⑥⑦⑧ on the tenant-scoped read-only endpoints ──────────────────────
+
+
+# Every business endpoint reaches the tenant verdict, including the read-only
+# ones whose only other guard is a role or an identity check. The upload route
+# needs a multipart body, so it is called through the helper below.
+_TENANT_GATED_ENDPOINTS = (
+    ("run-log list", "/api/run-logs"),
+    ("run-log detail", "/api/run-logs/trace-1"),
+    ("admin dashboard", "/api/dashboard/admin"),
+    ("user home", "/api/dashboard/user"),
+    ("conversation list", "/api/conversations"),
+    ("file upload", "/api/files/upload"),
+)
+_ENDPOINT_IDS = [name for name, _ in _TENANT_GATED_ENDPOINTS]
+
+
+async def _call_endpoint(api: Any, path: str, headers: dict[str, str]) -> Any:
+    """Call one tenant-gated endpoint; the upload route carries a PDF body."""
+    if path == "/api/files/upload":
+        upload = {"file": ("proof.pdf", b"%PDF-1.7 proof", "application/pdf")}
+        return await api.client.post(path, headers=headers, files=upload)
+    return await api.client.get(path, headers=headers)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", _TENANT_GATED_ENDPOINTS, ids=_ENDPOINT_IDS)
+async def test_suspended_tenant_is_rejected_on_the_read_only_endpoints(api, endpoint) -> None:
+    name, path = endpoint
+    tenant, admin = await _seed_tenant_user(api, role="platform_admin", tenant_status="suspended")
+    response = await _call_endpoint(api, path, _bearer(_sign(api, admin, tenant)))
+    assert response.status_code == 403, (name, response.text)
+    assert _code(response) == "TENANT_SUSPENDED", name
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", _TENANT_GATED_ENDPOINTS, ids=_ENDPOINT_IDS)
+async def test_exhausted_quota_is_rejected_on_the_read_only_endpoints(api, endpoint) -> None:
+    name, path = endpoint
+    tenant, admin = await _seed_tenant_user(
+        api, role="platform_admin", quota_used=10, quota_limit=10
+    )
+    response = await _call_endpoint(api, path, _bearer(_sign(api, admin, tenant)))
+    assert response.status_code == 429, (name, response.text)
+    assert _code(response) == "QUOTA_EXCEEDED", name
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", _TENANT_GATED_ENDPOINTS, ids=_ENDPOINT_IDS)
+async def test_unknown_tenant_is_not_found_on_the_read_only_endpoints(api, endpoint) -> None:
+    name, path = endpoint
+    tenant, admin = await _seed_tenant_user(api, role="platform_admin")
+    # A platform admin may address any tenant, so an unknown one is looked up
+    # and reported missing rather than refused as a cross-tenant request.
+    headers = _bearer(_sign(api, admin, tenant, tenant_id=uuid.uuid4()))
+    response = await _call_endpoint(api, path, headers)
+    assert response.status_code == 404, (name, response.text)
+    assert _code(response) == "NOT_FOUND", name
+
+
+@pytest.mark.asyncio
+async def test_tenant_gate_does_not_replace_the_service_tenant_scope(api) -> None:
+    """The gate admits the caller's own tenant only; the read stays scoped to it.
+
+    Resolving another tenant for a platform admin must not widen what the
+    service returns: the admin view counts the caller's agents, not the
+    addressed tenant's.
+    """
+    caller_tenant, admin = await _seed_tenant_user(api, role="platform_admin")
+    other_tenant, _other_admin = await _seed_tenant_user(api, role="platform_admin")
+    await api.seed_agent(caller_tenant, agent_id="caller-bot")
+    await api.seed_agent(other_tenant, agent_id="other-bot-1")
+    await api.seed_agent(other_tenant, agent_id="other-bot-2")
+
+    headers = _bearer(_sign(api, admin, caller_tenant, tenant_id=other_tenant.id))
+    response = await api.client.get("/api/dashboard/admin", headers=headers)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["metrics"]["totalAgents"] == 1
+
+
 # ── C-12 / C-28 / C-29: member management ──────────────────────────────────
 
 
