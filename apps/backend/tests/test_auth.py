@@ -299,6 +299,15 @@ async def _begin_login(http: httpx.AsyncClient) -> tuple[str, str]:
     return query["state"][0], query["nonce"][0]
 
 
+def _assert_login_error_redirect(response: httpx.Response, code: str) -> None:
+    """C-24: a callback failure lands on the login page with its code and no session."""
+    assert response.status_code == 302, response.text
+    location = urllib.parse.urlparse(response.headers.get("location", ""))
+    assert location.path == "/login"
+    assert urllib.parse.parse_qs(location.query).get("error") == [code]
+    assert "set-cookie" not in response.headers
+
+
 @pytest.mark.asyncio
 async def test_callback_chain_success(session_factory) -> None:  # type: ignore[no-untyped-def]
     idp = _FakeIdP()
@@ -331,7 +340,9 @@ async def test_callback_chain_success(session_factory) -> None:  # type: ignore[
 
 
 @pytest.mark.asyncio
-async def test_callback_malformed_id_token_returns_400(session_factory) -> None:  # type: ignore[no-untyped-def]
+async def test_callback_malformed_id_token_redirects_with_invalid_id_token(
+    session_factory,
+) -> None:  # type: ignore[no-untyped-def]
     idp = _FakeIdP()
     idp.token_body = {"id_token": "not-a-jwt", "access_token": "idp-access"}
     http, mock_http = await _start_callback_flow(idp, session_factory)
@@ -342,15 +353,16 @@ async def test_callback_malformed_id_token_returns_400(session_factory) -> None:
         callback = await http.get(
             f"/api/auth/callback?code=c1&state={state}", follow_redirects=False
         )
-        assert callback.status_code == 400, callback.text
-        assert callback.json()["error"]["code"] == "INVALID_ID_TOKEN"
+        _assert_login_error_redirect(callback, "INVALID_ID_TOKEN")
     finally:
         await http.aclose()
         await mock_http.aclose()
 
 
 @pytest.mark.asyncio
-async def test_callback_exchange_failure_returns_400(session_factory) -> None:  # type: ignore[no-untyped-def]
+async def test_callback_exchange_failure_redirects_with_exchange_error(
+    session_factory,
+) -> None:  # type: ignore[no-untyped-def]
     idp = _FakeIdP()
     idp.token_status = 400
     idp.token_body = {"error": "invalid_grant"}
@@ -362,15 +374,16 @@ async def test_callback_exchange_failure_returns_400(session_factory) -> None:  
         callback = await http.get(
             f"/api/auth/callback?code=c1&state={state}", follow_redirects=False
         )
-        assert callback.status_code == 400, callback.text
-        assert callback.json()["error"]["code"] == "OIDC_TOKEN_EXCHANGE_FAILED"
+        _assert_login_error_redirect(callback, "OIDC_TOKEN_EXCHANGE_FAILED")
     finally:
         await http.aclose()
         await mock_http.aclose()
 
 
 @pytest.mark.asyncio
-async def test_callback_state_replay_returns_400(session_factory) -> None:  # type: ignore[no-untyped-def]
+async def test_callback_state_replay_redirects_with_state_error(
+    session_factory,
+) -> None:  # type: ignore[no-untyped-def]
     idp = _FakeIdP()
     http, mock_http = await _start_callback_flow(idp, session_factory)
     try:
@@ -379,10 +392,10 @@ async def test_callback_state_replay_returns_400(session_factory) -> None:  # ty
 
         first = await http.get(f"/api/auth/callback?code=c1&state={state}", follow_redirects=False)
         assert first.status_code == 302, first.text
+        assert first.headers["location"] == "/user"
 
         replay = await http.get(f"/api/auth/callback?code=c1&state={state}", follow_redirects=False)
-        assert replay.status_code == 400, replay.text
-        assert replay.json()["error"]["code"] == "INVALID_STATE"
+        _assert_login_error_redirect(replay, "INVALID_STATE")
     finally:
         await http.aclose()
         await mock_http.aclose()

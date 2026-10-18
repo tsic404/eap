@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import Annotated, Any
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import RedirectResponse
@@ -37,6 +38,19 @@ _REFRESH_COOKIE = "refresh_token"
 _REFRESH_COOKIE_PATH = "/api/auth"
 # Post-login landing page (served by the frontend, routed by nginx).
 _FRONTEND_HOME = "/user"
+# Login page, where a failed callback hands the browser back with its error code.
+_FRONTEND_LOGIN = "/login"
+
+
+def _login_error_redirect(code: str) -> RedirectResponse:
+    """Answer a callback failure with C-24's exit: 302 to the login page.
+
+    The error code travels as the ``error`` query parameter the login page reads;
+    the response carries no cookie, so the failure neither issues nor renews a
+    session. Clearing a live session here would let any caller with a bogus
+    callback URL log an unrelated user out.
+    """
+    return RedirectResponse(f"{_FRONTEND_LOGIN}?{urlencode({'error': code})}", status_code=302)
 
 
 def _set_refresh_cookie(response: Response, token_pair: TokenPair, settings: Settings) -> None:
@@ -144,14 +158,18 @@ async def login(request: Request) -> RedirectResponse:
     return RedirectResponse(url, status_code=302)
 
 
-@router.get("/api/auth/callback")
-async def callback(
+async def _establish_session(
     request: Request,
-    session: Annotated[AsyncSession, Depends(get_session)],
-    code: str | None = None,
-    state: str | None = None,
+    session: AsyncSession,
+    *,
+    code: str | None,
+    state: str | None,
 ) -> RedirectResponse:
-    """Consume the OIDC callback: verify id_token, resolve user, set session."""
+    """Verify the callback's code and identity, then answer the session redirect.
+
+    Every refusal raises :class:`AuthError`, which the route presents on the
+    login page rather than as a JSON body (C-24).
+    """
     settings: Settings = request.app.state.settings
     store: OidcStateStore = request.app.state.state_store
     oidc: OidcClient = request.app.state.oidc
@@ -180,6 +198,25 @@ async def callback(
     response = RedirectResponse(_FRONTEND_HOME, status_code=302)
     _set_refresh_cookie(response, token_pair, settings)
     return response
+
+
+@router.get("/api/auth/callback")
+async def callback(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    code: str | None = None,
+    state: str | None = None,
+) -> RedirectResponse:
+    """Consume the OIDC callback: verify id_token, resolve user, set session.
+
+    The browser arrives here as a redirect, so a refusal must not answer with the
+    JSON error envelope: it goes back to the login page with its error code
+    (C-24).
+    """
+    try:
+        return await _establish_session(request, session, code=code, state=state)
+    except AuthError as exc:
+        return _login_error_redirect(exc.code)
 
 
 @router.get("/api/auth/capabilities")
