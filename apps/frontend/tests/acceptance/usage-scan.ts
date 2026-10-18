@@ -1,18 +1,21 @@
 /**
- * Static sweep over the UI's class lists for semantic colour pairs. Each JSX
- * element is parsed with the TypeScript AST, so a pair can be formed across
- * elements: a semantic text slot is paired with the element's own background
- * or, failing that, the nearest ancestor that declares one — CSS inherits
- * colour and background down the tree. Conditional branches stay alternatives
- * (a branch's foreground is not crossed with another branch's background);
- * within one branch the background and foreground slots that co-occur are
- * crossed. Class lists returned by helpers and variant maps — strings outside
- * a `className` attribute — are scanned with the same-literal rule.
+ * Static sweep over the UI's class lists and inline `style` colour values for
+ * semantic colour pairs. Each JSX element is parsed with the TypeScript AST, so
+ * a pair can be formed across elements: a semantic text slot is paired with the
+ * element's own background or, failing that, the nearest ancestor that declares
+ * one — CSS inherits colour and background down the tree. Conditional branches
+ * stay alternatives (a branch's foreground is not crossed with another branch's
+ * background); within one branch the background and foreground slots that
+ * co-occur are crossed. Class lists returned by helpers and variant maps —
+ * strings outside a `className` attribute — are scanned with the same-literal
+ * rule. An inline `var(--color-<slot>)` counts as that slot; a colour literal
+ * written straight into a style object is reported by `scanInlineColours`.
  *
- * Evidence boundary: this is a static model of the class lists, not a
- * rendered-DOM measurement — dynamic class construction and computed styles
- * are approximated. No pixel/computed-style arbitration is taken here or
- * anywhere else in this suite; the module reports declared-pair completeness
+ * Evidence boundary: this is a static model of class lists and style-object
+ * literals, not a rendered-DOM measurement — dynamic class construction,
+ * computed styles and colour-bearing SVG attributes (`stroke` / `fill`) are
+ * approximated or unmodelled. No pixel/computed-style arbitration is taken here
+ * or anywhere else in this suite; the module reports declared-pair completeness
  * over the static model only.
  */
 import { readdirSync, readFileSync } from "node:fs";
@@ -31,6 +34,44 @@ const SEMANTIC_FOREGROUND = /^text-([a-z-]+)$/;
 const TEST_FILE = /\.test\.tsx?$/;
 const CLASS_LIKE_PROPERTY = /^(?:bg|text)-/;
 const MAX_ALTERNATIVES = 64;
+const STYLE_ATTRIBUTE = "style";
+const COLOUR_PROPERTY =
+  /^(?:color|background|backgroundColor|border|borderColor|borderTop|borderRight|borderBottom|borderLeft|outline|fill|stroke)$/;
+const SLOT_REFERENCE = /var\(\s*--color-([a-z0-9-]+)\s*(?:,\s*([^)]*?)\s*)?\)/g;
+/** Words a colour-bearing CSS shorthand may legitimately carry besides a colour. */
+const NON_COLOUR_KEYWORD: Readonly<Record<string, true>> = {
+  auto: true,
+  "border-box": true,
+  center: true,
+  contain: true,
+  "content-box": true,
+  cover: true,
+  currentcolor: true,
+  dashed: true,
+  dotted: true,
+  double: true,
+  fixed: true,
+  hidden: true,
+  inherit: true,
+  initial: true,
+  local: true,
+  medium: true,
+  "no-repeat": true,
+  none: true,
+  "padding-box": true,
+  repeat: true,
+  "repeat-x": true,
+  "repeat-y": true,
+  revert: true,
+  round: true,
+  scroll: true,
+  solid: true,
+  space: true,
+  thick: true,
+  thin: true,
+  transparent: true,
+  unset: true,
+};
 
 export interface PairUsage {
   key: string;
@@ -39,6 +80,33 @@ export interface PairUsage {
   foreground: string;
   locations: string[];
 }
+
+export interface InlineColourReference {
+  /** `style` property the value was written under. */
+  property: string;
+  value: string;
+  location: string;
+}
+
+export interface InlineSlotReference extends InlineColourReference {
+  /** `--color-<token>` the value references. */
+  token: string;
+  /** Literal the reference falls back to when the stylesheet is absent. */
+  fallback?: string;
+}
+
+type InlineColourEntry = InlineColourReference | InlineSlotReference;
+
+export interface InlineColourSweep {
+  /** Colour literals written into a style object without a slot reference. */
+  hardcoded: InlineColourReference[];
+  /** Slot references, in source order, for the fallback lockstep check. */
+  slots: InlineSlotReference[];
+}
+
+export type InlineColourReading =
+  | { kind: "slot"; token: string; fallback?: string }
+  | { kind: "hardcoded"; value: string };
 
 interface BackgroundSlot {
   token: string;
@@ -55,6 +123,13 @@ interface SourceIndex {
   text: string;
   sourceFile: ts.SourceFile;
   classNameRanges: Array<[number, number]>;
+}
+
+interface InlineDeclaration {
+  attribute?: ts.JsxAttribute;
+  /** Slot utilities the inline colours are equivalent to, for pair forming. */
+  utilities: string[];
+  references: InlineColourEntry[];
 }
 
 function* classFiles(directory: string): Generator<string> {
@@ -216,6 +291,53 @@ function classAttribute(
   );
 }
 
+function isColourLiteral(part: string): boolean {
+  if (NON_COLOUR_KEYWORD[part.toLowerCase()]) return false;
+  try {
+    parseColor(part);
+    return true;
+  } catch {
+    // A colour name carries no unit or parenthesis, so an unlisted word inside
+    // a colour-bearing property cannot be anything else.
+    return /^[a-z]+$/i.test(part);
+  }
+}
+
+/**
+ * Reads the colours one inline `style` value carries: `var()` references to
+ * stylesheet slots, plus literals written without one. A literal is admissible
+ * only as a slot reference's fallback, where it must restate that slot's
+ * current value (C-83).
+ */
+export function readInlineColour(value: string): InlineColourReading[] {
+  const readings: InlineColourReading[] = [];
+  let remainder = "";
+  let cursor = 0;
+  for (const match of value.matchAll(SLOT_REFERENCE)) {
+    const [, token, fallback] = match;
+    remainder += value.slice(cursor, match.index);
+    cursor = match.index + match[0].length;
+    readings.push(
+      fallback === undefined
+        ? { kind: "slot", token }
+        : { kind: "slot", token, fallback },
+    );
+  }
+  remainder += value.slice(cursor);
+  for (const part of remainder.split(/\s+/)) {
+    if (part !== "" && isColourLiteral(part)) {
+      readings.push({ kind: "hardcoded", value: part });
+    }
+  }
+  return readings;
+}
+
+function isSlotReference(
+  reference: InlineColourReference,
+): reference is InlineSlotReference {
+  return "token" in reference;
+}
+
 /** Normalizes `text-white` to the background family's foreground slot. */
 export function normalizeForeground(
   token: string,
@@ -238,20 +360,29 @@ class Scanner {
     ts.JsxElement | ts.JsxSelfClosingElement,
     string[][]
   >();
+  private readonly elementInline = new WeakMap<
+    ts.JsxElement | ts.JsxSelfClosingElement,
+    InlineDeclaration
+  >();
+  /** Inline `style` colours in source order; complete once `scan()` returned. */
+  readonly inlineColours: InlineColourEntry[] = [];
 
   constructor(private readonly index: SourceIndex) {}
 
   scan(): Map<string, PairUsage> {
     const visit = (node: ts.Node): void => {
       if (isJsxElement(node)) {
+        const inline = this.inlineDeclaration(node);
+        this.inlineColours.push(...inline.references);
         const attribute = classAttribute(node);
         if (attribute?.initializer) {
           this.index.classNameRanges.push([
             attribute.getStart(this.index.sourceFile),
             attribute.getEnd(),
           ]);
-          this.elementPairs(node, attribute);
         }
+        const declared = attribute ?? inline.attribute;
+        if (declared?.initializer) this.elementPairs(node, declared);
       }
       ts.forEachChild(node, visit);
     };
@@ -260,13 +391,92 @@ class Scanner {
     return this.usage;
   }
 
+  /**
+   * The inline `style` colours of one element: the slot utilities they are
+   * equivalent to, plus the references the tie-back sweep reports.
+   */
+  private inlineDeclaration(
+    element: ts.JsxElement | ts.JsxSelfClosingElement,
+  ): InlineDeclaration {
+    const cached = this.elementInline.get(element);
+    if (cached) return cached;
+    const attributes = ts.isJsxElement(element)
+      ? element.openingElement.attributes
+      : element.attributes;
+    const attribute = attributes.properties.find(
+      (property): property is ts.JsxAttribute =>
+        ts.isJsxAttribute(property) &&
+        ts.isIdentifier(property.name) &&
+        property.name.text === STYLE_ATTRIBUTE,
+    );
+    const declaration: InlineDeclaration = {
+      attribute,
+      utilities: [],
+      references: [],
+    };
+    this.elementInline.set(element, declaration);
+    let node: ts.Node | undefined = attribute?.initializer;
+    if (node && ts.isJsxExpression(node)) node = node.expression;
+    while (node && ts.isParenthesizedExpression(node)) node = node.expression;
+    if (attribute === undefined || node === undefined) return declaration;
+    if (!ts.isObjectLiteralExpression(node)) return declaration;
+    const line =
+      this.index.sourceFile.getLineAndCharacterOfPosition(
+        attribute.getStart(this.index.sourceFile),
+      ).line + 1;
+    const location = `${path.relative(FRONTEND_ROOT, this.index.file)}:${line}`;
+    for (const property of node.properties) {
+      if (!ts.isPropertyAssignment(property)) continue;
+      const name = property.name;
+      if (!ts.isIdentifier(name) && !ts.isStringLiteral(name)) continue;
+      if (!COLOUR_PROPERTY.test(name.text)) continue;
+      const value = property.initializer;
+      if (
+        !ts.isStringLiteral(value) &&
+        !ts.isNoSubstitutionTemplateLiteral(value)
+      ) {
+        continue;
+      }
+      for (const reading of readInlineColour(value.text)) {
+        if (reading.kind === "hardcoded") {
+          declaration.references.push({
+            property: name.text,
+            value: reading.value,
+            location,
+          });
+          continue;
+        }
+        declaration.references.push({
+          property: name.text,
+          value: value.text,
+          token: reading.token,
+          fallback: reading.fallback,
+          location,
+        });
+        if (name.text === "color") {
+          declaration.utilities.push(`text-${reading.token}`);
+        } else if (
+          name.text === "background" ||
+          name.text === "backgroundColor"
+        ) {
+          declaration.utilities.push(`bg-${reading.token}`);
+        }
+      }
+    }
+    return declaration;
+  }
+
   private alternativesOf(
     node: ts.JsxElement | ts.JsxSelfClosingElement,
   ): string[][] {
     const cached = this.elementAlternatives.get(node);
     if (cached) return cached;
     const attribute = classAttribute(node);
-    const alternatives = classAlternatives(attribute?.initializer);
+    const utilities = this.inlineDeclaration(node).utilities;
+    const alternatives = classAlternatives(attribute?.initializer).map(
+      (classes) =>
+        utilities.length > 0 ? [...classes, utilities.join(" ")] : classes,
+    );
     this.elementAlternatives.set(node, alternatives);
     return alternatives;
   }
@@ -425,8 +635,7 @@ class Scanner {
   }
 }
 
-export function scanSemanticPairs(): Map<string, PairUsage> {
-  const usage = new Map<string, PairUsage>();
+function* sourceIndices(): Generator<SourceIndex> {
   for (const directory of SCAN_DIRECTORIES) {
     for (const file of classFiles(path.join(FRONTEND_ROOT, directory))) {
       const text = readFileSync(file, "utf8");
@@ -437,25 +646,41 @@ export function scanSemanticPairs(): Map<string, PairUsage> {
         true,
         ts.ScriptKind.TSX,
       );
-      const scanner = new Scanner({
-        file,
-        text,
-        sourceFile,
-        classNameRanges: [],
-      });
-      for (const [key, entry] of scanner.scan()) {
-        const existing = usage.get(key);
-        if (existing) {
-          for (const location of entry.locations) {
-            if (!existing.locations.includes(location)) {
-              existing.locations.push(location);
-            }
+      yield { file, text, sourceFile, classNameRanges: [] };
+    }
+  }
+}
+
+/** Every semantic pair the class lists and inline styles can form (C-83). */
+export function scanSemanticPairs(): Map<string, PairUsage> {
+  const usage = new Map<string, PairUsage>();
+  for (const index of sourceIndices()) {
+    for (const [key, entry] of new Scanner(index).scan()) {
+      const existing = usage.get(key);
+      if (existing) {
+        for (const location of entry.locations) {
+          if (!existing.locations.includes(location)) {
+            existing.locations.push(location);
           }
-        } else {
-          usage.set(key, entry);
         }
+      } else {
+        usage.set(key, entry);
       }
     }
   }
   return usage;
+}
+
+/** Inline `style` colours: slot references, and literals written without one. */
+export function scanInlineColours(): InlineColourSweep {
+  const references: InlineColourEntry[] = [];
+  for (const index of sourceIndices()) {
+    const scanner = new Scanner(index);
+    scanner.scan();
+    references.push(...scanner.inlineColours);
+  }
+  return {
+    hardcoded: references.filter((reference) => !isSlotReference(reference)),
+    slots: references.filter(isSlotReference),
+  };
 }

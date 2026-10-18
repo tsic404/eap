@@ -36,7 +36,12 @@ import {
   pairKey,
   type DeclaredPair,
 } from "./declared-pairs";
-import { normalizeForeground, scanSemanticPairs } from "./usage-scan";
+import {
+  normalizeForeground,
+  readInlineColour,
+  scanInlineColours,
+  scanSemanticPairs,
+} from "./usage-scan";
 
 export const TC_ID = "TC-tech-ui-01";
 
@@ -76,6 +81,8 @@ const FONT_SIZE_TOKENS = new Set([
   "text-2xl",
   "text-3xl",
 ]);
+
+const ERROR_BOUNDARY = "app/global-error.tsx:";
 
 function citation(score: number): RetrievalCitation {
   return {
@@ -262,6 +269,81 @@ describe("TC-tech-ui-01 semantic colour pairs", () => {
       .filter((entry) => !declared.has(entry.key))
       .map((entry) => `${entry.key} at ${entry.locations.join(", ")}`);
     expect(undeclared).toEqual([]);
+  });
+
+  it("judges every inline style colour of the error boundary as a declared pair", () => {
+    const { slots } = scanInlineColours();
+    const boundarySlots = slots.filter((slot) =>
+      slot.location.startsWith(ERROR_BOUNDARY),
+    );
+    expect(
+      boundarySlots.length,
+      `no inline colour read from ${ERROR_BOUNDARY}`,
+    ).toBeGreaterThan(0);
+    const declared = new Set(DECLARED_PAIRS.map(pairKey));
+    const boundaryPairs = [...scanSemanticPairs().values()].filter(
+      (entry) =>
+        declared.has(entry.key) &&
+        entry.locations.some((location) =>
+          location.startsWith(ERROR_BOUNDARY),
+        ),
+    );
+    const unjudged = boundarySlots
+      .filter(
+        (slot) =>
+          !boundaryPairs.some(
+            (entry) =>
+              entry.background === slot.token ||
+              entry.foreground === slot.token,
+          ),
+      )
+      .map((slot) => `${slot.location} ${slot.property}: ${slot.value}`);
+    expect(unjudged).toEqual([]);
+  });
+
+  it("classifies an inline style colour value by its slot reference", () => {
+    expect(readInlineColour("#64748b")).toEqual([
+      { kind: "hardcoded", value: "#64748b" },
+    ]);
+    expect(readInlineColour("var(--color-muted-foreground, #475569)")).toEqual([
+      { kind: "slot", token: "muted-foreground", fallback: "#475569" },
+    ]);
+    expect(readInlineColour("1px solid var(--color-border)")).toEqual([
+      { kind: "slot", token: "border" },
+    ]);
+    expect(readInlineColour("1px solid #e2e8f0")).toEqual([
+      { kind: "hardcoded", value: "#e2e8f0" },
+    ]);
+    expect(readInlineColour("red")).toEqual([
+      { kind: "hardcoded", value: "red" },
+    ]);
+    expect(readInlineColour("none")).toEqual([]);
+  });
+
+  it("rejects colour literals written into inline styles (C-83)", () => {
+    const { hardcoded } = scanInlineColours();
+    expect(
+      hardcoded.map(
+        (entry) => `${entry.location} ${entry.property}: ${entry.value}`,
+      ),
+    ).toEqual([]);
+  });
+
+  it("locks inline style fallbacks to the stylesheet slot values", () => {
+    const { slots } = scanInlineColours();
+    expect(slots.length, "no inline slot reference found").toBeGreaterThan(0);
+    for (const slot of slots) {
+      expect(
+        COLOR_TOKENS[slot.token],
+        `--color-${slot.token} at ${slot.location}`,
+      ).toMatch(/^#[0-9a-f]{6}$/i);
+      if (slot.fallback !== undefined) {
+        expect(
+          slot.fallback,
+          `${slot.location} ${slot.property} fallback`,
+        ).toBe(COLOR_TOKENS[slot.token]);
+      }
+    }
   });
 
   it("sweeps at least two colour families and the neutral surface", () => {
