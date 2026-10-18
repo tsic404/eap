@@ -187,8 +187,10 @@ def inject_auth(tool: ToolRegistry) -> dict[str, str]:
         key = config.get("api_key") or config.get("key", "")
         return {header_name: str(key)} if key else {}
     if auth_type == "basic":
-        username = str(config.get("username", ""))
-        password = str(config.get("password", ""))
+        username = str(config.get("username") or "")
+        password = str(config.get("password") or "")
+        if not username and not password:
+            return {}
         token = base64.b64encode(f"{username}:{password}".encode()).decode()
         return {"Authorization": f"Basic {token}"}
     if auth_type == "oauth2":
