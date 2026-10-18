@@ -1,62 +1,66 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { clearAccessToken, getAccessToken, setAccessToken } from "./token-store";
+import { getAccessToken, setAccessToken } from "./token-store";
 
-const COOKIE = "eap_access_token";
+const LEGACY_COOKIE = "eap_access_token";
+const SAMPLE_TOKEN = "header.payload.signature";
 
-function clearCookie() {
-  document.cookie = `${COOKIE}=; path=/; Max-Age=0`;
+/** Everything a page script can read: cookies and both web storages. */
+function scriptReadableState(): string {
+  return [
+    document.cookie,
+    JSON.stringify(localStorage),
+    JSON.stringify(sessionStorage),
+  ].join(" | ");
 }
 
 beforeEach(() => {
-  clearAccessToken();
-  clearCookie();
+  setAccessToken(null);
+  document.cookie = `${LEGACY_COOKIE}=; Max-Age=0; path=/`;
+  localStorage.clear();
+  sessionStorage.clear();
 });
 
 describe("token-store", () => {
-  it("reads the access token from the cookie", () => {
-    document.cookie = `${COOKIE}=abc123; path=/`;
-    expect(getAccessToken()).toBe("abc123");
+  it("hands back the token this tab stored in memory", () => {
+    setAccessToken(SAMPLE_TOKEN);
+
+    expect(getAccessToken()).toBe(SAMPLE_TOKEN);
   });
 
-  it("caches the cookie value in memory", () => {
-    document.cookie = `${COOKIE}=abc123; path=/`;
-    getAccessToken();
-    clearCookie();
-    expect(getAccessToken()).toBe("abc123");
+  it("does not survive a reload — only the refresh channel can restore it", async () => {
+    setAccessToken(SAMPLE_TOKEN);
+
+    // A page load is a module-loading boundary: only a fresh module instance
+    // can tell whether the token survived, so a static import cannot stand in.
+    vi.resetModules();
+    const reloaded = await import("./token-store");
+
+    expect(reloaded.getAccessToken()).toBeNull();
   });
 
-  it("returns null when neither memory nor cookie holds a token", () => {
+  it("ignores an access-token cookie, whatever wrote it", () => {
+    document.cookie = `${LEGACY_COOKIE}=legacy-token; path=/`;
+
     expect(getAccessToken()).toBeNull();
   });
 
-  it("clearAccessToken resets the memory cache", () => {
-    setAccessToken("xyz");
-    clearAccessToken();
-    expect(getAccessToken()).toBeNull();
+  it("keeps the token out of every script-readable store", () => {
+    setAccessToken(SAMPLE_TOKEN);
+
+    expect(document.cookie).not.toContain(LEGACY_COOKIE);
+    expect(document.cookie).toBe("");
+    expect(localStorage.length).toBe(0);
+    expect(sessionStorage.length).toBe(0);
+    expect(scriptReadableState()).not.toContain("header.payload.signature");
   });
 
-  it("setAccessToken mirrors the token into the JS-readable cookie", () => {
-    setAccessToken("persisted-token");
-    expect(getAccessToken()).toBe("persisted-token");
-    expect(document.cookie).toContain(`${COOKIE}=persisted-token`);
-  });
+  it("leaves no copy behind when the session drops the token", () => {
+    setAccessToken(SAMPLE_TOKEN);
 
-  it("setAccessToken(null) clears the cookie as well as the memory cache", () => {
-    setAccessToken("persisted-token");
     setAccessToken(null);
-    expect(getAccessToken()).toBeNull();
-    expect(document.cookie).toBe("");
-  });
 
-  it("treats a malformed percent-encoded cookie as absent", () => {
-    document.cookie = `${COOKIE}=%E0%A4%A; path=/`;
     expect(getAccessToken()).toBeNull();
-  });
-
-  it("expires the cookie when clearing the access token", () => {
-    document.cookie = `${COOKIE}=abc123; path=/`;
-    clearAccessToken();
-    expect(document.cookie).toBe("");
+    expect(scriptReadableState()).not.toContain("header.payload.signature");
   });
 });

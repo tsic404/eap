@@ -11,12 +11,13 @@ import {
 } from "react";
 
 import { API_ROUTES, AUTH_ROUTES, ROUTES } from "@/lib/api-routes";
+import { publishAuthSignal, subscribeAuthSignal } from "@/lib/auth-channel";
 import { loginWithLocalAccount } from "@/lib/auth-service";
 import type { ApiEnvelope, CurrentUser, Tenant } from "@/lib/auth-types";
 import { apiClient, refreshAccessToken } from "@/lib/http-client";
 import { resolveRole } from "@/lib/roles";
 import { clearRoleCookie, setRoleCookie } from "@/lib/role-store";
-import { clearAccessToken, getAccessToken } from "@/lib/token-store";
+import { getAccessToken, setAccessToken } from "@/lib/token-store";
 
 export interface AuthContextValue {
   user: CurrentUser | null;
@@ -87,6 +88,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [loadUser]);
 
+  // A sign-out in another tab ends the session for the whole profile: the
+  // refresh cookie the tabs share is revoked, so this tab's in-memory token is
+  // dead weight and the confirmed user has to go with it.
+  useEffect(
+    () =>
+      subscribeAuthSignal((signal) => {
+        if (signal !== "sign-out") return;
+        setAccessToken(null);
+        clearRoleCookie();
+        setUser(null);
+        setTenant(null);
+      }),
+    [],
+  );
+
   const login = useCallback((provider: string) => {
     window.location.assign(
       `${AUTH_ROUTES.login}?provider=${encodeURIComponent(provider)}`,
@@ -118,8 +134,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(null);
       setTenant(null);
       setError(null);
-      clearAccessToken();
+      setAccessToken(null);
       clearRoleCookie();
+      publishAuthSignal("sign-out");
       window.location.assign(ROUTES.login);
     }
   }, []);
