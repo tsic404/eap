@@ -1,7 +1,7 @@
 """TaskController: task list + approve/reject/retry/cancel (architecture §32.7.2).
 
 Role enforcement lives in ``TaskService`` (single source ``ADMIN_ROLES``); the
-``require_roles`` gate here is the outer defense-in-depth layer.
+``require_tenant_roles`` gate here is the outer defense-in-depth layer.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
-from app.dependencies import get_active_tenant, get_current_user, require_roles
+from app.dependencies import get_active_tenant, get_current_user, require_tenant_roles
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.task import ApproveTaskDto, RejectTaskDto, TaskListRead, TaskRead
@@ -60,7 +60,7 @@ async def approve_task(
     task_id: str,
     dto: ApproveTaskDto,
     tenant: Tenant = Depends(get_active_tenant),
-    user: User = Depends(require_roles(*ADMIN_ROLES)),
+    user: User = Depends(require_tenant_roles(*ADMIN_ROLES)),
     session: AsyncSession = Depends(get_session),
 ) -> TaskRead:
     service = TaskService(session)
@@ -79,7 +79,7 @@ async def reject_task(
     task_id: str,
     dto: RejectTaskDto,
     tenant: Tenant = Depends(get_active_tenant),
-    user: User = Depends(require_roles(*ADMIN_ROLES)),
+    user: User = Depends(require_tenant_roles(*ADMIN_ROLES)),
     session: AsyncSession = Depends(get_session),
 ) -> TaskRead:
     service = TaskService(session)

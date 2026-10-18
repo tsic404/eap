@@ -7,6 +7,7 @@ handlers. The middleware only *establishes* identity; these dependencies
 
 - ``get_current_user``  -> 401 unless an authenticated, non-revoked user exists
 - ``require_roles``     -> 403 unless the user's role is allowed
+- ``require_tenant_roles`` -> the same, with the tenant gate resolved first
 - ``get_active_tenant`` -> 401/403/429 unless the authenticated user may act on
   the resolved tenant and that tenant is active and under quota
 """
@@ -55,9 +56,33 @@ async def get_current_user(request: Request, session: AsyncSession = Depends(get
 
 
 def require_roles(*roles: str) -> Callable[..., Awaitable[User]]:
-    """Dependency factory: admit only the given roles, otherwise 403."""
+    """Dependency factory: admit only the given roles, otherwise 403.
+
+    Role-only guard: routes that resolve a tenant use ``require_tenant_roles``,
+    which puts the tenant verdict ahead of this one.
+    """
 
     async def checker(user: User = Depends(get_current_user)) -> User:
+        if user.role not in roles:
+            raise AppError(403, "FORBIDDEN", "Insufficient permissions")
+        return user
+
+    return checker
+
+
+def require_tenant_roles(*roles: str) -> Callable[..., Awaitable[User]]:
+    """Role guard for tenant-scoped endpoints: the tenant gate runs first.
+
+    Tenant ownership, status and quota outrank the endpoint's role set, so a
+    suspended tenant reports ``TENANT_SUSPENDED`` instead of ``FORBIDDEN``. The
+    dependency edge fixes that order in the graph rather than in a handler's
+    parameter order; the handler's own ``get_active_tenant`` shares the lookup.
+    """
+
+    async def checker(
+        user: User = Depends(get_current_user),
+        _: Tenant = Depends(get_active_tenant),
+    ) -> User:
         if user.role not in roles:
             raise AppError(403, "FORBIDDEN", "Insufficient permissions")
         return user

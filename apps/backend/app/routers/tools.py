@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
-from app.dependencies import get_active_tenant, require_roles
+from app.dependencies import get_active_tenant, require_tenant_roles
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.tool import CreateToolDto, DebugToolDto, ToolRead, UpdateToolDto
@@ -51,7 +51,7 @@ async def create_tool(
     dto: CreateToolDto,
     request: Request,
     tenant: Tenant = Depends(get_active_tenant),
-    user: User = Depends(require_roles(*_ADMIN_ROLES)),
+    user: User = Depends(require_tenant_roles(*_ADMIN_ROLES)),
     session: AsyncSession = Depends(get_session),
 ) -> ToolRead:
     service = _service(request, session)
@@ -65,7 +65,7 @@ async def update_tool(
     dto: UpdateToolDto,
     request: Request,
     tenant: Tenant = Depends(get_active_tenant),
-    user: User = Depends(require_roles(*_ADMIN_ROLES)),
+    user: User = Depends(require_tenant_roles(*_ADMIN_ROLES)),
     session: AsyncSession = Depends(get_session),
 ) -> ToolRead:
     service = _service(request, session)
@@ -78,7 +78,7 @@ async def delete_tool(
     tool_id: str,
     request: Request,
     tenant: Tenant = Depends(get_active_tenant),
-    user: User = Depends(require_roles(*_ADMIN_ROLES)),
+    user: User = Depends(require_tenant_roles(*_ADMIN_ROLES)),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     service = _service(request, session)
@@ -91,7 +91,7 @@ async def debug_tool(
     dto: DebugToolDto,
     request: Request,
     tenant: Tenant = Depends(get_active_tenant),
-    _: User = Depends(require_roles(*_ADMIN_ROLES)),
+    _: User = Depends(require_tenant_roles(*_ADMIN_ROLES)),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     service = _service(request, session)

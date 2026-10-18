@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
-from app.dependencies import get_active_tenant, require_roles
+from app.dependencies import get_active_tenant, require_tenant_roles
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.knowledge import (
@@ -30,7 +30,7 @@ router = APIRouter(prefix="/api/knowledge-bases", tags=["knowledge-bases"])
 _KNOWLEDGE_ADMIN_ROLES = ("knowledge_admin", "agent_admin", "platform_admin")
 
 ActiveTenant = Annotated[Tenant, Depends(get_active_tenant)]
-KnowledgeAdmin = Annotated[User, Depends(require_roles(*_KNOWLEDGE_ADMIN_ROLES))]
+KnowledgeAdmin = Annotated[User, Depends(require_tenant_roles(*_KNOWLEDGE_ADMIN_ROLES))]
 Session = Annotated[AsyncSession, Depends(get_session)]
 
 
