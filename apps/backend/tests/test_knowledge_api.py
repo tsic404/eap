@@ -443,3 +443,28 @@ def test_delete_document_during_indexing_returns_400_with_message() -> None:
     body = resp.json()["error"]
     assert body["code"] == "DOCUMENT_DELETE_FAILED"
     assert body["message"] == "Cannot delete document during indexing."
+
+
+def test_retrieval_test_reports_latency_in_the_contract_field() -> None:
+    tenant = _make_tenant()
+    retriever = AsyncMock()
+    retriever.post.return_value = {"records": []}
+    service = KnowledgeService(
+        AsyncMock(),
+        settings=Settings(_env_file=None),
+        repository=_Repo(_kb(tenant)),
+        retriever=retriever,
+    )
+    client, token = _authed_client(service, role="knowledge_admin", tenant=tenant)
+
+    resp = client.post(
+        "/api/knowledge-bases/kb-1/retrieval-test",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"query": "what is eap?"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    # C-11 fixes the knowledge-domain vocabulary: snake_case on the wire.
+    assert body["latency_ms"] >= 0
+    assert "latencyMs" not in body

@@ -113,7 +113,7 @@ export function RetrievalTest({ kbId, disabled = false }: RetrievalTestProps) {
           citations={result.citations}
           query={result.query}
           score={result.score}
-          latencyMs={result.latencyMs}
+          latencyMs={result.latency_ms}
         />
       )}
     </div>

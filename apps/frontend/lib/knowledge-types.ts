@@ -71,5 +71,5 @@ export interface RetrievalTestResult {
   query: string;
   citations: RetrievalCitation[];
   score: number;
-  latencyMs: number;
+  latency_ms: number;
 }
