@@ -37,6 +37,8 @@ export interface DataTableProps<T> {
   pageSize?: number;
   emptyTitle?: string;
   emptyDescription?: string;
+  /** Render the built-in page controls; server-paginated callers pass false. */
+  showPagination?: boolean;
 }
 
 function defaultValue<T>(row: T, key: string): string {
@@ -56,6 +58,7 @@ export function DataTable<T>({
   pageSize = 10,
   emptyTitle,
   emptyDescription,
+  showPagination = true,
 }: DataTableProps<T>) {
   const [sort, setSort] = useState<{
     key: string;
@@ -306,31 +309,33 @@ export function DataTable<T>({
           </table>
         </div>
       )}
-      <div className="flex items-center justify-between text-sm text-muted-foreground">
-        <span>
-          第 {currentPage + 1} / {pageCount} 页
-        </span>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={currentPage === 0}
-            onClick={() => setPage(currentPage - 1)}
-          >
-            <ChevronLeft className="h-4 w-4" />
-            上一页
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={currentPage >= pageCount - 1}
-            onClick={() => setPage(currentPage + 1)}
-          >
-            下一页
-            <ChevronRight className="h-4 w-4" />
-          </Button>
+      {showPagination && (
+        <div className="flex items-center justify-between text-sm text-muted-foreground">
+          <span>
+            第 {currentPage + 1} / {pageCount} 页
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage === 0}
+              onClick={() => setPage(currentPage - 1)}
+            >
+              <ChevronLeft className="h-4 w-4" />
+              上一页
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage >= pageCount - 1}
+              onClick={() => setPage(currentPage + 1)}
+            >
+              下一页
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

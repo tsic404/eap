@@ -58,14 +58,14 @@ const SEED_SQL = `
     AND NOT EXISTS (SELECT 1 FROM users u WHERE u.tenant_id = t.id AND u.sso_sub = 'user-1');
 `;
 
-/** Seed rows for the two local accounts the local-login journeys sign in with. */
+/** Seed rows for the local accounts the local-login journeys sign in with. */
 function localAccountSeedSql(passwordHash) {
   return Object.entries(LOCAL_ACCOUNTS)
     .map(
       ([key, account]) => `
-  INSERT INTO users (id, tenant_id, sso_sub, email, name, role, status, password_hash, must_change_password)
-  SELECT gen_random_uuid(), t.id, 'local-${key}', '${account.email}', '${account.name}',
-         '${account.role}', 'active', '${passwordHash}', ${account.mustChangePassword === true}
+  INSERT INTO users (id, tenant_id, sso_sub, email, name, role, status, account_source, password_hash, must_change_password)
+  SELECT gen_random_uuid(), t.id, 'local:${key}', '${account.email}', '${account.name}',
+         '${account.role}', 'active', 'local', '${passwordHash}', ${account.mustChangePassword === true}
   FROM tenants t
   WHERE t.sso_domain = 'acme.com'
     AND NOT EXISTS (SELECT 1 FROM users u WHERE u.tenant_id = t.id AND u.email = '${account.email}');

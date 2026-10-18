@@ -35,3 +35,11 @@ export function resolveRole(value: unknown): UserRole {
 export function canAccessAdmin(role: UserRole): boolean {
   return role !== "employee";
 }
+
+/**
+ * Whether a role may manage members (`/admin/users`). Member interfaces are the
+ * platform administrator's alone (C-28); every other admin role is refused.
+ */
+export function canManageMembers(role: UserRole): boolean {
+  return role === "platform_admin";
+}

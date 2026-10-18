@@ -30,6 +30,7 @@ export const API_ROUTES = {
   dashboardAdmin: "/dashboard/admin",
   dashboardUser: "/dashboard/user",
   models: "/models",
+  members: "/users",
 } as const;
 
 /** Frontend page routes. */
@@ -46,6 +47,7 @@ export const ROUTES = {
   adminTools: "/admin/tools",
   adminToolsNew: "/admin/tools/new",
   adminToolDetail: (toolId: string) => `/admin/tools/${toolId}`,
+  adminMembers: "/admin/users",
   conversations: "/user/conversations",
   conversationDetail: (conversationId: string) => `/user/conversations/${conversationId}`,
   adminRunLogs: "/admin/run-logs",
