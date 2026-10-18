@@ -280,6 +280,28 @@ async def test_create_creates_dataset_api_key_when_none_exists() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_takes_the_earliest_dataset_api_key_by_stamp() -> None:
+    tenant = _tenant()
+    dify = AsyncMock()
+    dify.create_dataset.return_value = {"id": "ds-1"}
+    dify.get_dataset_api_keys.return_value = {
+        "data": [
+            {"id": "key-2", "token": "ds-newer", "created_at": 1_706_745_600},
+            {"id": "key-3", "token": "ds-undated"},
+            {"id": "key-1", "token": "ds-earliest", "created_at": "2024-01-01T00:00:00Z"},
+        ]
+    }
+    repo = _FakeRepository()
+    service = _service(dify, repo=repo)
+
+    await service.create(AsyncMock(), tenant, CreateKnowledgeBaseDto(name="KB"))
+
+    stored = next(iter(repo._kbs.values()))
+    assert stored.dify_api_key == "ds-earliest"
+    dify.create_dataset_api_key.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_create_compensates_deletes_dataset_on_commit_failure() -> None:
     tenant = _tenant()
     dify = AsyncMock()
