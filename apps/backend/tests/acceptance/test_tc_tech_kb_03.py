@@ -625,11 +625,10 @@ async def test_create_reuses_the_tenants_existing_dataset_api_key(api) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="C-48 taking the earliest dataset key not implemented at main@68ad4b5")
 async def test_create_takes_the_tenants_earliest_dataset_api_key(api) -> None:
     """C-48: concurrent key creation converges by taking the earliest one.
 
-    The upstream lists the tenant's keys with the newest first, so picking one by
+    The payload carries the tenant's keys newest first, so picking one by
     position stores a key the tenant did not create first.
     """
     tenant, user = await api.seed(role="knowledge_admin")

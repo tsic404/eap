@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime
 from typing import Any
 
 from fastapi import UploadFile
@@ -477,15 +478,18 @@ class KnowledgeService:
             )
 
     async def _get_or_create_dataset_api_key(self) -> str:
-        """Reuse the tenant's existing dataset API key, creating one only if absent.
+        """Reuse the tenant's earliest-created dataset API key, or create one.
 
         Dify 1.17.0 caps dataset keys at 10 per tenant, so a key per knowledge
         base would exhaust the pool; all KBs in a tenant share one key instead.
+        The upstream returns the tenant's keys in no defined order, so the one
+        it created first is found by its stamp — which is also what makes keys
+        created concurrently converge on the same entry.
         """
         keys = await self._dify_console.get_dataset_api_keys()
         existing = keys.get("data") or []
         if existing:
-            return str(existing[0]["token"])
+            return str(min(existing, key=_dataset_key_order)["token"])
         created = await self._dify_console.create_dataset_api_key()
         return str(created["token"])
 
@@ -496,6 +500,25 @@ class KnowledgeService:
         if kb is None:
             raise AppError(404, "KB_NOT_FOUND", "Knowledge base not found")
         return kb
+
+
+def _dataset_key_order(key: dict[str, Any]) -> float:
+    """Sort value placing the tenant's earliest-created dataset API key first.
+
+    ``created_at`` is Dify's creation stamp — Unix epoch seconds, or an ISO-8601
+    string. The field is nullable, and a key carrying no readable stamp cannot
+    be shown to be the earliest one, so it sorts behind every dated key instead
+    of winning on its position.
+    """
+    stamp = key.get("created_at")
+    if isinstance(stamp, str):
+        try:
+            return datetime.fromisoformat(stamp).timestamp()
+        except ValueError:
+            return float("inf")
+    if isinstance(stamp, (int, float)) and not isinstance(stamp, bool):
+        return float(stamp)
+    return float("inf")
 
 
 def _citation_content(record: dict[str, Any]) -> str:
