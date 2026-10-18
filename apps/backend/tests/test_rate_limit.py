@@ -7,6 +7,7 @@ import uuid
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from httpx import Response
 from redis.exceptions import RedisError
 
 from app.config import Settings
@@ -138,6 +139,13 @@ async def test_redis_bucket_recovers_after_cooldown(monkeypatch: pytest.MonkeyPa
     assert limiter._failed_at == 0.0
 
 
+def _assert_no_rate_limit_headers(response: Response) -> None:
+    """C-10: a 429 must not advertise rate-limit metadata."""
+    header_names = {name.lower() for name in response.headers}
+    assert "retry-after" not in header_names
+    assert not any(name.startswith("x-ratelimit-") for name in header_names)
+
+
 def test_middleware_returns_429_when_conversation_limit_exceeded() -> None:
     settings = Settings(_env_file=None, rate_limit_conversation_per_minute=2)
     app = FastAPI()
@@ -155,6 +163,7 @@ def test_middleware_returns_429_when_conversation_limit_exceeded() -> None:
         resp = client.get("/api/conversations")
         assert resp.status_code == 429
         assert resp.json()["error"]["code"] == "RATE_LIMITED"
+        _assert_no_rate_limit_headers(resp)
 
 
 def test_middleware_returns_429_on_global_exhaustion() -> None:
@@ -172,6 +181,7 @@ def test_middleware_returns_429_on_global_exhaustion() -> None:
         resp = client.get("/api/anything")
         assert resp.status_code == 429
         assert resp.json()["error"]["code"] == "RATE_LIMITED"
+        _assert_no_rate_limit_headers(resp)
 
 
 # Port 1 has no listener: an unreachable shared store without a network wait.
@@ -199,6 +209,7 @@ def test_middleware_degrades_when_shared_store_is_unreachable() -> None:
     # During the outage the in-process bucket keeps enforcing the same limit.
     assert third.status_code == 429
     assert third.json()["error"]["code"] == "RATE_LIMITED"
+    _assert_no_rate_limit_headers(third)
     assert limiter._unavailable is True
 
 
