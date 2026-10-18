@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -61,6 +62,13 @@ class Task(Base):
 
     __table_args__ = (
         Index("ix_tasks_tenant_assignee_status", "tenant_id", "assignee_id", "status"),
+        # Serves the 15s approval-expiry scan, which looks up (status, expires_at)
+        # across all tenants — a shape the tenant-leading index above cannot cover.
+        Index(
+            "ix_tasks_pending_expires_at",
+            "expires_at",
+            postgresql_where=text("status = 'pending' AND expires_at IS NOT NULL"),
+        ),
         # Same-tenant integrity: creator and assignee must belong to this
         # task's tenant (guards against cross-tenant references).
         ForeignKeyConstraint(

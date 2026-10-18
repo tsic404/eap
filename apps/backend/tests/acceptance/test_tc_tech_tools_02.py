@@ -26,6 +26,7 @@ from app.models.task import Task
 from app.models.task_outbox import TaskOutboxEvent
 from app.models.tool import ToolRegistry
 from app.services.conversation import ConversationService
+from app.services.task_expiry import SCAN_INTERVAL_SECONDS, expire_overdue_approvals
 from app.services.task_reconcile import reconcile_undelivered
 from app.services.tool_proxy import ToolProxy
 
@@ -237,25 +238,29 @@ async def test_approving_a_terminal_task_returns_422_invalid_transition(api) -> 
     assert resp.json()["error"]["code"] == "INVALID_TRANSITION"
 
 
-@pytest.mark.xfail(reason="C-75 approval-timeout scan not implemented at main@68ad4b5")
 @pytest.mark.asyncio
 async def test_timeout_scan_cancels_an_expired_pending_approval(api) -> None:
     tenant, admin = await api.seed(role="agent_admin")
     headers = api.auth(admin, tenant)
     task = await _seed_task(api, tenant, admin, expires_at=datetime.now(UTC) - timedelta(hours=1))
 
-    # The design runs the scan on a 15s cycle, but the scan does not exist yet:
-    # poll far below one cycle so the expected failure stays cheap. Extend this
-    # window back to one full cycle once C-75 lands.
-    deadline = time.monotonic() + 5.0
+    # The lifespan — and with it the 15s scheduler — does not run under an ASGI
+    # transport, so drive the same scan the scheduled job runs and poll the task
+    # the way a client would, for one full design cycle.
+    deadline = time.monotonic() + SCAN_INTERVAL_SECONDS
     status = "pending"
+    detail: dict[str, Any] = {}
     while time.monotonic() < deadline:
-        status = (await _task_detail(api, headers, str(task.id)))["status"]
+        await expire_overdue_approvals(api.db.session)
+        detail = await _task_detail(api, headers, str(task.id))
+        status = detail["status"]
         if status == "cancelled":
             break
         await asyncio.sleep(0.5)
 
     assert status == "cancelled"
+    # C-75: the user-visible result of a timeout cancellation.
+    assert detail["result"] == {"reason": "超时取消"}
     resp = await _post(api, headers, str(task.id), "approve", {})
     assert resp.status_code == 422
     assert resp.json()["error"]["code"] == "INVALID_TRANSITION"
