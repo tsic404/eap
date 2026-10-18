@@ -423,12 +423,10 @@ async def test_debug_of_tool_without_endpoint_returns_422_without_calling_upstre
     assert calls == []
 
 
-@pytest.mark.xfail(
-    reason="C-67 disabled-mode gate not applied on approval-triggered execution at main@68ad4b5"
-)
 @pytest.mark.asyncio
 async def test_execution_of_disabled_tool_never_reaches_upstream(api, monkeypatch) -> None:
     tenant, admin = await api.seed(role="agent_admin")
+    headers = api.auth(admin, tenant)
     await _insert_tool(api, tool_id="switched-off", tenant_id=tenant.id, permission_mode="disabled")
     calls = _install_proxy(api, _ok)
     task = await _seed_approved_task(api, tenant, admin, "switched-off")
@@ -436,7 +434,17 @@ async def test_execution_of_disabled_tool_never_reaches_upstream(api, monkeypatc
     await _run_execution(api, monkeypatch, task, api.app.state.tool_proxy)
 
     assert calls == []
-    assert (await _task_detail(api, api.auth(admin, tenant), str(task.id)))["status"] == "failed"
+    detail = await _task_detail(api, headers, str(task.id))
+    assert detail["status"] == "failed"
+    # C-67: execution and debug apply the same judgement. The debug surface
+    # exposes the stable code for a disabled tool, and the execution row
+    # reports that same refusal instead of an upstream failure.
+    debug = await api.client.post(
+        "/api/tools/switched-off/debug", headers=headers, json={"params": {"q": 1}}
+    )
+    assert debug.status_code == 409
+    assert debug.json()["error"]["code"] == "TOOL_DISABLED"
+    assert detail["error_message"] == debug.json()["error"]["message"]
 
 
 @pytest.mark.asyncio

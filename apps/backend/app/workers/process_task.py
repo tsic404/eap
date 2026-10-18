@@ -25,6 +25,7 @@ from app.db import async_session_factory
 from app.models.task import Task
 from app.models.tool import ToolRegistry
 from app.services.tool_proxy import ToolProxy
+from app.services.tool_service import ToolService
 
 log = structlog.get_logger(__name__)
 
@@ -130,6 +131,9 @@ async def _execute_tool(
     await session.commit()
 
     try:
+        # Approval is a decision about one request, not about the tool's current
+        # mode: re-run the judgement so a tool disabled after approval is refused.
+        ToolService.ensure_invocable(tool)
         result = await proxy.execute(tool, payload.get("params", {}))
     except Exception as exc:
         task.status = "failed"
