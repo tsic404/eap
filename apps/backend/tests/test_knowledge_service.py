@@ -101,6 +101,8 @@ class _FakeRepository:
         self.chunk_additions: list[tuple[str, int]] = []
         self.document_additions: list[str] = []
         self.releases: list[tuple[str, int]] = []
+        # Every status move as it was called: (kb_id, document_id, status, from_status).
+        self.transitions: list[tuple[str, str, str, str | None]] = []
 
     async def get_for_tenant(
         self, session: Any, kb_id: str, tenant_id: uuid.UUID
@@ -188,9 +190,13 @@ class _FakeRepository:
         document_id: str,
         status: str,
         error: str | None = None,
+        from_status: str | None = None,
     ) -> bool:
+        self.transitions.append((kb_id, document_id, status, from_status))
         doc = self._documents.get((kb_id, document_id))
         if doc is None or doc.status == status:
+            return False
+        if from_status is not None and doc.status != from_status:
             return False
         doc.status = status
         doc.error = error
@@ -200,6 +206,15 @@ class _FakeRepository:
         self, session: Any, *, kb_id: str, document_id: str
     ) -> KnowledgeDocument | None:
         return self._documents.get((kb_id, document_id))
+
+    async def get_documents(
+        self, session: Any, *, kb_id: str, document_ids: list[str]
+    ) -> dict[str, KnowledgeDocument]:
+        return {
+            document_id: document
+            for (row_kb_id, document_id), document in self._documents.items()
+            if row_kb_id == kb_id and document_id in document_ids
+        }
 
     async def add_chunk_count(self, session: Any, *, kb_id: str, delta: int) -> None:
         self.chunk_additions.append((kb_id, delta))
@@ -825,6 +840,83 @@ async def test_retry_document_wraps_single_id_in_document_ids() -> None:
     # Dify's retry endpoint only accepts the batch shape; a single document is
     # still sent as a one-element list.
     dify.retry_document_indexing.assert_awaited_once_with("ds-1", ["doc-1"])
+
+
+@pytest.mark.asyncio
+async def test_retry_document_rolls_the_record_back_to_indexing() -> None:
+    """C-45: a restart Dify accepted is what both read paths then answer from."""
+    tenant = _tenant()
+    dify = AsyncMock()
+    repo = _FakeRepository((_kb(tenant),), (_doc("kb-1", "doc-1", "failed"),))
+    service = _service(dify, repo=repo)
+
+    await service.retry_document(AsyncMock(), tenant, "kb-1", "doc-1")
+
+    stored = await repo.get_document(AsyncMock(), kb_id="kb-1", document_id="doc-1")
+    assert stored is not None
+    assert stored.status == "indexing"
+
+
+@pytest.mark.asyncio
+async def test_retry_document_rolls_back_only_from_the_failed_state() -> None:
+    """C-45: the roll-back is issued with the departure state it may leave.
+
+    Read off the call, not off the row it moved: the retry refuses a non-failed
+    document before it reaches the repository, so a guard dropped from this call
+    would stay invisible to any assertion that only reads a row the retry was
+    allowed to move. The document seeded here is a failure, so the assertion
+    holds with or without that refusal.
+    """
+    tenant = _tenant()
+    dify = AsyncMock()
+    repo = _FakeRepository((_kb(tenant),), (_doc("kb-1", "doc-1", "failed"),))
+    service = _service(dify, repo=repo)
+
+    await service.retry_document(AsyncMock(), tenant, "kb-1", "doc-1")
+
+    assert repo.transitions == [("kb-1", "doc-1", "indexing", "failed")]
+
+
+@pytest.mark.asyncio
+async def test_retry_document_refuses_a_document_that_did_not_fail() -> None:
+    """C-45: only a recorded failure is retryable; every other state is a 422.
+
+    A rewind out of ``completed`` would re-arm the completion transition, and the
+    next completion would count the document's segments and emit its event again.
+    """
+    tenant = _tenant()
+
+    for stored in ("completed", "indexing"):
+        dify = AsyncMock()
+        repo = _FakeRepository((_kb(tenant),), (_doc("kb-1", "doc-1", stored),))
+        service = _service(dify, repo=repo)
+
+        with pytest.raises(AppError) as exc:
+            await service.retry_document(AsyncMock(), tenant, "kb-1", "doc-1")
+
+        assert (exc.value.status_code, exc.value.code) == (422, "INVALID_STATE")
+        dify.retry_document_indexing.assert_not_awaited()
+        document = await repo.get_document(AsyncMock(), kb_id="kb-1", document_id="doc-1")
+        assert document is not None
+        assert document.status == stored
+
+
+@pytest.mark.asyncio
+async def test_retry_document_keeps_the_record_of_a_restart_dify_refused() -> None:
+    """C-45: a refused restart leaves the local state — and the retry — intact."""
+    tenant = _tenant()
+    dify = AsyncMock()
+    dify.retry_document_indexing.side_effect = DifyConsoleError(500, "upstream")
+    repo = _FakeRepository((_kb(tenant),), (_doc("kb-1", "doc-1", "failed"),))
+    service = _service(dify, repo=repo)
+
+    with pytest.raises(AppError) as exc:
+        await service.retry_document(AsyncMock(), tenant, "kb-1", "doc-1")
+
+    assert (exc.value.status_code, exc.value.code) == (502, "DIFY_ERROR")
+    stored = await repo.get_document(AsyncMock(), kb_id="kb-1", document_id="doc-1")
+    assert stored is not None
+    assert stored.status == "failed"
 
 
 @pytest.mark.asyncio

@@ -146,6 +146,23 @@ class KnowledgeRepository:
         )
         return cast(KnowledgeDocument | None, await session.scalar(stmt))
 
+    async def get_documents(
+        self, session: AsyncSession, *, kb_id: str, document_ids: list[str]
+    ) -> dict[str, KnowledgeDocument]:
+        """The tracked rows of ``document_ids``, keyed by document id.
+
+        One query serves a whole listing page, so the batch of answers a listing
+        returns is decided against the records as they stood together.
+        """
+        if not document_ids:
+            return {}
+        stmt = select(KnowledgeDocument).where(
+            KnowledgeDocument.kb_id == kb_id,
+            KnowledgeDocument.document_id.in_(document_ids),
+        )
+        rows = (await session.scalars(stmt)).all()
+        return {row.document_id: row for row in rows}
+
     async def transition_document_status(
         self,
         session: AsyncSession,
@@ -154,18 +171,26 @@ class KnowledgeRepository:
         document_id: str,
         status: DocumentStatus,
         error: str | None = None,
+        from_status: DocumentStatus | None = None,
     ) -> bool:
-        """Atomically record a terminal status; ``True`` only on a real transition.
+        """Atomically move a document's recorded status; ``True`` on a real move.
 
-        The conditional ``UPDATE ... WHERE status <> :status RETURNING`` fires only
-        when the previous status differed, so concurrent polls cannot double-emit.
+        One guarded ``UPDATE ... RETURNING`` carries the move, so concurrent
+        observers cannot double-emit. ``from_status`` narrows it to a single
+        departure state — an explicit retry only ever leaves ``failed`` — and
+        without one the guard is that the stored status differs from ``status``.
         """
+        guard = (
+            KnowledgeDocument.status != status
+            if from_status is None
+            else KnowledgeDocument.status == from_status
+        )
         stmt = (
             update(KnowledgeDocument)
             .where(
                 KnowledgeDocument.kb_id == kb_id,
                 KnowledgeDocument.document_id == document_id,
-                KnowledgeDocument.status != status,
+                guard,
             )
             .values(status=status, error=error)
             .returning(KnowledgeDocument.document_id)

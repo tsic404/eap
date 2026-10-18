@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,7 +28,7 @@ from app.events.knowledge import (
 )
 from app.files import MAX_FILE_SIZE_BYTES, validate_document_file
 from app.logging_conf import get_logger
-from app.models.knowledge import KnowledgeBaseRegistry
+from app.models.knowledge import KnowledgeBaseRegistry, KnowledgeDocument
 from app.models.tenant import Tenant
 from app.repositories.knowledge import KnowledgeRepository
 from app.schemas.knowledge import (
@@ -61,6 +61,26 @@ def _document_status(indexing_status: str | None) -> DocumentStatus:
     if indexing_status in {"error", "failed"}:
         return "failed"
     return "indexing"
+
+
+def _answered_status(
+    recorded: KnowledgeDocument | None,
+    folded_status: DocumentStatus,
+    error: str | None,
+) -> tuple[DocumentStatus, str | None]:
+    """The status one observation answers, held to what the record reached.
+
+    A document that already reached a terminal state is never answered as an
+    earlier one: a later read can still return an unfinished upstream state, and
+    the record — not the read — is what the document has reached. Only an
+    explicit retry moves the record itself back to indexing, which is why the
+    record is read here instead of the reached state being frozen.
+    """
+    if recorded is None or folded_status in _TERMINAL_STATUSES:
+        return folded_status, error
+    if recorded.status in _TERMINAL_STATUSES:
+        return cast(DocumentStatus, recorded.status), recorded.error
+    return folded_status, error
 
 
 def _segment_count(status: dict[str, Any]) -> int:
@@ -284,17 +304,20 @@ class KnowledgeService:
     ) -> DocumentPageDto:
         kb = await self._require_kb(session, tenant, kb_id)
         result = await self._dify_console.list_documents(kb.dify_dataset_id, page=page, limit=limit)
-        observed = [
-            (
-                DocumentDto(
-                    id=doc["id"],
-                    name=doc.get("name") or "",
-                    status=_document_status(doc.get("indexing_status")),
-                ),
+        listed = result.get("data", [])
+        records = await self._repository.get_documents(
+            session, kb_id=kb.kb_id, document_ids=[doc["id"] for doc in listed]
+        )
+        observed: list[tuple[DocumentDto, str | None]] = []
+        for doc in listed:
+            status, error = _answered_status(
+                records.get(doc["id"]),
+                _document_status(doc.get("indexing_status")),
                 doc.get("error"),
             )
-            for doc in result.get("data", [])
-        ]
+            observed.append(
+                (DocumentDto(id=doc["id"], name=doc.get("name") or "", status=status), error)
+            )
         # The UI polls this listing while documents index and never calls the
         # per-document status endpoint, so a terminal status is usually first
         # observed here: record it, or the completion state machine (and the
@@ -319,6 +342,10 @@ class KnowledgeService:
         )
         new_status = _document_status(status.get("indexing_status"))
         error = status.get("error")
+        recorded = await self._repository.get_document(
+            session, kb_id=kb.kb_id, document_id=document_id
+        )
+        answered, answered_error = _answered_status(recorded, new_status, error)
 
         # Commit first so the event only fires once the state change is durable.
         transitioned = False
@@ -336,7 +363,7 @@ class KnowledgeService:
         if transitioned:
             await self._emit_terminal_event(kb.kb_id, document_id, new_status, error)
 
-        return DocumentStatusDto(id=document_id, status=new_status, error=error)
+        return DocumentStatusDto(id=document_id, status=answered, error=answered_error)
 
     async def retry_document(
         self,
@@ -345,13 +372,34 @@ class KnowledgeService:
         kb_id: str,
         document_id: str,
     ) -> None:
-        """Restart indexing for a failed document; Dify owns the resulting state."""
+        """Restart indexing for a failed document; the record follows it back.
+
+        C-45 admits only a document the record holds as ``failed``: anything else
+        is refused before Dify is called, because rewinding a completion would
+        re-arm the completion transition and count the same segments — and emit
+        the same event — a second time (C-40 / C-108). The roll-back is the same
+        guarded move the observers use, restricted to the departure it allows.
+        """
         kb = await self._require_kb(session, tenant, kb_id)
         _require_document_id(document_id)
+        recorded = await self._repository.get_document(
+            session, kb_id=kb.kb_id, document_id=document_id
+        )
+        if recorded is not None and recorded.status != "failed":
+            raise AppError(422, "INVALID_STATE", "仅失败文档可重试")
         try:
             await self._dify_console.retry_document_indexing(kb.dify_dataset_id, [document_id])
         except DifyConsoleError as exc:
+            # Dify never saw a restart, so the record keeps the failure it shows.
             raise _document_operation_error(exc, code="DOCUMENT_RETRY_FAILED") from exc
+        await self._repository.transition_document_status(
+            session,
+            kb_id=kb.kb_id,
+            document_id=document_id,
+            status="indexing",
+            from_status="failed",
+        )
+        await session.commit()
 
     async def delete_document(
         self,
