@@ -189,6 +189,20 @@ class _FakeRepository:
         if kb is not None:
             kb.chunk_count += delta
 
+    async def refresh_indexing_status(self, session: Any, *, kb_id: str) -> None:
+        kb = self._kbs.get(kb_id)
+        if kb is None:
+            return
+        statuses = {
+            doc.status for (doc_kb_id, _), doc in self._documents.items() if doc_kb_id == kb_id
+        }
+        if "indexing" in statuses:
+            kb.indexing_status = "indexing"
+        elif "failed" in statuses:
+            kb.indexing_status = "failed"
+        else:
+            kb.indexing_status = "ready"
+
     async def add_document_count(self, session: Any, *, kb_id: str) -> None:
         self.document_additions.append(kb_id)
         kb = self._kbs.get(kb_id)
