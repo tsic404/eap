@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.main import create_app
 from app.middleware.security import RateLimitMiddleware
-from app.rate_limit import InMemoryTokenBucket
+from app.rate_limit import InMemoryTokenBucket, client_ip
 
 
 def test_success_response_wrapped_in_data(client: TestClient) -> None:
@@ -85,21 +85,18 @@ def test_rate_limiter_ignores_spoofed_x_forwarded_for() -> None:
     scope = {"headers": [(b"x-forwarded-for", b"1.2.3.4, 5.6.7.8")], "client": ("9.9.9.9", 1234)}
 
     # No trusted proxies configured: X-Forwarded-For is ignored, peer IP wins.
-    default = RateLimitMiddleware(None, Settings(_env_file=None))
-    assert default._client_ip(scope) == "9.9.9.9"
+    assert client_ip(scope, 0) == "9.9.9.9"
 
     # One trusted proxy: the rightmost (proxy-appended) hop is the real client,
     # not the leftmost client-spoofable value.
-    behind_proxy = RateLimitMiddleware(None, Settings(_env_file=None, trusted_proxy_count=1))
-    assert behind_proxy._client_ip(scope) == "5.6.7.8"
+    assert client_ip(scope, 1) == "5.6.7.8"
 
 
 def test_rate_limiter_handles_degenerate_x_forwarded_for() -> None:
     # A header of only separators/whitespace yields no usable hop and must fall
     # back to the socket peer instead of raising IndexError.
     scope = {"headers": [(b"x-forwarded-for", b", ,")], "client": ("9.9.9.9", 1234)}
-    middleware = RateLimitMiddleware(None, Settings(_env_file=None, trusted_proxy_count=1))
-    assert middleware._client_ip(scope) == "9.9.9.9"
+    assert client_ip(scope, 1) == "9.9.9.9"
 
 
 def test_streaming_response_not_wrapped_or_truncated() -> None:
