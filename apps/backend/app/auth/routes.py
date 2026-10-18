@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated
 from urllib.parse import urlencode
 
+import jwt
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy import func, select
@@ -36,8 +38,10 @@ from app.rate_limit import client_ip
 router = APIRouter(tags=["auth"])
 
 _REFRESH_COOKIE = "refresh_token"
-# The refresh token is only ever sent to the auth sub-path, never site-wide.
-_REFRESH_COOKIE_PATH = "/api/auth"
+# The refresh token is only ever sent to the refresh endpoint itself (C-3).
+_REFRESH_COOKIE_PATH = "/api/auth/refresh"
+# Wider path used before C-3 confined the cookie; browsers delete by name and path.
+_PRE_CONFINEMENT_COOKIE_PATH = "/api/auth"
 # Post-login landing page (served by the frontend, routed by nginx).
 _FRONTEND_HOME = "/user"
 # Login page, where a failed callback hands the browser back with its error code.
@@ -55,6 +59,11 @@ def _login_error_redirect(code: str) -> RedirectResponse:
     return RedirectResponse(f"{_FRONTEND_LOGIN}?{urlencode({'error': code})}", status_code=302)
 
 
+def _retire_pre_confinement_cookie(response: Response) -> None:
+    """Drop the wider-path duplicate a browser that logged in earlier still holds."""
+    response.delete_cookie(_REFRESH_COOKIE, path=_PRE_CONFINEMENT_COOKIE_PATH)
+
+
 def _set_refresh_cookie(response: Response, token_pair: TokenPair, settings: Settings) -> None:
     response.set_cookie(
         _REFRESH_COOKIE,
@@ -65,6 +74,15 @@ def _set_refresh_cookie(response: Response, token_pair: TokenPair, settings: Set
         samesite="lax",
         secure=settings.cookie_secure,
     )
+    _retire_pre_confinement_cookie(response)
+
+
+def _bearer_token(request: Request) -> str | None:
+    """The access token of the request's ``Authorization: Bearer`` header, if any."""
+    authorization = request.headers.get("authorization", "")
+    if not authorization.lower().startswith("bearer "):
+        return None
+    return authorization[7:].strip() or None
 
 
 async def _revoke_bearer_token(request: Request) -> None:
@@ -74,11 +92,35 @@ async def _revoke_bearer_token(request: Request) -> None:
     and an access token the client kept to itself then only outlives its own
     short ``exp``.
     """
-    authorization = request.headers.get("authorization", "")
-    if not authorization.lower().startswith("bearer "):
+    token = _bearer_token(request)
+    if token is None:
         return
-    token = authorization[7:].strip()
     await revoke_access_token(getattr(request.app.state, "redis", None), token)
+
+
+def _bearer_session_id(request: Request) -> uuid.UUID | None:
+    """The session named by the request's access token, when that token is authentic.
+
+    The signature is verified against the platform's public key; ``exp`` is
+    deliberately not, because a browser reaches logout holding the token it last
+    obtained, and C-3 keeps the refresh credential away from this endpoint —
+    demanding an unexpired token would end no session at all.
+    """
+    token = _bearer_token(request)
+    public_key = getattr(getattr(request.app.state, "settings", None), "jwt_public_key", "")
+    if token is None or not public_key:
+        return None
+    try:
+        claims = jwt.decode(token, public_key, algorithms=["RS256"], options={"verify_exp": False})
+    except jwt.PyJWTError:
+        return None
+    raw = claims.get("sid")
+    if not isinstance(raw, str):
+        return None
+    try:
+        return uuid.UUID(raw)
+    except ValueError:
+        return None
 
 
 async def _resolve_user(
@@ -357,15 +399,23 @@ async def logout(
     response: Response,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> dict[str, str]:
-    """Revoke the access token (by ``jti``) and the refresh-token family; clear the cookie."""
+    """End the presented session: revoke its access token and refresh-token family."""
     refresh_service: RefreshService = request.app.state.refresh_service
 
     await _revoke_bearer_token(request)
 
-    raw_token = request.cookies.get(_REFRESH_COOKIE)
-    if raw_token:
-        await refresh_service.revoke(session, raw_token, reason="logout")
+    # C-3 keeps the browser from submitting the refresh credential here, so the
+    # session is identified by the access token's ``sid``; a client without one
+    # falls back to the credential it presented.
+    session_id = _bearer_session_id(request)
+    if session_id is not None:
+        await refresh_service.revoke_family(session, session_id, reason="logout")
+    else:
+        raw_token = request.cookies.get(_REFRESH_COOKIE)
+        if raw_token:
+            await refresh_service.revoke(session, raw_token, reason="logout")
     response.delete_cookie(_REFRESH_COOKIE, path=_REFRESH_COOKIE_PATH)
+    _retire_pre_confinement_cookie(response)
     return {"message": "已登出"}
 
 

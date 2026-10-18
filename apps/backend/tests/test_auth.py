@@ -183,13 +183,14 @@ async def test_discover_uses_discovery_url_not_issuer() -> None:
 def test_issue_access_token_roundtrip() -> None:
     settings = _settings()
     token, expires_in = issue_access_token(
-        settings, sub="user-1", tenant_id="tenant-1", role="employee"
+        settings, sub="user-1", tenant_id="tenant-1", role="employee", session_id="family-1"
     )
     claims = jwt.decode(token, _PUBLIC_PEM, algorithms=["RS256"])
     assert expires_in == 900
     assert claims["sub"] == "user-1"
     assert claims["tenantId"] == "tenant-1"
     assert claims["role"] == "employee"
+    assert claims["sid"] == "family-1"
     assert claims["jti"]
     assert claims["exp"] > claims["iat"]
 
@@ -411,14 +412,24 @@ async def test_callback_state_replay_redirects_with_state_error(
 
 
 def _set_cookie_attrs(response: httpx.Response) -> dict[str, str]:
-    """Parse a response's ``Set-Cookie`` header into a lowercase attribute map.
+    """Parse a response's first ``Set-Cookie`` header into a lowercase attribute map.
 
     Flags without a value (``HttpOnly``) map to ``"true"``; valued attributes
     keep their raw string. The cookie's name/value are exposed as ``name`` and
     ``value``.
     """
-    header = response.headers.get("set-cookie")
-    assert header, "expected a Set-Cookie header"
+    headers = response.headers.get_list("set-cookie")
+    assert headers, "expected a Set-Cookie header"
+    return _parse_set_cookie(headers[0])
+
+
+def _set_cookies_attrs(response: httpx.Response) -> list[dict[str, str]]:
+    """Parse every ``Set-Cookie`` header the response carries."""
+    return [_parse_set_cookie(header) for header in response.headers.get_list("set-cookie")]
+
+
+def _parse_set_cookie(header: str) -> dict[str, str]:
+    """Parse one ``Set-Cookie`` header into a lowercase attribute map."""
     segments = [segment.strip() for segment in header.split(";")]
     name, _, value = segments[0].partition("=")
     attrs: dict[str, str] = {"name": name, "value": value}
@@ -428,12 +439,20 @@ def _set_cookie_attrs(response: httpx.Response) -> dict[str, str]:
     return attrs
 
 
+def _legacy_path_retirement(response: httpx.Response) -> dict[str, str]:
+    """The wider-path deletion that retires a cookie issued before the narrowing."""
+    for attrs in _set_cookies_attrs(response):
+        if attrs["name"] == "refresh_token" and attrs.get("path") == "/api/auth":
+            return attrs
+    raise AssertionError("the pre-confinement cookie path was not retired")
+
+
 def _assert_refresh_cookie(attrs: dict[str, str]) -> None:
     """Assert the refresh-cookie contract the frontend depends on."""
     assert attrs["name"] == "refresh_token"
     assert attrs["value"]
     assert attrs.get("httponly") == "true"
-    assert attrs.get("path") == "/api/auth"
+    assert attrs.get("path") == "/api/auth/refresh"
     assert attrs.get("samesite") == "lax"
     # 30-day refresh TTL — NOT the 900s access-token TTL (see module note).
     assert attrs.get("max-age") == "2592000"
@@ -454,6 +473,7 @@ async def test_callback_sets_refresh_cookie_contract(session_factory) -> None:  
         assert callback.status_code == 302, callback.text
         assert callback.headers["location"] == "/user"
         _assert_refresh_cookie(_set_cookie_attrs(callback))
+        assert _legacy_path_retirement(callback)["max-age"] == "0"
     finally:
         await http.aclose()
         await mock_http.aclose()
@@ -480,6 +500,7 @@ async def test_refresh_rotates_cookie_with_contract(session_factory) -> None:  #
         rotated = _set_cookie_attrs(refresh)
         _assert_refresh_cookie(rotated)
         assert rotated["value"] != original  # the cookie actually rotated
+        assert _legacy_path_retirement(refresh)["max-age"] == "0"
     finally:
         await http.aclose()
         await mock_http.aclose()
@@ -487,7 +508,115 @@ async def test_refresh_rotates_cookie_with_contract(session_factory) -> None:  #
 
 @pytest.mark.asyncio
 async def test_logout_revokes_family_and_clears_cookie(session_factory) -> None:  # type: ignore[no-untyped-def]
-    """Logout clears the cookie and revokes the family: the old cookie is dead."""
+    """Logout ends the session named by the access token: the old cookie is dead."""
+    idp = _FakeIdP()
+    http, mock_http = await _start_callback_flow(idp, session_factory)
+    try:
+        state, nonce = await _begin_login(http)
+        idp.nonce = nonce
+        await http.get(f"/api/auth/callback?code=c1&state={state}", follow_redirects=False)
+        rotated = await http.post("/api/auth/refresh")
+        access_token = rotated.json()["data"]["accessToken"]
+        active = http.cookies.get("refresh_token")
+        assert active
+
+        # C-3 keeps the browser from submitting the cookie to logout; the access
+        # token names the session, so the family is revoked without one.
+        logout = await http.post(
+            "/api/auth/logout", headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert logout.status_code == 200, logout.text
+        clear = _set_cookie_attrs(logout)
+        assert clear["name"] == "refresh_token"
+        assert clear["max-age"] == "0"
+        assert clear["path"] == "/api/auth/refresh"
+        assert _legacy_path_retirement(logout)["max-age"] == "0"
+
+        # The revoked family no longer authenticates: replaying the active
+        # cookie after logout yields 401 (TOKEN_REUSE_DETECTED).
+        http.cookies.clear()
+        replay = await http.post(
+            "/api/auth/refresh",
+            headers={"Cookie": f"refresh_token={active}"},
+        )
+        assert replay.status_code == 401, replay.text
+        assert replay.json()["error"]["code"] == "TOKEN_REUSE_DETECTED"
+    finally:
+        await http.aclose()
+        await mock_http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_logout_with_an_expired_access_token_ends_its_session(session_factory) -> None:  # type: ignore[no-untyped-def]
+    """C-27 covers the ordinary idle path: the token expired, the session ends.
+
+    A browser logs out holding the last access token it obtained; C-3 keeps the
+    refresh credential out of this request, so a logout that accepted only
+    unexpired tokens would end nothing.
+    """
+    idp = _FakeIdP()
+    http, mock_http = await _start_callback_flow(idp, session_factory)
+    try:
+        state, nonce = await _begin_login(http)
+        idp.nonce = nonce
+        await http.get(f"/api/auth/callback?code=c1&state={state}", follow_redirects=False)
+        fresh = (await http.post("/api/auth/refresh")).json()["data"]["accessToken"]
+        active = http.cookies.get("refresh_token")
+        assert active
+
+        expired = _expire_access_token(fresh)
+        logout = await http.post("/api/auth/logout", headers={"Authorization": f"Bearer {expired}"})
+        assert logout.status_code == 200, logout.text
+
+        http.cookies.clear()
+        replay = await http.post("/api/auth/refresh", headers={"Cookie": f"refresh_token={active}"})
+        assert replay.status_code == 401, replay.text
+        assert replay.json()["error"]["code"] == "TOKEN_REUSE_DETECTED"
+    finally:
+        await http.aclose()
+        await mock_http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_logout_ignores_a_session_named_by_an_unverifiable_token(  # type: ignore[no-untyped-def]
+    session_factory,
+) -> None:
+    """A ``sid`` is only read from a token the platform's own key signed.
+
+    Otherwise a caller could end a session it cannot authenticate as by
+    presenting a token that merely claims that session's identifier.
+    """
+    idp = _FakeIdP()
+    http, mock_http = await _start_callback_flow(idp, session_factory)
+    try:
+        state, nonce = await _begin_login(http)
+        idp.nonce = nonce
+        await http.get(f"/api/auth/callback?code=c1&state={state}", follow_redirects=False)
+        fresh = (await http.post("/api/auth/refresh")).json()["data"]["accessToken"]
+        active = http.cookies.get("refresh_token")
+        assert active
+
+        foreign_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        claims = jwt.decode(fresh, options={"verify_signature": False})
+        forged = jwt.encode(claims, foreign_key, algorithm="RS256")
+        logout = await http.post("/api/auth/logout", headers={"Authorization": f"Bearer {forged}"})
+        assert logout.status_code == 200, logout.text
+
+        http.cookies.clear()
+        survivor = await http.post(
+            "/api/auth/refresh", headers={"Cookie": f"refresh_token={active}"}
+        )
+        assert survivor.status_code == 200, survivor.text
+    finally:
+        await http.aclose()
+        await mock_http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_logout_without_an_access_token_revokes_the_presented_family(  # type: ignore[no-untyped-def]
+    session_factory,
+) -> None:
+    """A client that presents only the refresh credential still ends its session."""
     idp = _FakeIdP()
     http, mock_http = await _start_callback_flow(idp, session_factory)
     try:
@@ -498,20 +627,36 @@ async def test_logout_revokes_family_and_clears_cookie(session_factory) -> None:
         active = http.cookies.get("refresh_token")
         assert active
 
-        logout = await http.post("/api/auth/logout")
+        logout = await http.post("/api/auth/logout", headers={"Cookie": f"refresh_token={active}"})
         assert logout.status_code == 200, logout.text
-        clear = _set_cookie_attrs(logout)
-        assert clear["name"] == "refresh_token"
-        assert clear["max-age"] == "0"
 
-        # The revoked family no longer authenticates: replaying the active
-        # cookie after logout yields 401 (TOKEN_REUSE_DETECTED).
         http.cookies.clear()
-        replay = await http.post(
-            "/api/auth/refresh",
-            headers={"Cookie": f"refresh_token={active}"},
-        )
+        replay = await http.post("/api/auth/refresh", headers={"Cookie": f"refresh_token={active}"})
         assert replay.status_code == 401, replay.text
+        assert replay.json()["error"]["code"] == "TOKEN_REUSE_DETECTED"
+    finally:
+        await http.aclose()
+        await mock_http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_access_token_names_the_session_of_its_refresh_family(session_factory) -> None:  # type: ignore[no-untyped-def]
+    """C-2: the token carries its session — stable across rotation, new on re-login."""
+    idp = _FakeIdP()
+    http, mock_http = await _start_callback_flow(idp, session_factory)
+    try:
+        state, nonce = await _begin_login(http)
+        idp.nonce = nonce
+        await http.get(f"/api/auth/callback?code=c1&state={state}", follow_redirects=False)
+        first = (await http.post("/api/auth/refresh")).json()["data"]["accessToken"]
+        second = (await http.post("/api/auth/refresh")).json()["data"]["accessToken"]
+        assert _session_id(first) == _session_id(second)
+
+        state, nonce = await _begin_login(http)
+        idp.nonce = nonce
+        await http.get(f"/api/auth/callback?code=c2&state={state}", follow_redirects=False)
+        re_login = (await http.post("/api/auth/refresh")).json()["data"]["accessToken"]
+        assert _session_id(re_login) != _session_id(first)
     finally:
         await http.aclose()
         await mock_http.aclose()
@@ -523,6 +668,26 @@ def _jti(token: str) -> str:
     jti = claims["jti"]
     assert isinstance(jti, str)
     return jti
+
+
+def _session_id(token: str) -> str:
+    """Read a token's ``sid`` without verifying it (test-side claim inspection)."""
+    claims = jwt.decode(token, options={"verify_signature": False})
+    session_id = claims["sid"]
+    assert isinstance(session_id, str)
+    return session_id
+
+
+def _expire_access_token(token: str) -> str:
+    """Re-sign ``token``'s claims with its validity window moved into the past.
+
+    What a browser holds after 900 idle seconds: authentic, but past ``exp``.
+    """
+    claims = jwt.decode(token, options={"verify_signature": False})
+    expired_at = datetime.now(UTC) - timedelta(seconds=60)
+    claims["iat"] = expired_at - timedelta(seconds=ACCESS_TOKEN_TTL_SECONDS)
+    claims["exp"] = expired_at
+    return jwt.encode(claims, _KEY, algorithm="RS256")
 
 
 @pytest.mark.asyncio

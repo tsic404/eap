@@ -176,10 +176,14 @@ def _error_code(response: httpx.Response) -> str:
 
 
 def _cookie_attributes(response: httpx.Response) -> dict[str, str]:
-    """Parse the response's ``Set-Cookie`` header into a lowercased attribute map."""
-    header = response.headers.get("set-cookie")
-    assert header, "expected a Set-Cookie header"
-    segments = [segment.strip() for segment in header.split(";")]
+    """Parse the response's first ``Set-Cookie`` header into a lowercased attribute map.
+
+    Read positionally: ``Headers.get`` joins repeated headers with ``", "``, and a
+    response that also retires a cookie would then read as that retirement.
+    """
+    headers = response.headers.get_list("set-cookie")
+    assert headers, "expected a Set-Cookie header"
+    segments = [segment.strip() for segment in headers[0].split(";")]
     name, _, value = segments[0].partition("=")
     attributes = {"name": name, "value": value}
     for segment in segments[1:]:
@@ -517,7 +521,7 @@ async def test_success_returns_only_the_change_flag_and_the_refresh_cookie(  # t
         assert cookie["name"] == "refresh_token"
         assert cookie["value"]
         assert cookie["httponly"] == "true"
-        assert cookie["path"] == "/api/auth"
+        assert cookie["path"] == "/api/auth/refresh"
         assert cookie["samesite"] == "lax"
         assert cookie["max-age"] == "2592000"
 

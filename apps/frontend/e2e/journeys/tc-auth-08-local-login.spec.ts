@@ -59,7 +59,7 @@ test("TC-auth-08 credentials: 凭据形态与既有路径一致", async ({ page,
   expect(refreshCookie).toBeTruthy();
   expect(refreshCookie?.httpOnly).toBe(true);
   expect(refreshCookie?.sameSite).toBe("Lax");
-  expect(refreshCookie?.path).toBe("/api/auth");
+  expect(refreshCookie?.path).toBe("/api/auth/refresh");
 
   // Page scripts cannot read the refresh credential, and nothing is persisted.
   const scriptVisible = await page.evaluate(() => ({
