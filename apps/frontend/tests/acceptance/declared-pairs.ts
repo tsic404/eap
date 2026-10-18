@@ -329,25 +329,7 @@ export const DECLARED_PAIRS: readonly DeclaredPair[] = [
  * the suite, mirroring the backend suite's `xfail(strict=False)` markers.
  * Remove an entry when the implementation fix lands.
  */
-export const KNOWN_GAPS: Readonly<Record<string, true>> = {
-  "background|success": true,
-  "background|warning": true,
-  "background|info": true,
-  "success|success-foreground": true,
-  "success/90|success-foreground": true,
-  "success-subtle|success": true,
-  "warning|warning-foreground": true,
-  "warning-subtle|warning": true,
-  "info|info-foreground": true,
-  "info/90|info-foreground": true,
-  "info-subtle|info": true,
-  "danger/90|danger-foreground": true,
-  "danger-subtle|danger": true,
-  "danger-subtle|muted-foreground": true,
-  "primary-subtle|muted-foreground": true,
-  "muted|muted-foreground": true,
-  "muted|danger": true,
-};
+export const KNOWN_GAPS: Readonly<Record<string, true>> = {};
 
 export function pairKey(pair: DeclaredPair): string {
   const suffix =

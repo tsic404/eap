@@ -229,17 +229,13 @@ describe("TC-tech-ui-01 semantic colour pairs", () => {
 
   it("judges unrounded ratios and composites translucent backgrounds (C-84)", () => {
     const translucent = judgePair(pairByKey("danger/90|danger-foreground"));
-    expect(translucent.ratio).toBeCloseTo(4.32, 1);
-    expect(translucent.meets).toBe(false);
-    expect(KNOWN_GAPS[translucent.key]).toBe(true);
-    // Without compositing the solid slot would pass: the verdict depends on it.
-    expect(
-      contrastRatio(
-        COLOR_TOKENS["danger-foreground"],
-        COLOR_TOKENS.danger,
-        COLOR_TOKENS.background,
-      ),
-    ).toBeGreaterThanOrEqual(4.5);
+    const solid = judgePair(pairByKey("danger|danger-foreground"));
+    // C-84: the 90% slot is composited onto its parent before the formula, so
+    // its ratio sits strictly below the solid slot's instead of reusing the
+    // alpha value's channels as an opaque colour.
+    expect(translucent.ratio).toBeLessThan(solid.ratio);
+    expect(translucent.meets).toBe(true);
+    expect(KNOWN_GAPS[translucent.key]).toBeUndefined();
     // A value just below the threshold that rounds to 4.50 must still fail.
     const nearThreshold = contrastRatio("#767776", "#ffffff");
     expect(nearThreshold).toBeLessThan(4.5);
