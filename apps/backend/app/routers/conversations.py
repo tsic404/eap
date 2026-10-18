@@ -90,6 +90,17 @@ async def delete_conversation(
     await service.soft_delete(session, user, conversation_id)
 
 
+@router.post("/{conversation_id}/restore", response_model=ConversationDto)
+async def restore_conversation(
+    conversation_id: str,
+    service: ConversationServiceDep,
+    user: CurrentUser,
+    session: Session,
+) -> ConversationDto:
+    """Undo a soft delete; a conversation that is not deleted has nothing to undo (404)."""
+    return await service.restore(session, user, conversation_id)
+
+
 @router.get("/{conversation_id}/messages", response_model=MessagePageDto)
 async def list_messages(
     conversation_id: str,

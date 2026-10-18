@@ -181,6 +181,42 @@ async def test_delete_conversation_removes_from_list(session_factory) -> None:  
 
 
 @pytest.mark.asyncio
+async def test_restore_is_isolated_to_the_conversation_owner(session_factory) -> None:  # type: ignore[no-untyped-def]
+    client, private_key, tenant, alice = await _route_client(session_factory)
+    bob = User(
+        id=uuid.uuid4(),
+        tenant_id=tenant.id,
+        sso_sub="other-sub",
+        email="other@example.com",
+        name="Other",
+        role="employee",
+        status="active",
+    )
+    async with session_factory() as session:
+        session.add(bob)
+        await session.commit()
+
+    alice_token = {"Authorization": f"Bearer {_sign(private_key, alice, tenant)}"}
+    created = await client.post(
+        "/api/conversations", headers=alice_token, json={"agentId": "agent-1"}
+    )
+    detail = f"/api/conversations/{created.json()['data']['id']}"
+    assert (await client.delete(detail, headers=alice_token)).status_code == 204
+
+    bob_token = {"Authorization": f"Bearer {_sign(private_key, bob, tenant)}"}
+    refused = await client.post(f"{detail}/restore", headers=bob_token)
+
+    assert refused.status_code == 404
+    assert refused.json()["error"]["code"] == "NOT_FOUND"
+    # The refused call leaves Alice's conversation deleted, and she can restore it.
+    assert (await client.get(detail, headers=alice_token)).status_code == 404
+    restored = await client.post(f"{detail}/restore", headers=alice_token)
+    assert restored.status_code == 200
+    assert restored.json()["data"]["id"] == created.json()["data"]["id"]
+    assert (await client.get(detail, headers=alice_token)).status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_list_messages_returns_empty_before_first_turn(session_factory) -> None:  # type: ignore[no-untyped-def]
     client, private_key, tenant, user = await _route_client(session_factory)
     token = _sign(private_key, user, tenant)
