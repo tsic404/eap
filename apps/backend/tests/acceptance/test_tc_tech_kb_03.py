@@ -723,7 +723,6 @@ async def test_create_creates_a_dataset_api_key_when_the_tenant_has_none(api) ->
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="C-43 citation score ordering not implemented at main@68ad4b5")
 async def test_recall_citations_are_ordered_by_descending_score(api) -> None:
     tenant, user = await api.seed(role="knowledge_admin")
     await api.seed_kb(tenant, kb_id="kb-1")
@@ -808,7 +807,6 @@ async def test_recall_reports_the_real_elapsed_latency_in_the_contract_field(api
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="C-43 upstream recall failure 502 not implemented at main@68ad4b5")
 async def test_recall_reports_upstream_failure_as_502_dify_error(api) -> None:
     tenant, user = await api.seed(role="knowledge_admin")
     await api.seed_kb(tenant, kb_id="kb-1")
