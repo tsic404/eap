@@ -66,6 +66,25 @@ def error_response(
     return JSONResponse(status_code=status_code, content={"error": error})
 
 
+def missing_field(name: str) -> dict[str, Any]:
+    """The ``details`` entry for a required body field that is absent or unusable.
+
+    Carries the field name and the reason only: a rejected value never travels
+    back to the caller (F8 — no password in an error detail).
+    """
+    return {"type": "missing", "loc": ["body", name], "msg": "Field required"}
+
+
+def invalid_field(name: str, message: str) -> dict[str, Any]:
+    """The ``details`` entry for a body field that fails a rule."""
+    return {"type": "value_error", "loc": ["body", name], "msg": message}
+
+
+def validation_error(*errors: dict[str, Any]) -> AppError:
+    """Build the 422 validation failure carrying a per-field ``details`` array (C-5)."""
+    return AppError(422, "VALIDATION_ERROR", "Request validation failed", details=list(errors))
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """Register the global exception handlers on ``app``."""
 

@@ -19,6 +19,7 @@ from collections.abc import Awaitable, Callable
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.dependencies import PASSWORD_CHANGE_REQUIRED
 from app.auth.revocation import is_access_token_revoked
 from app.db import get_session
 from app.errors import AppError
@@ -49,6 +50,10 @@ async def get_current_user(request: Request, session: AsyncSession = Depends(get
     user = await session.get(User, _parse_uuid(user_id, "UNAUTHORIZED"))
     if user is None or user.status != "active":
         raise AppError(401, "UNAUTHORIZED", "Invalid or inactive user")
+    # C-113: a forced first-login change blocks every business request, so the
+    # gate sits in identity resolution, ahead of any role check.
+    if user.must_change_password:
+        raise AppError(403, PASSWORD_CHANGE_REQUIRED, "Password change required")
 
     request.state.user = user
     return user

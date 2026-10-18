@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import json
-from typing import Annotated, Any
+from typing import Annotated
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import get_current_user
+from app.api_body import json_object
+from app.auth.dependencies import get_authenticated_user, get_current_user
 from app.auth.local_login import LocalLoginService
 from app.auth.oidc import (
     OidcClient,
@@ -20,6 +21,7 @@ from app.auth.oidc import (
     generate_nonce,
     generate_state,
 )
+from app.auth.password_change import change_own_password
 from app.auth.refresh import RefreshService, TokenPair
 from app.auth.revocation import revoke_access_token
 from app.auth.schemas import CurrentUser
@@ -28,7 +30,7 @@ from app.auth.tenants import resolve_tenant_by_email_domain
 from app.config import Settings
 from app.core.exceptions import AuthError
 from app.db import get_session
-from app.models.user import User
+from app.models.user import ACCOUNT_SOURCE_SSO, LOCAL_SUBJECT_PREFIX, User
 from app.rate_limit import client_ip
 
 router = APIRouter(tags=["auth"])
@@ -65,20 +67,6 @@ def _set_refresh_cookie(response: Response, token_pair: TokenPair, settings: Set
     )
 
 
-async def _json_body(request: Request) -> dict[str, Any]:
-    """Parse the request body; anything unusable reads as an empty object.
-
-    A malformed or absent body must not be judged before the steps that precede
-    the request fields (C-111 ①/②), so the route takes responsibility for
-    reading it instead of letting the framework reject it up front.
-    """
-    try:
-        body = await request.json()
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return {}
-    return body if isinstance(body, dict) else {}
-
-
 async def _revoke_bearer_token(request: Request) -> None:
     """Mark the request's access token revoked, when it carries a bearer token.
 
@@ -99,38 +87,92 @@ async def _resolve_user(
     claims: dict[str, object],
     userinfo: dict[str, object],
 ) -> User:
-    """Match the IdP identity to a tenant (by email domain) and find/create the user."""
+    """Match the IdP identity to a tenant (by email domain) and find/create the user.
+
+    The lookups decide nothing on their own: the address and the subject are
+    unique per tenant in the database (C-103), so a callback running at the same
+    time can write between them. The constraint that then fires is answered as
+    the same conflict the lookups raise, never as a server fault (C-24).
+    """
     sub = claims.get("sub")
     email = userinfo.get("email") or claims.get("email")
     if not isinstance(sub, str) or not isinstance(email, str):
         raise AuthError(400, "INVALID_STATE", "IdP identity missing sub or email")
+    if sub.startswith(LOCAL_SUBJECT_PREFIX):
+        # The prefix is the local accounts' own namespace (C-114), so an IdP
+        # subject carrying it names no identity here: it must not address a
+        # local account through the lookup below, nor be created as an SSO one.
+        raise AuthError(400, "INVALID_ID_TOKEN", "IdP subject is not usable")
 
     tenant = await resolve_tenant_by_email_domain(session, email)
+    # Read the tenant's key now: the rollback below expires the ORM instance, so
+    # the conflict branch must not reach back into it for one.
+    tenant_id = tenant.id
 
     user = await session.scalar(
-        select(User).where(User.tenant_id == tenant.id, User.sso_sub == sub)
+        select(User).where(
+            User.tenant_id == tenant_id,
+            User.sso_sub == sub,
+            User.account_source == ACCOUNT_SOURCE_SSO,
+        )
     )
     name = str(userinfo.get("name") or userinfo.get("preferred_username") or email)
     department = userinfo.get("department")
 
     if user is None:
+        # The address identifies one account per tenant (C-103), and a source is
+        # fixed at creation (C-114): an address already held by another account
+        # — a local one in particular — is refused here, before anything is
+        # written, and answered like the create path's conflict.
+        held = await session.scalar(
+            select(User.id)
+            .where(
+                User.tenant_id == tenant_id,
+                func.lower(User.email) == email.casefold(),
+            )
+            .limit(1)
+        )
+        if held is not None:
+            raise AuthError(409, "ACCOUNT_EXISTS", "Account already exists")
+
         user = User(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             sso_sub=sub,
             email=email,
             name=name,
             department=department if isinstance(department, str) else None,
             role="employee",
             status="active",
+            account_source=ACCOUNT_SOURCE_SSO,
         )
         session.add(user)
-        await session.flush()
     else:
         user.email = email
         user.name = name
         if isinstance(department, str):
             user.department = department
-    await session.commit()
+
+    try:
+        await session.flush()
+        await session.commit()
+    except IntegrityError:
+        # Both writes can lose the race the lookups above cannot close, and the
+        # email rewrite can land on an address another account already holds:
+        # the constraint knows which, and its verdict is the conflict this
+        # path answers (C-103 / C-23) — a redirect, not an error body (C-24).
+        await session.rollback()
+        stored = await session.scalar(
+            select(User).where(
+                User.tenant_id == tenant_id,
+                User.sso_sub == sub,
+                User.account_source == ACCOUNT_SOURCE_SSO,
+            )
+        )
+        if stored is None or stored.email.casefold() != email.casefold():
+            raise AuthError(409, "ACCOUNT_EXISTS", "Account already exists") from None
+        # A peer callback committed this very identity and address: the repeat
+        # submission continues on the account that landed.
+        user = stored
     return user
 
 
@@ -251,7 +293,7 @@ async def local_login(
     service: LocalLoginService = request.app.state.local_login_service
     refresh_service: RefreshService = request.app.state.refresh_service
 
-    payload = await _json_body(request)
+    payload = await json_object(request)
     result = await service.authenticate(
         session,
         email=payload.get("email"),
@@ -261,6 +303,27 @@ async def local_login(
     token_pair = await refresh_service.issue(session, result.user)
     _set_refresh_cookie(response, token_pair, settings)
     return {"mustChangePassword": result.must_change_password}
+
+
+@router.post("/api/auth/password")
+async def change_password(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    user: Annotated[User, Depends(get_authenticated_user)],
+) -> dict[str, str]:
+    """Change the authenticated local account's password (C-113).
+
+    This is the one business path a forced-change account may still use, so it
+    takes the gate-free identity dependency. Body: ``{"currentPassword": …,
+    "newPassword": …}`` — read here rather than declared, so a rejected body is
+    reported by field name and never echoes a password. Success ends every
+    refresh-token family of the account, so the next login uses the new
+    password; access tokens already issued stay valid (C-29's 900 s window).
+    """
+    refresh_service: RefreshService = request.app.state.refresh_service
+    body = await json_object(request)
+    await change_own_password(session, user, body=body, refresh_service=refresh_service)
+    return {"message": "密码已修改"}
 
 
 @router.post("/api/auth/refresh")
