@@ -10,11 +10,10 @@ harness transaction serialises statements, so it cannot express two transactions
 racing on one document row.
 
 Deliberately not covered here, so the gaps stay visible instead of being implied:
-the knowledge-base status aggregation to ``ready`` (C-41), the C-43 retrieval
-parameters (result count 1-10 defaulting to 5, score threshold, query length 1-1000
-with the empty-query 422), the auditor's recall-test entitlement and the employee
-read baseline (C-36), and the in-tenant 404s for a document that does not exist
-(C-45/C-46).
+the C-43 retrieval parameters (result count 1-10 defaulting to 5, score threshold,
+query length 1-1000 with the empty-query 422), the auditor's recall-test
+entitlement and the employee read baseline (C-36), and the in-tenant 404s for a
+document that does not exist (C-45/C-46).
 """
 
 from __future__ import annotations
@@ -518,7 +517,6 @@ async def test_delete_kb_reports_upstream_failure_as_502_and_keeps_the_record(ap
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="C-41 KB aggregation to indexing not implemented at main@68ad4b5")
 async def test_kb_status_is_indexing_while_a_document_is_indexing(api) -> None:
     tenant, user = await api.seed(role="knowledge_admin")
     await api.seed_kb(tenant, kb_id="kb-1")
@@ -533,7 +531,6 @@ async def test_kb_status_is_indexing_while_a_document_is_indexing(api) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="C-41 KB aggregation to failed not implemented at main@68ad4b5")
 async def test_kb_status_is_failed_when_a_document_failed(api) -> None:
     tenant, user = await api.seed(role="knowledge_admin")
     await api.seed_kb(tenant, kb_id="kb-1")
@@ -551,7 +548,50 @@ async def test_kb_status_is_failed_when_a_document_failed(api) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="C-41 recall rejection while indexing not implemented at main@68ad4b5")
+async def test_kb_status_returns_to_ready_when_its_only_document_completed(api) -> None:
+    """C-41 rule three: no indexing and no failed document leaves the KB ready."""
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    await _upload_document(api, headers)
+    assert (await _kb_detail(api, headers))["indexing_status"] == "indexing"
+    api.console.get_document_indexing_status.return_value = {
+        "indexing_status": "completed",
+        "total_segments": 5,
+    }
+    assert (await _document_status(api, headers)).json()["data"]["status"] == "completed"
+
+    detail = await _kb_detail(api, headers)
+
+    assert detail["indexing_status"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_kb_status_returns_to_ready_after_its_only_document_is_deleted(api) -> None:
+    """C-46 + C-41: dropping the last document row re-folds the aggregate to ready.
+
+    The document is deleted from its failed state, the one C-46 admits besides a
+    completed one, so the KB starts out not-ready and the assertion binds to the
+    deletion refresh rather than passing on an untouched aggregate.
+    """
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    await _upload_document(api, headers)
+    api.console.get_document_indexing_status.return_value = {
+        "indexing_status": "error",
+        "error": "boom",
+    }
+    assert (await _document_status(api, headers)).json()["data"]["status"] == "failed"
+    assert (await _kb_detail(api, headers))["indexing_status"] == "failed"
+
+    resp = await api.client.delete(f"{_KB_URL}/kb-1/documents/doc-1", headers=headers)
+
+    assert resp.status_code == 204
+    assert (await _kb_detail(api, headers))["indexing_status"] == "ready"
+
+
+@pytest.mark.asyncio
 async def test_recall_while_documents_are_indexing_returns_409_kb_indexing(api) -> None:
     tenant, user = await api.seed(role="knowledge_admin")
     await api.seed_kb(tenant, kb_id="kb-1")
@@ -569,6 +609,30 @@ async def test_recall_while_documents_are_indexing_returns_409_kb_indexing(api) 
     assert resp.status_code == 409
     assert resp.json()["error"]["code"] == "KB_INDEXING"
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_recall_while_indexing_is_refused_before_the_missing_dataset_key(api) -> None:
+    """C-43: rule two is judged before rule three, so the key is never the answer.
+
+    A knowledge base with no dataset key would be refused with
+    ``KB_API_KEY_MISSING`` on its own; while it indexes, the indexing rule has to
+    answer first.
+    """
+    tenant, user = await api.seed(role="knowledge_admin")
+    headers = api.auth(user, tenant)
+    api.console.get_dataset_api_keys.return_value = {"data": []}
+    api.console.create_dataset_api_key.return_value = {"token": ""}
+    kb_id = await _create_kb(api, headers, "Keyless")
+    await _upload_document(api, headers, kb_id)
+    assert (await _kb_detail(api, headers, kb_id))["indexing_status"] == "indexing"
+
+    resp = await api.client.post(
+        f"{_KB_URL}/{kb_id}/retrieval-test", headers=headers, json={"query": "anything"}
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "KB_INDEXING"
 
 
 @pytest.mark.asyncio

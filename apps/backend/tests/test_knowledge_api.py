@@ -136,6 +136,10 @@ class _Repo:
     ) -> None:
         return None
 
+    async def refresh_indexing_status(self, session: Any, *, kb_id: str) -> None:
+        # This double tracks no document rows, so there is nothing to aggregate.
+        return None
+
     async def transition_document_status(
         self,
         session: Any,
