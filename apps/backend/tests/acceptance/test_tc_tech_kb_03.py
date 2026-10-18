@@ -345,7 +345,6 @@ async def test_a_terminal_status_is_counted_and_emitted_once_on_a_later_poll(api
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="C-40 terminal status not regressing not implemented at main@68ad4b5")
 async def test_a_terminal_status_does_not_regress_on_a_later_poll(api) -> None:
     """C-40: a recorded terminal status is never answered as an earlier state."""
     tenant, user = await api.seed(role="knowledge_admin")
@@ -363,6 +362,36 @@ async def test_a_terminal_status_does_not_regress_on_a_later_poll(api) -> None:
     # The upstream's older, unfinished state must not be reported back to the
     # caller once the document's completion has been recorded.
     assert second.json()["data"]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_a_terminal_status_does_not_regress_in_a_later_listing(api) -> None:
+    """C-40: the listing the UI polls holds a recorded terminal state too."""
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    await _upload_document(api, headers)
+    api.console.list_documents.side_effect = [
+        {
+            "data": [{"id": "doc-1", "name": "notes.txt", "indexing_status": "completed"}],
+            "total": 1,
+        },
+        {
+            "data": [{"id": "doc-1", "name": "notes.txt", "indexing_status": "indexing"}],
+            "total": 1,
+        },
+    ]
+
+    with _collect(DOCUMENT_INDEXED_EVENT) as events:
+        first = await api.client.get(f"{_KB_URL}/kb-1/documents", headers=headers)
+        second = await api.client.get(f"{_KB_URL}/kb-1/documents", headers=headers)
+
+    assert first.json()["data"]["items"][0]["status"] == "completed"
+    # Same read as the status endpoint's: the record, not the latest upstream
+    # state, decides what an already completed document is listed as.
+    assert second.json()["data"]["items"][0]["status"] == "completed"
+    assert (await _kb_detail(api, headers))["chunk_count"] == 5
+    assert len([event for event in events if event.get("kb_id") == "kb-1"]) == 1
 
 
 @pytest.mark.asyncio
@@ -892,7 +921,6 @@ async def test_kb_listing_is_scoped_to_the_tenant(api) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="C-45 retry of a non-failed document not implemented at main@68ad4b5")
 async def test_retry_rejects_a_document_that_did_not_fail(api) -> None:
     tenant, user = await api.seed(role="knowledge_admin")
     await api.seed_kb(tenant, kb_id="kb-1")
@@ -926,7 +954,6 @@ async def test_retry_restarts_indexing_for_a_failed_document(api) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="C-45 retry returning to indexing not implemented at main@68ad4b5")
 async def test_retry_returns_a_failed_document_to_indexing(api) -> None:
     """C-45: a retry clears the failed state, so the document is indexing again."""
     tenant, user = await api.seed(role="knowledge_admin")
@@ -944,6 +971,107 @@ async def test_retry_returns_a_failed_document_to_indexing(api) -> None:
 
     assert resp.status_code == 204
     assert await _stored_document_status(api) == "indexing"
+
+
+@pytest.mark.asyncio
+async def test_a_retried_document_reads_as_indexing_on_both_read_paths(api) -> None:
+    """C-45: while Dify re-indexes, both reads answer the retried document as indexing.
+
+    A retry that only restarts upstream leaves the recorded ``failed`` answering
+    over the whole re-index — on the status endpoint and on the listing the UI
+    polls (C-42), which stops polling on a terminal row.
+    """
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    await _upload_document(api, headers)
+    api.console.get_document_indexing_status.return_value = {
+        "indexing_status": "error",
+        "error": "boom",
+    }
+    assert (await _document_status(api, headers)).json()["data"]["status"] == "failed"
+
+    resp = await api.client.post(f"{_KB_URL}/kb-1/documents/doc-1/retry", headers=headers)
+    assert resp.status_code == 204
+
+    api.console.get_document_indexing_status.return_value = {"indexing_status": "waiting"}
+    api.console.list_documents.return_value = {
+        "data": [{"id": "doc-1", "name": "notes.txt", "indexing_status": "waiting"}],
+        "total": 1,
+    }
+    status = (await _document_status(api, headers)).json()["data"]
+    listed = await api.client.get(f"{_KB_URL}/kb-1/documents", headers=headers)
+
+    assert status == {"id": "doc-1", "status": "indexing", "error": None}
+    assert listed.json()["data"]["items"] == [
+        {"id": "doc-1", "name": "notes.txt", "status": "indexing"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_retried_document_counts_its_completion_once(api) -> None:
+    """C-40: the completion that follows a retry is counted once, not per attempt.
+
+    The failure that preceded the retry contributed no segments, so the KB total
+    holds the single set the eventually-completed document carries.
+    """
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    await _upload_document(api, headers)
+    api.console.get_document_indexing_status.return_value = {
+        "indexing_status": "error",
+        "error": "boom",
+    }
+    assert (await _document_status(api, headers)).json()["data"]["status"] == "failed"
+
+    with _collect(DOCUMENT_INDEXED_EVENT) as events:
+        retried = await api.client.post(f"{_KB_URL}/kb-1/documents/doc-1/retry", headers=headers)
+        assert retried.status_code == 204
+        api.console.get_document_indexing_status.return_value = {
+            "indexing_status": "completed",
+            "total_segments": 5,
+        }
+        assert (await _document_status(api, headers)).json()["data"]["status"] == "completed"
+        # The completion observed again is the same one, and stays counted once.
+        assert (await _document_status(api, headers)).json()["data"]["status"] == "completed"
+
+    assert (await _kb_detail(api, headers))["chunk_count"] == 5
+    assert len([event for event in events if event.get("kb_id") == "kb-1"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_refused_retry_leaves_a_completed_document_counted_once(api) -> None:
+    """C-45/C-40: retrying a document that did not fail must not rewind its record.
+
+    A record pulled back into ``indexing`` re-arms the completion transition, so
+    the next observed completion would add the same segments and emit the same
+    event a second time, and the KB total would carry the document's segments
+    twice while a delete reclaims one set.
+    """
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    await _upload_document(api, headers)
+    api.console.list_documents.return_value = {
+        "data": [{"id": "doc-1", "name": "notes.txt", "indexing_status": "completed"}],
+        "total": 1,
+    }
+
+    with _collect(DOCUMENT_INDEXED_EVENT) as events:
+        assert (await _document_status(api, headers)).json()["data"]["status"] == "completed"
+        refused = await api.client.post(f"{_KB_URL}/kb-1/documents/doc-1/retry", headers=headers)
+        listed = await api.client.get(f"{_KB_URL}/kb-1/documents", headers=headers)
+        assert (await _document_status(api, headers)).json()["data"]["status"] == "completed"
+
+    assert refused.status_code == 422
+    assert refused.json()["error"]["code"] == "INVALID_STATE"
+    api.console.retry_document_indexing.assert_not_awaited()
+    assert await _stored_document_status(api) == "completed"
+    assert listed.json()["data"]["items"][0]["status"] == "completed"
+    detail = await _kb_detail(api, headers)
+    assert (detail["doc_count"], detail["chunk_count"]) == (1, 5)
+    assert len([event for event in events if event.get("kb_id") == "kb-1"]) == 1
 
 
 @pytest.mark.asyncio

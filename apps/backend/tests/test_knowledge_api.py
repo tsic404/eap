@@ -148,6 +148,7 @@ class _Repo:
         document_id: str,
         status: str,
         error: str | None = None,
+        from_status: str | None = None,
     ) -> bool:
         return True
 
@@ -158,6 +159,11 @@ class _Repo:
         self, session: Any, *, kb_id: str, document_id: str
     ) -> KnowledgeDocument | None:
         return None
+
+    async def get_documents(
+        self, session: Any, *, kb_id: str, document_ids: list[str]
+    ) -> dict[str, KnowledgeDocument]:
+        return {}
 
     async def add_document_count(self, session: Any, *, kb_id: str) -> None:
         return None
