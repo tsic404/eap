@@ -38,6 +38,8 @@ const STYLE_ATTRIBUTE = "style";
 const COLOUR_PROPERTY =
   /^(?:color|background|backgroundColor|border|borderColor|borderTop|borderRight|borderBottom|borderLeft|outline|fill|stroke)$/;
 const SLOT_REFERENCE = /var\(\s*--color-([a-z0-9-]+)\s*(?:,\s*([^)]*?)\s*)?\)/g;
+/** Colour literals whose function notation carries whitespace of its own. */
+const COLOUR_LITERAL = /#[0-9a-f]{3,8}\b|\b(?:rgb|rgba|hsl|hsla)\([^)]*\)/gi;
 /** Words a colour-bearing CSS shorthand may legitimately carry besides a colour. */
 const NON_COLOUR_KEYWORD: Readonly<Record<string, true>> = {
   auto: true,
@@ -51,18 +53,22 @@ const NON_COLOUR_KEYWORD: Readonly<Record<string, true>> = {
   dotted: true,
   double: true,
   fixed: true,
+  groove: true,
   hidden: true,
   inherit: true,
   initial: true,
+  inset: true,
   local: true,
   medium: true,
   "no-repeat": true,
   none: true,
+  outset: true,
   "padding-box": true,
   repeat: true,
   "repeat-x": true,
   "repeat-y": true,
   revert: true,
+  ridge: true,
   round: true,
   scroll: true,
   solid: true,
@@ -324,7 +330,15 @@ export function readInlineColour(value: string): InlineColourReading[] {
     );
   }
   remainder += value.slice(cursor);
-  for (const part of remainder.split(/\s+/)) {
+  const literals: string[] = [];
+  const rest = remainder.replace(COLOUR_LITERAL, (literal) => {
+    literals.push(literal);
+    return " ";
+  });
+  for (const literal of literals) {
+    readings.push({ kind: "hardcoded", value: literal });
+  }
+  for (const part of rest.split(/\s+/)) {
     if (part !== "" && isColourLiteral(part)) {
       readings.push({ kind: "hardcoded", value: part });
     }

@@ -314,10 +314,28 @@ describe("TC-tech-ui-01 semantic colour pairs", () => {
     expect(readInlineColour("1px solid #e2e8f0")).toEqual([
       { kind: "hardcoded", value: "#e2e8f0" },
     ]);
+    expect(readInlineColour("1px groove var(--color-border)")).toEqual([
+      { kind: "slot", token: "border" },
+    ]);
+    expect(readInlineColour("1px inset #e2e8f0")).toEqual([
+      { kind: "hardcoded", value: "#e2e8f0" },
+    ]);
     expect(readInlineColour("red")).toEqual([
       { kind: "hardcoded", value: "red" },
     ]);
     expect(readInlineColour("none")).toEqual([]);
+  });
+
+  it("reads function-notation colour literals as hardcoded (C-83)", () => {
+    expect(readInlineColour("rgb(100, 116, 139)")).toEqual([
+      { kind: "hardcoded", value: "rgb(100, 116, 139)" },
+    ]);
+    expect(readInlineColour("rgba(0, 0, 0, 0.5)")).toEqual([
+      { kind: "hardcoded", value: "rgba(0, 0, 0, 0.5)" },
+    ]);
+    expect(readInlineColour("hsl(220, 10%, 46%)")).toEqual([
+      { kind: "hardcoded", value: "hsl(220, 10%, 46%)" },
+    ]);
   });
 
   it("rejects colour literals written into inline styles (C-83)", () => {
