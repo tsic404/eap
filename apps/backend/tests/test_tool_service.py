@@ -348,10 +348,10 @@ async def test_debug_returns_status_body_latency() -> None:
 
     result = await service.debug(tool, DebugToolDto(params={"a": 1}))
 
-    assert result["statusCode"] == 200
-    assert result["responseBody"] == {"ok": True}
-    assert result["latencyMs"] >= 0
-    assert result["savedCaseId"] is None
+    assert result["status_code"] == 200
+    assert result["response_body"] == {"ok": True}
+    assert result["latency_ms"] >= 0
+    assert result["saved_case_id"] is None
 
 
 @pytest.mark.asyncio
@@ -367,7 +367,7 @@ async def test_debug_saves_case_when_requested() -> None:
         tool, DebugToolDto(params={"a": 1}, save_as_test_case=True, name="case-1")
     )
 
-    assert result["savedCaseId"]
+    assert result["saved_case_id"]
     case = session.add.call_args.args[0]
     assert isinstance(case, ToolDebugCase)
     assert case.tool_id == tool.tool_id

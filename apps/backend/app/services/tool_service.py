@@ -170,10 +170,10 @@ class ToolService:
             await self.session.refresh(case)
             saved_case_id = case.id
         return {
-            "statusCode": result.status_code,
-            "responseBody": result.body,
-            "latencyMs": result.latency_ms,
-            "savedCaseId": str(saved_case_id) if saved_case_id else None,
+            "status_code": result.status_code,
+            "response_body": result.body,
+            "latency_ms": result.latency_ms,
+            "saved_case_id": str(saved_case_id) if saved_case_id else None,
         }
 
     # -- Approval ------------------------------------------------------------

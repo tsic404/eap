@@ -542,12 +542,12 @@ async def test_auth_injection_only_reaches_the_outbound_request_by_auth_type(api
         # C-66: the upstream reports what it received — the credential travels
         # as an outbound header, and nowhere else the platform controls.
         body = resp.json()["data"]
-        echoed = body["responseBody"]["receivedHeaders"]
+        echoed = body["response_body"]["receivedHeaders"]
         for name, value in expected.items():
             assert echoed[name] == value, (tool_id, name)
 
         async with api.db.session() as session:
-            case = await session.get(ToolDebugCase, uuid.UUID(body["savedCaseId"]))
+            case = await session.get(ToolDebugCase, uuid.UUID(body["saved_case_id"]))
             assert case is not None
             # The saved copy of the request holds the caller's params, never the
             # configured credential.
@@ -555,7 +555,7 @@ async def test_auth_injection_only_reaches_the_outbound_request_by_auth_type(api
             if secret is not None:
                 assert secret not in (case.request_body or ""), tool_id
 
-        platform_fields = {key: value for key, value in body.items() if key != "responseBody"}
+        platform_fields = {key: value for key, value in body.items() if key != "response_body"}
         if secret is not None:
             assert secret not in json.dumps(platform_fields), tool_id
 
@@ -589,7 +589,7 @@ async def test_auth_injection_omits_the_header_when_the_credential_is_missing(ap
         assert "authorization" not in sent, tool_id
         assert "x-api-key" not in sent, tool_id
         # The upstream received no credential either.
-        echoed = resp.json()["data"]["responseBody"]["receivedHeaders"]
+        echoed = resp.json()["data"]["response_body"]["receivedHeaders"]
         assert "authorization" not in echoed, tool_id
         assert "x-api-key" not in echoed, tool_id
 
@@ -624,7 +624,7 @@ async def test_auth_injection_omits_the_basic_header_when_credentials_are_missin
         # C-66: with no credentials configured, Basic injects no header at all.
         sent = {key.lower() for key in calls[0].headers}
         assert "authorization" not in sent, tool_id
-        echoed = resp.json()["data"]["responseBody"]["receivedHeaders"]
+        echoed = resp.json()["data"]["response_body"]["receivedHeaders"]
         assert "authorization" not in echoed, tool_id
 
 
@@ -675,9 +675,9 @@ async def test_debug_masks_the_response_but_sends_the_request_body_verbatim(api)
 
     assert resp.status_code == 200, resp.text
     body = resp.json()["data"]
-    assert body["statusCode"] == 200
-    assert body["responseBody"] == {"phone": "***", "note": "call ***"}
-    assert body["savedCaseId"] is None
+    assert body["status_code"] == 200
+    assert body["response_body"] == {"phone": "***", "note": "call ***"}
+    assert body["saved_case_id"] is None
     # The upstream receives the real values: requests are never masked.
     assert json.loads(calls[0].content.decode()) == params
 
@@ -699,7 +699,7 @@ async def test_saved_debug_case_masks_both_request_and_response(api) -> None:
     )
 
     assert resp.status_code == 200, resp.text
-    saved_case_id = resp.json()["data"]["savedCaseId"]
+    saved_case_id = resp.json()["data"]["saved_case_id"]
     assert saved_case_id
 
     async with api.db.session() as session:
@@ -729,7 +729,7 @@ async def test_debug_never_retries_and_reports_the_upstream_status(api) -> None:
     resp = await api.client.post("/api/tools/degraded/debug", headers=headers, json={"params": {}})
 
     assert resp.status_code == 200, resp.text
-    assert resp.json()["data"]["statusCode"] == 503
+    assert resp.json()["data"]["status_code"] == 503
     assert len(calls) == 1
 
 
