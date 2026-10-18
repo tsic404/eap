@@ -10,13 +10,21 @@ The app under test is built with rate limiting enabled and shares the API
 fixture's database and Redis container, so the limiter counts against the real
 shared store the multi-instance deployment relies on. The limiter's clock is
 injected, so no assertion depends on how long the requests happen to take.
+
+C-10 also requires the counter to live in a store shared across instances and
+to degrade to single-instance counting, retried after 30 seconds, when that
+store is unreachable. The outage case points two app instances at a switchable
+proxy in front of the real Redis container, so it observes the degradation and
+the return to shared counting from HTTP responses alone.
 """
 
+import asyncio
 import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -37,6 +45,9 @@ _UPLOADS = "/api/files/upload"
 _LIMIT = 20
 _UPLOAD_LIMIT = 10
 _REFILL_WINDOW_SECONDS = 60.0
+# C-10 retries the shared store 30 seconds after it becomes unreachable; the
+# extra margin absorbs scheduling delay between the failure and this process.
+_OUTAGE_RETRY_SECONDS = 30.0
 
 
 class _Clock:
@@ -93,26 +104,30 @@ class _ClockBucket(RedisTokenBucket):
 
 @asynccontextmanager
 async def _rate_limited_client(
-    api, monkeypatch: pytest.MonkeyPatch, clock: _Clock
+    api, monkeypatch: pytest.MonkeyPatch, clock: _Clock, *, redis_url: str | None = None
 ) -> AsyncIterator[httpx.AsyncClient]:
     """An app with rate limiting enabled over the fixture's database and Redis.
 
     The limiter is constructed with ``clock``, so refill is decided by the case
-    and never by request latency.
+    and never by request latency. ``redis_url`` points it at a stand-in for the
+    shared store, and every construction gets a bucket of its own, so two
+    instances of the app never share a fallback counter.
     """
+    store_url = redis_url or api.settings.redis_url
     settings = Settings(
         _env_file=None,
         app_env="test",
         database_url=api.settings.database_url,
-        redis_url=api.settings.redis_url,
+        redis_url=store_url,
         jwt_public_key=api.settings.jwt_public_key,
         rate_limit_enabled=True,
         # The global per-IP bucket is widened so it can never mask the per-user
         # conversation rule this case is about.
         rate_limit_requests=100_000,
     )
-    limiter = _ClockBucket(api.settings.redis_url, clock)
-    monkeypatch.setattr("app.main.RedisTokenBucket", lambda *args, **kwargs: limiter)
+    monkeypatch.setattr(
+        "app.main.RedisTokenBucket", lambda *args, **kwargs: _ClockBucket(store_url, clock)
+    )
     app = create_app(settings)
     # The lifespan does not run under an ASGI transport, so wire the state the
     # routers resolve.
@@ -135,6 +150,79 @@ async def _rate_limited_client(
             yield client
     finally:
         await app.state.rate_limiter.aclose()
+
+
+class _SharedStoreProxy:
+    """A TCP proxy in front of the shared counter store, switchable at runtime.
+
+    Pointing the app under test here instead of at the container lets a case
+    take the shared store away and bring it back without touching the
+    container: while ``is_forwarding`` is false every accepted connection is
+    closed, which the client observes as the store being unreachable.
+    """
+
+    def __init__(self, upstream_url: str) -> None:
+        parsed = urlparse(upstream_url)
+        if parsed.hostname is None or parsed.port is None:
+            raise ValueError(f"shared store URL lacks a host and port: {upstream_url}")
+        self._upstream = (parsed.hostname, parsed.port)
+        self._server: asyncio.AbstractServer | None = None
+        self._pumps: set[asyncio.Task[None]] = set()
+        self.is_forwarding = False
+        self.port = 0
+
+    @property
+    def url(self) -> str:
+        return f"redis://127.0.0.1:{self.port}/0"
+
+    async def __aenter__(self) -> "_SharedStoreProxy":
+        self._server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
+        sockets = self._server.sockets or ()
+        if not sockets:
+            raise RuntimeError("shared store proxy did not bind a socket")
+        self.port = sockets[0].getsockname()[1]
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        if self._server is not None:
+            self._server.close()
+            await self._server.wait_closed()
+            self._server = None
+        for pump in list(self._pumps):
+            pump.cancel()
+        await asyncio.gather(*self._pumps, return_exceptions=True)
+
+    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        if not self.is_forwarding:
+            writer.close()
+            await writer.wait_closed()
+            return
+        try:
+            upstream_reader, upstream_writer = await asyncio.open_connection(*self._upstream)
+        except OSError:
+            writer.close()
+            await writer.wait_closed()
+            return
+        pumps = {
+            asyncio.create_task(self._pump(reader, upstream_writer)),
+            asyncio.create_task(self._pump(upstream_reader, writer)),
+        }
+        self._pumps.update(pumps)
+        try:
+            await asyncio.gather(*pumps, return_exceptions=True)
+        finally:
+            self._pumps.difference_update(pumps)
+
+    @staticmethod
+    async def _pump(source: asyncio.StreamReader, target: asyncio.StreamWriter) -> None:
+        try:
+            while chunk := await source.read(64 * 1024):
+                target.write(chunk)
+                await target.drain()
+        except (ConnectionError, asyncio.CancelledError):
+            pass
+        finally:
+            target.close()
 
 
 async def _send_requests(
@@ -236,3 +324,70 @@ async def test_the_conversation_limit_is_keyed_by_user_and_path_domain(api, monk
     assert [resp.status_code for resp in uploads[:_UPLOAD_LIMIT]].count(429) == 0
     assert uploads[_UPLOAD_LIMIT].status_code == 429
     assert uploads[_UPLOAD_LIMIT].json()["error"]["code"] == "RATE_LIMITED"
+
+
+@pytest.mark.asyncio
+async def test_shared_store_outage_degrades_and_returns_to_shared_counting(
+    api, monkeypatch
+) -> None:
+    """A failed shared store must not surface as 500 and must recover in 30s.
+
+    The negative case for C-10's degradation clause: with the shared store
+    unreachable, requests that would have become 500 must instead be counted by
+    the instance itself; a second instance keeps its own budget (single-instance
+    counting); once the store is back, the counters must be shared again within
+    the 30-second retry window.
+    """
+    tenant, user = await api.seed(role="employee")
+    headers = api.auth(user, tenant)
+    clock = _Clock()
+
+    async with _SharedStoreProxy(api.settings.redis_url) as store:
+        async with (
+            _rate_limited_client(api, monkeypatch, clock, redis_url=store.url) as first,
+            _rate_limited_client(api, monkeypatch, clock, redis_url=store.url) as second,
+        ):
+            # The first request on each instance hits the unreachable store and
+            # records the failure; it must be served from the local counter.
+            first_initial = await first.get(_CONVERSATIONS, headers=headers)
+            first_failed_at = time.monotonic()
+            second_initial = await second.get(_CONVERSATIONS, headers=headers)
+            second_failed_at = time.monotonic()
+
+            # The store comes back immediately after the outage is observed,
+            # while both limiters are still inside their retry cooldown.
+            store.is_forwarding = True
+
+            first_rest = [await first.get(_CONVERSATIONS, headers=headers) for _ in range(_LIMIT)]
+            second_rest = [await second.get(_CONVERSATIONS, headers=headers) for _ in range(_LIMIT)]
+
+            # No request may surface as a 500 while the store is down, and each
+            # instance still enforces the limit from its own counter.
+            for initial, rest in ((first_initial, first_rest), (second_initial, second_rest)):
+                assert 500 not in {initial.status_code, *(resp.status_code for resp in rest)}
+                assert [resp.status_code for resp in rest[: _LIMIT - 1]] == [200] * (_LIMIT - 1)
+                limited = rest[_LIMIT - 1]
+                assert limited.status_code == 429
+                assert limited.json()["error"]["code"] == "RATE_LIMITED"
+            # Single-instance counting: the second instance still had its whole
+            # budget after the first had spent its own.
+            assert first_initial.status_code == 200
+            assert second_initial.status_code == 200
+
+            # Wait out C-10's 30-second retry window (measured from the failure,
+            # which happened before the store came back) plus scheduling slack.
+            deadline = max(first_failed_at, second_failed_at) + _OUTAGE_RETRY_SECONDS + 0.5
+            await asyncio.sleep(max(0.0, deadline - time.monotonic()))
+
+            # An instance that never saw the outage drains the shared bucket.
+            async with _rate_limited_client(api, monkeypatch, clock, redis_url=store.url) as fresh:
+                drained = await _send_requests(fresh, headers)
+                assert drained[_LIMIT].status_code == 429
+
+            # A 200 here would mean the degraded instance is still counting on
+            # its own (its local bucket has refilled); 429 proves it is back on
+            # the shared counter.
+            recovered = await first.get(_CONVERSATIONS, headers=headers)
+
+    assert recovered.status_code == 429
+    assert recovered.json()["error"]["code"] == "RATE_LIMITED"
