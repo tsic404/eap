@@ -3,6 +3,7 @@ import type { AxiosInstance, InternalAxiosRequestConfig } from "axios";
 import * as Sentry from "@sentry/nextjs";
 
 import { API_ROUTES, ROUTES } from "./api-routes";
+import { PASSWORD_CHANGE_REQUIRED_CODE } from "./auth-types";
 import { getAccessToken, setAccessToken } from "./token-store";
 import { toast } from "./toast-bus";
 
@@ -69,6 +70,16 @@ function redirectToLogin(): void {
   }
 }
 
+/**
+ * Guide an account that must change its password to the password page (C-15).
+ * The page itself is exempt so a repeated gate answer cannot loop.
+ */
+function redirectToPasswordChange(): void {
+  if (typeof window !== "undefined" && window.location.pathname !== ROUTES.password) {
+    window.location.assign(ROUTES.password);
+  }
+}
+
 apiClient.interceptors.request.use((config) => {
   const token = getAccessToken();
   if (token) {
@@ -85,7 +96,12 @@ apiClient.interceptors.response.use(
     // Auth endpoints judge the call itself: their rejections carry their own
     // meaning (e.g. a tenant mismatch on login) and are rendered by the caller,
     // so neither a refresh replay nor the generic permission toast applies.
-    const isAuthRequest = (config?.url ?? "").startsWith("/auth/");
+    // The password change is the exception: it is an authenticated business
+    // call whose 401 most often means an expired access token, and replaying it
+    // after a refresh keeps a stale token from reading as a wrong password.
+    const requestUrl = config?.url ?? "";
+    const isAuthRequest =
+      requestUrl.startsWith("/auth/") && requestUrl !== API_ROUTES.changePassword;
 
     if (status === 401 && config && !config._retried) {
       // Never attempt to refresh the auth endpoints themselves — that would loop.
@@ -100,7 +116,13 @@ apiClient.interceptors.response.use(
       }
     }
     if (status === 403 && !isAuthRequest) {
-      toast({ type: "error", title: "无权限访问" });
+      const errorCode = (error.response?.data as { error?: { code?: string } } | undefined)?.error
+        ?.code;
+      if (errorCode === PASSWORD_CHANGE_REQUIRED_CODE) {
+        redirectToPasswordChange();
+      } else {
+        toast({ type: "error", title: "无权限访问" });
+      }
     }
     if (status !== undefined && status >= 500) {
       Sentry.captureException(error);

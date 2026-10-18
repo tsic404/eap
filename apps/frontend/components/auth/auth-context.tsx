@@ -12,7 +12,7 @@ import {
 
 import { API_ROUTES, AUTH_ROUTES, ROUTES } from "@/lib/api-routes";
 import { publishAuthSignal, subscribeAuthSignal } from "@/lib/auth-channel";
-import { loginWithLocalAccount } from "@/lib/auth-service";
+import { isPasswordChangeRequiredError, loginWithLocalAccount } from "@/lib/auth-service";
 import type { ApiEnvelope, CurrentUser, Tenant } from "@/lib/auth-types";
 import { apiClient, refreshAccessToken } from "@/lib/http-client";
 import { resolveRole } from "@/lib/roles";
@@ -24,6 +24,8 @@ export interface AuthContextValue {
   tenant: Tenant | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  /** The session is usable only for the forced password change (C-113). */
+  isPasswordChangeRequired: boolean;
   error: string | null;
   login: (provider: string) => void;
   loginWithPassword: (email: string, password: string) => Promise<void>;
@@ -37,6 +39,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isPasswordChangeRequired, setIsPasswordChangeRequired] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadUser = useCallback(async (): Promise<CurrentUser | null> => {
@@ -50,19 +53,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       setUser(currentUser);
       setTenant(currentUser ? { id: currentUser.tenantId } : null);
+      setIsPasswordChangeRequired(false);
       setError(null);
       return currentUser;
     } catch (err) {
       // Any /api/me failure drops the confirmed user; clear the role cookie so
       // the middleware gate does not serve /admin on stale state (least
       // privilege). Only non-401 errors are surfaced — a 401 just means "not
-      // authenticated".
+      // authenticated", and a forced-change refusal is guidance to follow, not
+      // a load failure.
       clearRoleCookie();
-      if (!(axios.isAxiosError(err) && err.response?.status === 401)) {
-        setError("无法加载用户信息，请稍后重试");
-      }
       setUser(null);
       setTenant(null);
+      const isUnauthenticated = axios.isAxiosError(err) && err.response?.status === 401;
+      const mustChangePassword = isPasswordChangeRequiredError(err);
+      setIsPasswordChangeRequired(mustChangePassword);
+      if (mustChangePassword || isUnauthenticated) {
+        setError(null);
+      } else {
+        setError("无法加载用户信息，请稍后重试");
+      }
       return null;
     }
   }, []);
@@ -111,13 +121,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const loginWithPassword = useCallback(
     async (email: string, password: string) => {
-      await loginWithLocalAccount(email, password);
+      const result = await loginWithLocalAccount(email, password);
       // The login response carries the refresh cookie and no access token, so
       // the session is opened exactly like the SSO landing: refresh channel
       // first, then the profile.
       const token = await refreshAccessToken();
       if (!token) {
         throw new Error("Local login succeeded but the refresh channel returned no access token");
+      }
+      if (result.mustChangePassword) {
+        // The profile endpoint refuses a forced-change account, so the session
+        // is opened only up to the password page (C-113).
+        clearRoleCookie();
+        window.location.assign(ROUTES.password);
+        return;
       }
       await loadUser();
       window.location.assign(ROUTES.home);
@@ -133,6 +150,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setUser(null);
       setTenant(null);
+      setIsPasswordChangeRequired(false);
       setError(null);
       setAccessToken(null);
       clearRoleCookie();
@@ -157,13 +175,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       tenant,
       isLoading,
       isAuthenticated: user !== null,
+      isPasswordChangeRequired,
       error,
       login,
       loginWithPassword,
       logout,
       refreshToken,
     }),
-    [user, tenant, isLoading, error, login, loginWithPassword, logout, refreshToken],
+    [
+      user,
+      tenant,
+      isLoading,
+      isPasswordChangeRequired,
+      error,
+      login,
+      loginWithPassword,
+      logout,
+      refreshToken,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

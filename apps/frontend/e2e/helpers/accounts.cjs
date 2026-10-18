@@ -9,6 +9,14 @@ const LOCAL_ACCOUNT_PASSWORD = "Local-Account-1";
 const LOCAL_ACCOUNTS = {
   admin: { email: "carol@acme.com", name: "Carol", role: "agent_admin" },
   employee: { email: "dave@acme.com", name: "Dave", role: "employee" },
+  // Forced-change account: the first-login password journey rotates its
+  // password, so it stays off the accounts the other journeys sign in with.
+  pending: {
+    email: "erin@acme.com",
+    name: "Erin",
+    role: "employee",
+    mustChangePassword: true,
+  },
 };
 
 module.exports = { LOCAL_ACCOUNT_PASSWORD, LOCAL_ACCOUNTS };

@@ -19,6 +19,7 @@ export const API_ROUTES = {
   me: "/me",
   capabilities: "/auth/capabilities",
   localLogin: "/auth/login/local",
+  changePassword: "/auth/password",
   agents: "/agents",
   tools: "/tools",
   tasks: "/tasks",
@@ -34,6 +35,7 @@ export const API_ROUTES = {
 /** Frontend page routes. */
 export const ROUTES = {
   login: "/login",
+  password: "/password",
   home: "/user",
   agents: "/user/agents",
   adminHome: "/admin",
