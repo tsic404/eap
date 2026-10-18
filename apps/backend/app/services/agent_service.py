@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 import structlog
-from sqlalchemy import delete
+from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +17,8 @@ from app.errors import AppError
 from app.events.agent import AGENT_CREATED, AGENT_DELETED, AGENT_OFFLINE, AGENT_PUBLISHED
 from app.events.bus import EventBus, bus
 from app.models.agent import AgentKnowledgeBinding, AgentRegistry, AgentToolBinding
+from app.models.knowledge import KnowledgeBaseRegistry
+from app.models.tool import ToolRegistry
 from app.repositories.agent_repository import AgentRepository
 from app.schemas.agent import CreateAgentDto, UpdateAgentDto
 
@@ -123,6 +126,7 @@ class AgentService:
                 created_by=actor_id,
             )
             await self._repo.create(agent)
+            await self._ensure_bindings_in_tenant(tenant_id, dto.knowledgeBaseIds, dto.toolIds)
             self._bind(agent, dto.knowledgeBaseIds, dto.toolIds)
             await self._session.commit()
         except IntegrityError as exc:
@@ -167,6 +171,7 @@ class AgentService:
             raise AppError(409, "CONFLICT", "Agent version conflict")
 
         try:
+            await self._ensure_bindings_in_tenant(tenant_id, kb_ids, tool_ids)
             await self._replace_bindings(updated, kb_ids, tool_ids)
             await self._session.commit()
         except IntegrityError as exc:
@@ -174,6 +179,12 @@ class AgentService:
             mapped = _map_integrity_error(exc)
             if mapped is not None:
                 raise mapped from exc
+            raise
+        except AppError:
+            # A rejected binding list aborts the request; discard the
+            # optimistic-lock UPDATE with the transaction, so the client can
+            # retry against the version it read.
+            await self._session.rollback()
             raise
         return updated
 
@@ -259,6 +270,45 @@ class AgentService:
         # is no longer callable externally. Best-effort, like the Saga rollback.
         await _delete_app_best_effort(self._console, agent.dify_app_id)
 
+    async def _ensure_bindings_in_tenant(
+        self,
+        tenant_id: uuid.UUID,
+        kb_ids: Sequence[str] | None,
+        tool_ids: Sequence[str] | None,
+    ) -> None:
+        """Reject binding ids this tenant may not reference (C-102 / F1).
+
+        ``None`` means "leave this binding set unchanged". An id owned by
+        another tenant is refused exactly like a missing one, so the answer
+        carries no existence information (C-14). Global tools have no tenant and
+        stay bindable from every tenant (C-65).
+        """
+        if kb_ids:
+            owned_kbs = set(
+                await self._session.scalars(
+                    select(KnowledgeBaseRegistry.kb_id).where(
+                        KnowledgeBaseRegistry.tenant_id == tenant_id,
+                        KnowledgeBaseRegistry.kb_id.in_(kb_ids),
+                    )
+                )
+            )
+            if set(kb_ids) - owned_kbs:
+                raise _unknown_binding_error()
+        if tool_ids:
+            usable_tools = set(
+                await self._session.scalars(
+                    select(ToolRegistry.tool_id).where(
+                        ToolRegistry.tool_id.in_(tool_ids),
+                        or_(
+                            ToolRegistry.tenant_id == tenant_id,
+                            ToolRegistry.tenant_id.is_(None),
+                        ),
+                    )
+                )
+            )
+            if set(tool_ids) - usable_tools:
+                raise _unknown_binding_error()
+
     def _bind(self, agent: AgentRegistry, kb_ids: list[str], tool_ids: list[str]) -> None:
         for kb_id in kb_ids:
             agent.knowledge_bindings.append(
@@ -312,6 +362,15 @@ def _extract_api_key(response: object) -> str | None:
     return None
 
 
+def _unknown_binding_error() -> AppError:
+    """The single rejection for a binding id the caller cannot reference (C-98).
+
+    Missing and other-tenant ids produce the same answer, so the response is
+    never an existence oracle for another tenant's assets (C-14).
+    """
+    return AppError(400, "INVALID_BINDING", "Unknown knowledge base or tool id")
+
+
 def _map_integrity_error(exc: IntegrityError) -> AppError | None:
     """Map a known client-input IntegrityError to a 4xx; ``None`` for unknown."""
     constraint = _constraint_name(exc)
@@ -319,7 +378,7 @@ def _map_integrity_error(exc: IntegrityError) -> AppError | None:
         return AppError(409, "DUPLICATE_AGENT_ID", "agentId already exists")
     if constraint is not None and constraint.startswith("fk_"):
         # A binding references a knowledge base or tool id that does not exist.
-        return AppError(400, "INVALID_BINDING", "Unknown knowledge base or tool id")
+        return _unknown_binding_error()
     return None
 
 
