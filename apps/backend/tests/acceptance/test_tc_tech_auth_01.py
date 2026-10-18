@@ -52,13 +52,7 @@ _REFRESH_ENDPOINT = "/api/auth/refresh"
 _LOGOUT_ENDPOINT = "/api/auth/logout"
 # The rotation grace window: a replay inside it is a retried double-submit.
 _GRACE_WINDOW_SECONDS = 30
-# C-24: every callback-stage failure must be a 302 to the login page carrying
-# the error code. At main@68ad4b5 they are answered as JSON error bodies, so
-# each case asserting the contract's presentation is registered as a gap.
-_CALLBACK_FAILURE_XFAIL = pytest.mark.xfail(
-    reason="C-24 callback failure redirect presentation not implemented at main@68ad4b5",
-    strict=False,
-)
+# C-24: every callback-stage failure is a 302 to the login page carrying the error code.
 
 
 # ── the mocked identity provider ─────────────────────────────────────────────
@@ -495,7 +489,6 @@ async def test_no_response_hands_the_browser_a_token_outside_the_refresh_body(ap
 
 
 @pytest.mark.asyncio
-@_CALLBACK_FAILURE_XFAIL
 async def test_callback_with_unknown_state_redirects_to_login_with_state_error(api) -> None:
     idp = _FakeIdP(api.private_key)
     async with _auth_stack(api, idp):
@@ -508,7 +501,6 @@ async def test_callback_with_unknown_state_redirects_to_login_with_state_error(a
 
 
 @pytest.mark.asyncio
-@_CALLBACK_FAILURE_XFAIL
 async def test_callback_with_consumed_state_redirects_to_login_with_state_error(api) -> None:
     idp = _FakeIdP(api.private_key)
     async with _auth_stack(api, idp):
@@ -529,7 +521,6 @@ async def test_callback_with_consumed_state_redirects_to_login_with_state_error(
 
 
 @pytest.mark.asyncio
-@_CALLBACK_FAILURE_XFAIL
 async def test_callback_with_missing_state_redirects_to_login_with_state_error(api) -> None:
     idp = _FakeIdP(api.private_key)
     async with _auth_stack(api, idp):
@@ -541,7 +532,6 @@ async def test_callback_with_missing_state_redirects_to_login_with_state_error(a
 
 
 @pytest.mark.asyncio
-@_CALLBACK_FAILURE_XFAIL
 async def test_callback_token_exchange_failure_redirects_with_exchange_error(api) -> None:
     idp = _FakeIdP(api.private_key)
     idp.token_status = 400
@@ -554,7 +544,6 @@ async def test_callback_token_exchange_failure_redirects_with_exchange_error(api
 
 
 @pytest.mark.asyncio
-@_CALLBACK_FAILURE_XFAIL
 async def test_callback_when_nonce_does_not_match_redirects_to_login_with_state_error(api) -> None:
     idp = _FakeIdP(api.private_key)
     async with _auth_stack(api, idp):
@@ -567,7 +556,6 @@ async def test_callback_when_nonce_does_not_match_redirects_to_login_with_state_
 
 
 @pytest.mark.asyncio
-@_CALLBACK_FAILURE_XFAIL
 async def test_callback_when_userinfo_fails_redirects_to_login_with_userinfo_error(api) -> None:
     idp = _FakeIdP(api.private_key)
     idp.userinfo_status = 400
@@ -579,7 +567,6 @@ async def test_callback_when_userinfo_fails_redirects_to_login_with_userinfo_err
 
 
 @pytest.mark.asyncio
-@_CALLBACK_FAILURE_XFAIL
 async def test_callback_without_a_matching_tenant_redirects_with_tenant_not_found(api) -> None:
     idp = _FakeIdP(api.private_key)
     async with _auth_stack(api, idp):
@@ -590,7 +577,6 @@ async def test_callback_without_a_matching_tenant_redirects_with_tenant_not_foun
 
 
 @pytest.mark.asyncio
-@_CALLBACK_FAILURE_XFAIL
 async def test_callback_with_an_ambiguous_tenant_redirects_with_tenant_ambiguous(api) -> None:
     idp = _FakeIdP(api.private_key)
     async with _auth_stack(api, idp):
@@ -610,7 +596,6 @@ async def test_callback_with_an_ambiguous_tenant_redirects_with_tenant_ambiguous
 
 
 @pytest.mark.asyncio
-@_CALLBACK_FAILURE_XFAIL
 async def test_callback_when_the_token_response_lacks_the_id_token_is_a_state_error(api) -> None:
     idp = _FakeIdP(api.private_key)
     idp.token_body = {"access_token": "idp-access-token", "token_type": "Bearer"}
@@ -622,7 +607,6 @@ async def test_callback_when_the_token_response_lacks_the_id_token_is_a_state_er
 
 
 @pytest.mark.asyncio
-@_CALLBACK_FAILURE_XFAIL
 async def test_callback_when_the_token_response_lacks_the_access_token_is_a_state_error(
     api,
 ) -> None:
@@ -639,7 +623,6 @@ async def test_callback_when_the_token_response_lacks_the_access_token_is_a_stat
 
 
 @pytest.mark.asyncio
-@_CALLBACK_FAILURE_XFAIL
 async def test_callback_when_the_signing_keys_are_unreachable_is_unavailable(api) -> None:
     idp = _FakeIdP(api.private_key)
     idp.jwks_status = 500
@@ -651,7 +634,6 @@ async def test_callback_when_the_signing_keys_are_unreachable_is_unavailable(api
 
 
 @pytest.mark.asyncio
-@_CALLBACK_FAILURE_XFAIL
 async def test_callback_with_an_unknown_signing_key_id_is_an_invalid_id_token(api) -> None:
     idp = _FakeIdP(api.private_key)
     idp.kid = "a-key-the-provider-never-published"
@@ -663,7 +645,6 @@ async def test_callback_with_an_unknown_signing_key_id_is_an_invalid_id_token(ap
 
 
 @pytest.mark.asyncio
-@_CALLBACK_FAILURE_XFAIL
 async def test_callback_with_a_forged_signature_is_an_invalid_id_token(api) -> None:
     forged = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     idp = _FakeIdP(api.private_key, signing_key=forged)
@@ -675,7 +656,6 @@ async def test_callback_with_a_forged_signature_is_an_invalid_id_token(api) -> N
 
 
 @pytest.mark.asyncio
-@_CALLBACK_FAILURE_XFAIL
 async def test_callback_with_a_foreign_audience_is_an_invalid_id_token(api) -> None:
     idp = _FakeIdP(api.private_key)
     idp.claims = {"aud": "some-other-client"}
@@ -687,7 +667,6 @@ async def test_callback_with_a_foreign_audience_is_an_invalid_id_token(api) -> N
 
 
 @pytest.mark.asyncio
-@_CALLBACK_FAILURE_XFAIL
 async def test_callback_with_a_foreign_issuer_is_an_invalid_id_token(api) -> None:
     idp = _FakeIdP(api.private_key)
     idp.claims = {"iss": "https://other-idp.example.com"}
@@ -699,7 +678,6 @@ async def test_callback_with_a_foreign_issuer_is_an_invalid_id_token(api) -> Non
 
 
 @pytest.mark.asyncio
-@_CALLBACK_FAILURE_XFAIL
 async def test_callback_with_an_expired_id_token_is_an_invalid_id_token(api) -> None:
     idp = _FakeIdP(api.private_key)
     # Well past the 30-second clock-skew allowance C-23 grants.
@@ -726,7 +704,6 @@ async def test_callback_accepts_an_id_token_within_the_thirty_second_skew(api) -
 
 
 @pytest.mark.asyncio
-@_CALLBACK_FAILURE_XFAIL
 async def test_callback_without_an_email_is_a_state_error(api) -> None:
     idp = _FakeIdP(api.private_key)
     idp.userinfo = {"sub": "idp-user-1", "name": "Alice"}
@@ -738,7 +715,6 @@ async def test_callback_without_an_email_is_a_state_error(api) -> None:
 
 
 @pytest.mark.asyncio
-@_CALLBACK_FAILURE_XFAIL
 async def test_callback_without_a_subject_is_rejected(api) -> None:
     idp = _FakeIdP(api.private_key)
     idp.drop_claims = {"sub"}

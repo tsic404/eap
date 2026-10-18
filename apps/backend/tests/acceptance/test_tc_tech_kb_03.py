@@ -716,7 +716,6 @@ async def test_recall_without_hits_returns_empty_citations_and_zero_score(api) -
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="C-11 knowledge-domain snake_case not implemented at main@68ad4b5")
 async def test_recall_reports_the_real_elapsed_latency_in_the_contract_field(api) -> None:
     """C-43: a zero-hit recall still reports the measured end-to-end latency.
 

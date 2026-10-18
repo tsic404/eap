@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import Any, Literal
 
@@ -138,23 +139,30 @@ def agent_to_dto(agent: AgentRegistry) -> AgentDto:
     )
 
 
+def _is_binding_visible(agent_tenant_id: uuid.UUID, resource_tenant_id: uuid.UUID | None) -> bool:
+    """Whether a bound asset may be serialized for the agent's tenant.
+
+    Global tools carry no tenant and are visible to everyone (C-65); an asset
+    owned by another tenant is dropped instead of echoed (C-102 / F1).
+    """
+    return resource_tenant_id is None or resource_tenant_id == agent_tenant_id
+
+
 def agent_to_detail_dto(agent: AgentRegistry, recent_logs: list[RunLog]) -> AgentDetailDto:
     """Serialize an agent with its bound knowledge/tools and recent run logs."""
     return AgentDetailDto(
         **agent_to_dto(agent).model_dump(),
         boundKnowledge=[
-            KnowledgeBindingDto(
-                kbId=binding.kb_id,
-                name=binding.knowledge.name if binding.knowledge is not None else None,
-            )
+            KnowledgeBindingDto(kbId=binding.kb_id, name=binding.knowledge.name)
             for binding in agent.knowledge_bindings
+            if binding.knowledge is not None
+            and _is_binding_visible(agent.tenant_id, binding.knowledge.tenant_id)
         ],
         boundTools=[
-            ToolBindingDto(
-                toolId=binding.tool_id,
-                name=binding.tool.name if binding.tool is not None else None,
-            )
+            ToolBindingDto(toolId=binding.tool_id, name=binding.tool.name)
             for binding in agent.tool_bindings
+            if binding.tool is not None
+            and _is_binding_visible(agent.tenant_id, binding.tool.tenant_id)
         ],
         recentLogs=[
             RunLogDto(
