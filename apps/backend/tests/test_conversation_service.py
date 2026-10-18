@@ -259,7 +259,7 @@ async def test_stream_serializes_and_persists_dify_id(
         created = await service.create(session, user, CreateConversationDto(agentId="agent-1"))
 
         conversation = await session.get(Conversation, uuid.UUID(created.id))
-        agent = await session.get(AgentRegistry, "agent-1")
+        agent = await session.get(AgentRegistry, (tenant.id, "agent-1"))
         frames = [
             frame
             async for frame in service.stream(
@@ -375,7 +375,7 @@ async def test_stream_passes_truncation_notice_to_adapter(
 
         conversation = await session.get(Conversation, uuid.UUID(created.id))
         conversation.dify_conversation_id = "dify-c1"
-        agent = await session.get(AgentRegistry, "agent-1")
+        agent = await session.get(AgentRegistry, (tenant.id, "agent-1"))
         await session.commit()
 
         frames = [

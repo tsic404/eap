@@ -15,7 +15,6 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -34,10 +33,12 @@ if TYPE_CHECKING:
 class AgentRegistry(Base):
     __tablename__ = "agent_registry"
 
-    agent_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    # Composite key: an agent identifier is unique per tenant (C-103), so two
+    # tenants may hold the same identifier.
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("tenants.id"), primary_key=True
     )
+    agent_id: Mapped[str] = mapped_column(String(100), primary_key=True)
     dify_app_id: Mapped[str] = mapped_column(String(100), nullable=False)
     dify_api_key: Mapped[str | None] = mapped_column(Text)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -77,15 +78,12 @@ class AgentRegistry(Base):
         back_populates="agent", cascade="all, delete-orphan", lazy="selectin"
     )
     run_logs: Mapped[list[RunLog]] = relationship(
-        back_populates="agent", foreign_keys="RunLog.agent_id", lazy="selectin"
+        back_populates="agent", viewonly=True, lazy="selectin"
     )
 
     __table_args__ = (
         Index("ix_agent_registry_tenant_id", "tenant_id"),
         Index("ix_agent_registry_tenant_status", "tenant_id", "status"),
-        # Anchor for composite FKs: enables child tables to reference an agent
-        # scoped to the same tenant via (tenant_id, agent_id).
-        UniqueConstraint("tenant_id", "agent_id", name="uq_agent_registry_tenant_agent_id"),
         # Enforce that created_by belongs to the same tenant as the agent.
         ForeignKeyConstraint(
             ["tenant_id", "created_by"],
@@ -106,11 +104,8 @@ class AgentRegistry(Base):
 class AgentKnowledgeBinding(Base):
     __tablename__ = "agent_knowledge_bindings"
 
-    agent_id: Mapped[str] = mapped_column(
-        String(100),
-        ForeignKey("agent_registry.agent_id", ondelete="CASCADE"),
-        primary_key=True,
-    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(100), primary_key=True)
     kb_id: Mapped[str] = mapped_column(
         String(100),
         ForeignKey("knowledge_base_registry.kb_id", ondelete="CASCADE"),
@@ -123,15 +118,21 @@ class AgentKnowledgeBinding(Base):
     agent: Mapped[AgentRegistry] = relationship(back_populates="knowledge_bindings")
     knowledge: Mapped[KnowledgeBaseRegistry] = relationship(back_populates="agent_bindings")
 
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            ["agent_registry.tenant_id", "agent_registry.agent_id"],
+            name="fk_agent_knowledge_bindings_tenant_agent_id_agent_registry",
+            ondelete="CASCADE",
+        ),
+    )
+
 
 class AgentToolBinding(Base):
     __tablename__ = "agent_tool_bindings"
 
-    agent_id: Mapped[str] = mapped_column(
-        String(100),
-        ForeignKey("agent_registry.agent_id", ondelete="CASCADE"),
-        primary_key=True,
-    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(100), primary_key=True)
     tool_id: Mapped[str] = mapped_column(
         String(100),
         ForeignKey("tool_registry.tool_id", ondelete="CASCADE"),
@@ -144,13 +145,21 @@ class AgentToolBinding(Base):
     agent: Mapped[AgentRegistry] = relationship(back_populates="tool_bindings")
     tool: Mapped[ToolRegistry] = relationship(back_populates="agent_bindings")
 
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            ["agent_registry.tenant_id", "agent_registry.agent_id"],
+            name="fk_agent_tool_bindings_tenant_agent_id_agent_registry",
+            ondelete="CASCADE",
+        ),
+    )
+
 
 class AgentDailyStat(Base):
     __tablename__ = "agent_daily_stats"
 
-    agent_id: Mapped[str] = mapped_column(
-        String(100), ForeignKey("agent_registry.agent_id", ondelete="CASCADE"), primary_key=True
-    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(100), primary_key=True)
     stat_date: Mapped[date] = mapped_column(Date, primary_key=True)
     calls: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     successes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -161,6 +170,12 @@ class AgentDailyStat(Base):
     agent: Mapped[AgentRegistry] = relationship(back_populates="daily_stats")
 
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            ["agent_registry.tenant_id", "agent_registry.agent_id"],
+            name="fk_agent_daily_stats_tenant_agent_id_agent_registry",
+            ondelete="CASCADE",
+        ),
         CheckConstraint(
             "calls >= 0 AND successes >= 0 AND failures >= 0 AND "
             "total_latency_ms >= 0 AND total_tokens >= 0",

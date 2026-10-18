@@ -231,10 +231,7 @@ async def test_create_with_duplicate_agent_id_in_the_same_tenant_returns_409(api
 @pytest.mark.asyncio
 async def test_same_agent_id_is_reusable_in_another_tenant(api) -> None:
     # C-103 scopes agent-id uniqueness to the tenant, so a second tenant may use
-    # the same identifier; the implementation keys the row by a global primary
-    # key and answers 409 instead. That gap is registered below rather than
-    # asserted as expected behaviour, and registering it is narrowed to the 409
-    # so any other failure of this case still turns the suite red.
+    # the same identifier.
     tenant_a, admin_a = await api.seed(role="agent_admin")
     tenant_b, admin_b = await api.seed(role="agent_admin")
 
@@ -243,8 +240,6 @@ async def test_same_agent_id_is_reusable_in_another_tenant(api) -> None:
 
     second = await _create(api, api.auth(admin_b, tenant_b), _payload("shared-bot"))
 
-    if second.status_code == 409:
-        pytest.xfail("C-103 tenant-scoped agent-id uniqueness not implemented at main@68ad4b5")
     assert second.status_code == 201, second.text
     assert second.json()["data"]["tenantId"] == str(tenant_b.id)
 
@@ -350,6 +345,50 @@ async def test_create_binds_assets_and_patch_replaces_the_binding_set_wholesale(
     replaced = await _detail(api, headers, "bind-bot")
     assert [binding["kbId"] for binding in replaced["boundKnowledge"]] == ["kb-b"]
     assert [binding["toolId"] for binding in replaced["boundTools"]] == ["tool-b"]
+
+
+@pytest.mark.asyncio
+async def test_patch_bindings_of_one_tenant_keeps_the_other_tenants_rows(api) -> None:
+    # C-102: bindings carry no tenant of their own at the API boundary, so a
+    # wholesale replace must scope its delete to the acting tenant. With two
+    # tenants sharing the agent identifier, an unscoped delete would also drop
+    # the rows tenant B never touched.
+    tenant_a, admin_a = await api.seed(role="agent_admin")
+    tenant_b, admin_b = await api.seed(role="agent_admin")
+    await api.seed_kb(tenant_a, kb_id="kb-a-1")
+    await api.seed_kb(tenant_a, kb_id="kb-a-2")
+    await api.seed_kb(tenant_b, kb_id="kb-b-1")
+    await api.seed_tool(tenant_a, tool_id="tool-a-1")
+    await api.seed_tool(tenant_a, tool_id="tool-a-2")
+    await api.seed_tool(tenant_b, tool_id="tool-b-1")
+
+    created_a = await _create(
+        api,
+        api.auth(admin_a, tenant_a),
+        _payload("shared-bind-bot", knowledgeBaseIds=["kb-a-1"], toolIds=["tool-a-1"]),
+    )
+    assert created_a.status_code == 201, created_a.text
+    created_b = await _create(
+        api,
+        api.auth(admin_b, tenant_b),
+        _payload("shared-bind-bot", knowledgeBaseIds=["kb-b-1"], toolIds=["tool-b-1"]),
+    )
+    assert created_b.status_code == 201, created_b.text
+
+    patched = await api.client.patch(
+        "/api/agents/shared-bind-bot",
+        headers=api.auth(admin_a, tenant_a),
+        json={"version": 1, "knowledgeBaseIds": ["kb-a-2"], "toolIds": ["tool-a-2"]},
+    )
+    assert patched.status_code == 200, patched.text
+
+    replaced = await _detail(api, api.auth(admin_a, tenant_a), "shared-bind-bot")
+    assert [(b["kbId"], b["name"]) for b in replaced["boundKnowledge"]] == [("kb-a-2", "kb-a-2")]
+    assert [(b["toolId"], b["name"]) for b in replaced["boundTools"]] == [("tool-a-2", "tool-a-2")]
+
+    untouched = await _detail(api, api.auth(admin_b, tenant_b), "shared-bind-bot")
+    assert [(b["kbId"], b["name"]) for b in untouched["boundKnowledge"]] == [("kb-b-1", "kb-b-1")]
+    assert [(b["toolId"], b["name"]) for b in untouched["boundTools"]] == [("tool-b-1", "tool-b-1")]
 
 
 @pytest.mark.asyncio
