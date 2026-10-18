@@ -3,6 +3,8 @@
 # generated value, so no publicly known default ever reaches a running stack.
 # Values for externally managed credentials (IdP, Dify console, signing keys)
 # stay deliberately unusable: production supplies its own, see deploy/checklist.md.
+# A value exported in the caller's shell still overrides .env at compose time,
+# but the file is filled anyway so no template placeholder survives there.
 set -euo pipefail
 
 ENV_FILE="${ENV_FILE:-.env}"
@@ -71,21 +73,16 @@ write_value() {
   fi
 }
 
-# Replace one placeholder unless the caller exported an overriding value or the
-# file already holds a real one. `generator` is only run when a value is needed.
+# Replace one placeholder unless the file already holds a real value. A real
+# shell export wins over .env at compose time but is not copied into the file;
+# the file is still filled, because the placeholder contract judges the file. An
+# empty or template-valued export would ship a known value, so fail fast.
 fill_placeholder() {
   local var="$1" generator="$2"
-  # A shell-exported value overrides .env in docker compose; an empty export —
-  # or the template placeholder re-exported by `set -a; . ./.env` — still trips
-  # `${VAR:?}` (or ships a known value) after .env is filled, so fail fast
-  # instead of reporting a success that will not stick.
-  if [[ -n "${!var+x}" ]]; then
-    if is_placeholder "${var}" "$(normalize_value "${!var}")"; then
-      printf 'error: %s is exported empty or as the .env.example placeholder; docker compose uses it over .env.\n' "${var}" >&2
-      printf '       run `unset %s` (or `env -u %s make setup-env`) and retry.\n' "${var}" "${var}" >&2
-      exit 1
-    fi
-    return 0
+  if [[ -n "${!var+x}" ]] && is_placeholder "${var}" "$(normalize_value "${!var}")"; then
+    printf 'error: %s is exported empty or as the .env.example placeholder; docker compose uses it over .env.\n' "${var}" >&2
+    printf '       run `unset %s` (or `env -u %s make setup-env`) and retry.\n' "${var}" "${var}" >&2
+    exit 1
   fi
   is_placeholder "${var}" "$(file_value "${ENV_FILE}" "${var}")" || return 0
   write_value "${ENV_FILE}" "${var}" "$("${generator}")"

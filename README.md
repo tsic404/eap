@@ -49,6 +49,8 @@ docker compose up -d
 的共享内部鉴权会退化成模板里公开已知的占位密钥（dev 下这些服务只在 compose 网络内可达）。
 若 shell 已导出同名空变量或模板占位值（如 `export WEAVIATE_API_KEY=`，或 `set -a; . ./.env`
 把占位值导出的情形），其优先级高于 `.env`，脚本会报错退出——先 `unset` 该变量再重跑。
+导出的是真实值时，compose 仍以导出值为准，但脚本同样会把 `.env` 里残留的占位值换成生成值
+（导出值不写入文件），保证引导后文件中不再有模板占位值。
 
 SSO 默认走 compose 内的 `mock-idp`（与 e2e / QA 栈同一个桩 IdP）：`.env` 的 `MOCK_IDP_ISSUER` /
 `MOCK_IDP_DISCOVERY_URL` / `MOCK_IDP_CLIENT_ID` 非空时（模板默认）compose 就用它们，OIDC 区块里的
