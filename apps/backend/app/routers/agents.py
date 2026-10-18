@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
-from app.dependencies import get_active_tenant, get_current_user, require_roles
+from app.dependencies import get_active_tenant, get_current_user, require_tenant_roles
 from app.errors import AppError
 from app.models.tenant import Tenant
 from app.models.user import User
@@ -30,7 +30,7 @@ _ADMIN_ROLES = ("agent_admin", "platform_admin")
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
 ActiveTenant = Annotated[Tenant, Depends(get_active_tenant)]
-AgentAdmin = Annotated[User, Depends(require_roles(*_ADMIN_ROLES))]
+AgentAdmin = Annotated[User, Depends(require_tenant_roles(*_ADMIN_ROLES))]
 
 
 async def get_agent_service(

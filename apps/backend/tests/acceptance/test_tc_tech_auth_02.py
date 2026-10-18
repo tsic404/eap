@@ -249,7 +249,6 @@ async def test_auditor_write_on_an_admin_endpoint_is_forbidden(api) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="C-13 gate order not implemented at main@68ad4b5")
 async def test_tenant_gate_is_evaluated_before_the_role_gate(api) -> None:
     tenant, user = await _seed_tenant_user(
         api, role="employee", tenant_status="suspended", quota_used=10, quota_limit=10
