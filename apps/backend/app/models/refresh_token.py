@@ -29,8 +29,9 @@ class RefreshToken(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Why a token stopped being usable: ``rotated`` (normal rotation — subject
-    # to the grace window), ``logout``, or ``reuse`` (family revoked after a
-    # replay). NULL means the token is still active.
+    # to the grace window), ``logout``, ``reuse`` (family revoked after a
+    # replay), ``password_change`` / ``password_reset`` (every family of the
+    # account is revoked when its password is set). NULL means still active.
     revoked_reason: Mapped[str | None] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

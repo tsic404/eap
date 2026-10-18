@@ -175,6 +175,27 @@ class RefreshService:
         await self._revoke_family(session, family_id, reason=reason, now=now)
         await session.commit()
 
+    async def revoke_all_for_user(
+        self,
+        session: AsyncSession,
+        user_id: uuid.UUID,
+        *,
+        reason: str,
+        now: datetime | None = None,
+    ) -> None:
+        """Revoke every still-active token of ``user_id``, whatever its family.
+
+        A password change or reset ends the account's sessions (C-113), so the
+        caller must log in again; the access tokens already issued stay valid
+        until their own expiry (900 s), the same window C-29 defines.
+        """
+        now = now or datetime.now(UTC)
+        await session.execute(
+            update(RefreshToken)
+            .where(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
+            .values(revoked_at=now, revoked_reason=reason)
+        )
+
     async def _revoke_family(
         self,
         session: AsyncSession,

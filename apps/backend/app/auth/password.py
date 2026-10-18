@@ -15,6 +15,10 @@ import hashlib
 import hmac
 import secrets
 
+# Format of a password a caller sets for itself (C-113).
+MIN_LENGTH = 8
+MAX_LENGTH = 128
+
 # Cost parameters (OWASP's floor for scrypt is n=2**14, r=8, p=1).
 _N = 2**14
 _R = 8
@@ -23,6 +27,17 @@ _SALT_BYTES = 16
 _KEY_BYTES = 32
 _SCHEME = "scrypt"
 _MAX_PARAM = {"n": 2**20, "r": 32, "p": 16}
+
+
+def format_error(password: str) -> str | None:
+    """Why ``password`` is not a usable password, or None when it is.
+
+    The rule is the one C-113 states for a password change; it is judged before
+    any storage so the caller learns the format, never the acceptance order.
+    """
+    if len(password) < MIN_LENGTH or len(password) > MAX_LENGTH:
+        return f"Password must be between {MIN_LENGTH} and {MAX_LENGTH} characters"
+    return None
 
 
 def hash_password(password: str) -> str:

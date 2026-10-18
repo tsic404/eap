@@ -23,7 +23,7 @@ from app.config import Settings
 from app.db import get_session
 from app.main import create_app
 from app.models.tenant import Tenant
-from app.models.user import User
+from app.models.user import ACCOUNT_SOURCE_LOCAL, User
 from app.rate_limit import LOCAL_LOGIN_PATH
 
 # The imports above must precede every other statement; the case identifier
@@ -164,6 +164,7 @@ async def _seed_user(
             status=status,
             password_hash=hash_password(password),
             must_change_password=must_change_password,
+            account_source=ACCOUNT_SOURCE_LOCAL,
         )
         session.add(user)
         await session.commit()

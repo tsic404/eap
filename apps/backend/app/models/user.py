@@ -28,6 +28,16 @@ if TYPE_CHECKING:
     from app.models.tenant import Tenant
     from app.models.user_memory import UserMemory
 
+# Account provenance (C-114): a local account carries the password credential a
+# platform admin set, an SSO account is created by the enterprise login. The
+# value is fixed when the row is created; no path may change it.
+ACCOUNT_SOURCE_LOCAL = "local"
+ACCOUNT_SOURCE_SSO = "sso"
+# Local accounts keep their subject in a reserved namespace, so an identity
+# provider subject can never address one (nor the reverse): the callback's
+# find-or-create lookup by subject cannot reach a local account.
+LOCAL_SUBJECT_PREFIX = "local:"
+
 
 class User(Base):
     __tablename__ = "users"
@@ -43,6 +53,9 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(50), default="employee", nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="active", nullable=False)
     avatar_text: Mapped[str | None] = mapped_column(String(10))
+    account_source: Mapped[str] = mapped_column(
+        String(16), default=ACCOUNT_SOURCE_SSO, server_default=text("'sso'"), nullable=False
+    )
     # Local-account credentials (ADR-007): SSO accounts keep a NULL hash and
     # never use the local path; the flag is reported on local login (C-111).
     password_hash: Mapped[str | None] = mapped_column(String(255))
@@ -83,6 +96,16 @@ class User(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "sso_sub", name="uq_users_tenant_sso_sub"),
         UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),
+        # One address is one account per tenant whatever its case (C-103/C-114):
+        # the service folds the address when it looks for a conflict, so the
+        # database folds it too and two concurrent creates cannot both land.
+        # The case-sensitive key above still backs lookups by the stored text.
+        Index(
+            "uq_users_tenant_email_lower",
+            "tenant_id",
+            text("lower(email)"),
+            unique=True,
+        ),
         # Anchor for composite FKs: enables child tables to reference a user
         # scoped to the same tenant via (tenant_id, user_id).
         UniqueConstraint("tenant_id", "id", name="uq_users_tenant_id_id"),
@@ -90,5 +113,16 @@ class User(Base):
         CheckConstraint(
             "role IN ('platform_admin', 'agent_admin', 'knowledge_admin', 'auditor', 'employee')",
             name="ck_users_role",
+        ),
+        CheckConstraint(
+            "account_source IN ('local', 'sso')",
+            name="ck_users_account_source",
+        ),
+        # Provenance and subject namespace must agree, so a source change cannot
+        # hide behind an existing subject (C-114).
+        CheckConstraint(
+            "(account_source = 'local' AND sso_sub LIKE 'local:%')"
+            " OR (account_source = 'sso' AND sso_sub NOT LIKE 'local:%')",
+            name="ck_users_account_source_subject",
         ),
     )
