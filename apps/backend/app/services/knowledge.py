@@ -398,7 +398,7 @@ class KnowledgeService:
             query=dto.query,
             citations=citations,
             score=score,
-            latencyMs=round(latency_ms, 3),
+            latency_ms=round(latency_ms, 3),
         )
 
     # ── helpers ──

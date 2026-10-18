@@ -87,4 +87,4 @@ class RetrieveTestResultDto(BaseModel):
     query: str
     citations: list[RetrieveTestCitationDto]
     score: float
-    latencyMs: float
+    latency_ms: float

@@ -1024,7 +1024,7 @@ async def test_retrieval_test_returns_citations_score_and_latency() -> None:
     assert result.citations[0].kb_name == "DS Alpha"
     assert result.citations[1].kb_name == "Knowledge"
     assert result.score == 0.98
-    assert result.latencyMs >= 0
+    assert result.latency_ms >= 0
     await retriever.aclose()
 
 
