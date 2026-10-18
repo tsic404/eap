@@ -336,6 +336,35 @@ def test_bootstrap_command_fills_the_local_required_secrets(tmp_path) -> None:
     assert _compose_config(_PROD_COMPOSE, env_file).returncode == 0
 
 
+@pytest.mark.parametrize(
+    ("key", "exported"),
+    [
+        pytest.param(
+            "OIDC_ISSUER",
+            _template_placeholders()["OIDC_ISSUER"],
+            id="template-placeholder",
+        ),
+        pytest.param("WEAVIATE_API_KEY", "", id="empty"),
+    ],
+)
+def test_bootstrap_command_refuses_an_exported_unusable_value(
+    tmp_path, key: str, exported: str
+) -> None:
+    # A shell export outranks .env at compose time, so the bootstrap command must
+    # not report success while the exported value — empty, or the template's own
+    # placeholder — would still reach the running stack.
+    root = _bootstrap_root(tmp_path)
+    env_file = _template_copy(tmp_path, "bootstrapped.env")
+
+    result = _run_bootstrap(root, env_file, extra_env={key: exported})
+
+    assert result.returncode != 0
+    assert key in result.stderr
+    # The command fails before replacing this key: the file keeps the template
+    # placeholder rather than gaining a value the export would shadow.
+    assert _env_values(env_file)[key] == _template_placeholders()[key]
+
+
 def test_bootstrap_command_replaces_every_template_placeholder(tmp_path) -> None:
     root = _bootstrap_root(tmp_path)
     env_file = _template_copy(tmp_path, "bootstrapped.env")
