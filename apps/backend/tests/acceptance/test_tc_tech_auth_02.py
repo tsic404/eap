@@ -345,3 +345,64 @@ async def test_platform_admin_changes_a_member_role(api) -> None:
     read = await api.client.get(f"{_MEMBERS}/{employee.id}", headers=headers)
     assert read.status_code == 200, read.text
     assert read.json()["data"]["role"] == "auditor"
+
+
+# ── C-13 ⑥⑦⑧: the model provider list ──────────────────────────────────────
+
+
+# The provider list is workspace-level data with no tenant dimension, so the
+# service layer does not scope it; the gate is still owed to every business
+# request, and these cases pin the three verdicts plus their order against the
+# role set.
+_MODELS = "/api/models"
+
+
+@pytest.mark.asyncio
+async def test_unknown_tenant_is_not_found_on_the_model_provider_list(api) -> None:
+    tenant, admin = await _seed_tenant_user(api, role="platform_admin")
+    # A platform admin may address any tenant, so an unknown one is looked up
+    # and reported missing rather than refused as a cross-tenant request.
+    headers = _bearer(_sign(api, admin, tenant, tenant_id=uuid.uuid4()))
+    response = await api.client.get(_MODELS, headers=headers)
+    assert response.status_code == 404, response.text
+    assert _code(response) == "NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_suspended_tenant_is_rejected_on_the_model_provider_list(api) -> None:
+    tenant, admin = await _seed_tenant_user(api, role="platform_admin", tenant_status="suspended")
+    response = await api.client.get(_MODELS, headers=_bearer(_sign(api, admin, tenant)))
+    assert response.status_code == 403, response.text
+    assert _code(response) == "TENANT_SUSPENDED"
+
+
+@pytest.mark.asyncio
+async def test_exhausted_tenant_quota_is_rejected_on_the_model_provider_list(api) -> None:
+    tenant, admin = await _seed_tenant_user(
+        api, role="platform_admin", quota_used=10, quota_limit=10
+    )
+    response = await api.client.get(_MODELS, headers=_bearer(_sign(api, admin, tenant)))
+    assert response.status_code == 429, response.text
+    assert _code(response) == "QUOTA_EXCEEDED"
+
+
+@pytest.mark.asyncio
+async def test_tenant_gate_precedes_the_role_gate_on_the_model_provider_list(api) -> None:
+    tenant, employee = await _seed_tenant_user(
+        api, role="employee", tenant_status="suspended", quota_used=10, quota_limit=10
+    )
+    response = await api.client.get(_MODELS, headers=_bearer(_sign(api, employee, tenant)))
+    # Tenant status and quota are checked before the endpoint's role set, so a
+    # suspended tenant must report TENANT_SUSPENDED rather than FORBIDDEN.
+    assert response.status_code == 403, response.text
+    assert _code(response) == "TENANT_SUSPENDED"
+
+
+@pytest.mark.asyncio
+async def test_role_outside_the_allow_list_is_forbidden_on_the_model_provider_list(api) -> None:
+    tenant, employee = await _seed_tenant_user(api, role="employee")
+    # An active tenant leaves the role set as the only refusal left, so the
+    # ordering case above and this one differ only in the tenant's state.
+    response = await api.client.get(_MODELS, headers=_bearer(_sign(api, employee, tenant)))
+    assert response.status_code == 403, response.text
+    assert _code(response) == "FORBIDDEN"

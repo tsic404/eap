@@ -57,12 +57,14 @@ def _signed_token(private_key: object, user: User, tenant: Tenant) -> str:
     return pyjwt.encode(payload, private_key, algorithm="RS256")
 
 
-def _make_session(user: User) -> AsyncMock:
+def _make_session(user: User, tenant: Tenant) -> AsyncMock:
     session = AsyncMock()
 
     async def _get(model: object, pk: object, **kwargs: object) -> object | None:
         if model is User:
             return user
+        if model is Tenant:
+            return tenant
         return None
 
     session.get = AsyncMock(side_effect=_get)
@@ -92,7 +94,7 @@ def _auth(token: str) -> dict[str, str]:
 def test_list_models_requires_admin_role(monkeypatch) -> None:
     tenant = _make_tenant()
     user = _make_user(tenant, role="employee")
-    client, token = _make_client(user, tenant, _make_session(user), monkeypatch)
+    client, token = _make_client(user, tenant, _make_session(user, tenant), monkeypatch)
 
     resp = client.get("/api/models", headers=_auth(token))
 
@@ -128,7 +130,7 @@ def test_list_models_returns_providers_for_admin(monkeypatch) -> None:
     token = _signed_token(private_key, user, tenant)
 
     async def _override_session() -> AsyncMock:
-        return _make_session(user)
+        return _make_session(user, tenant)
 
     app: FastAPI = create_app(
         Settings(_env_file=None, jwt_public_key=public_pem, rate_limit_enabled=False)
