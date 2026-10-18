@@ -12,6 +12,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.tool import ToolRegistry
+from app.schemas.tool import ToolStatus
 
 
 class ToolRepository:
@@ -52,13 +53,15 @@ class ToolRepository:
         return result.scalar_one_or_none()
 
     async def list_for_tenant(self, tenant_id: uuid.UUID) -> list[ToolRegistry]:
+        """Visible tools of ``tenant_id`` plus global ones, archived excluded."""
         statement = (
             select(ToolRegistry)
             .where(
                 or_(
                     ToolRegistry.tenant_id == tenant_id,
                     ToolRegistry.tenant_id.is_(None),
-                )
+                ),
+                ToolRegistry.status != ToolStatus.archived.value,
             )
             .order_by(ToolRegistry.created_at.desc())
         )
