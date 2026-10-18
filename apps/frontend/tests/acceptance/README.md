@@ -24,4 +24,4 @@ pnpm acceptance --list           # 列出可用标识
 
 ## 已知实现缺口
 
-`declared-pairs.ts` 的 `KNOWN_GAPS` 记录当前基线下未达阈值的 pair（对应后端套件的 `xfail(strict=False)` 约定）。它们仍逐条复算，不跳过；修复落地后删除对应条目。
+`declared-pairs.ts` 的 `KNOWN_GAPS` 记录当前基线下未达阈值的 pair（对应后端套件的 `xfail(strict=False)` 约定）。它们仍逐条复算，不跳过；修复落地后删除对应条目。当前为空：全部已声明 pair 均达对应文本档阈值。
