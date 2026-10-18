@@ -7,6 +7,7 @@ import uuid
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from httpx import Response
 from redis.exceptions import RedisError
 
 from app.config import Settings
@@ -15,6 +16,7 @@ from app.rate_limit import (
     InMemoryTokenBucket,
     RateLimitRule,
     RedisTokenBucket,
+    bucket_key,
     build_rules,
     matches_path,
 )
@@ -64,19 +66,10 @@ def test_bucket_key_uses_user_for_per_user_rules() -> None:
         path_prefixes=("/api/conversations",),
         per_user=True,
     )
-    assert (
-        RateLimitMiddleware._bucket_key(global_rule, "1.2.3.4", "user-9")
-        == "ratelimit:global:1.2.3.4"
-    )
-    assert (
-        RateLimitMiddleware._bucket_key(conversation_rule, "1.2.3.4", "user-9")
-        == "ratelimit:conversation:user-9"
-    )
+    assert bucket_key(global_rule, "1.2.3.4", "user-9") == "ratelimit:global:1.2.3.4"
+    assert bucket_key(conversation_rule, "1.2.3.4", "user-9") == "ratelimit:conversation:user-9"
     # Anonymous falls back to the client IP.
-    assert (
-        RateLimitMiddleware._bucket_key(conversation_rule, "1.2.3.4", None)
-        == "ratelimit:conversation:1.2.3.4"
-    )
+    assert bucket_key(conversation_rule, "1.2.3.4", None) == "ratelimit:conversation:1.2.3.4"
 
 
 @pytest.mark.asyncio
@@ -138,6 +131,13 @@ async def test_redis_bucket_recovers_after_cooldown(monkeypatch: pytest.MonkeyPa
     assert limiter._failed_at == 0.0
 
 
+def _assert_no_rate_limit_headers(response: Response) -> None:
+    """C-10: a 429 must not advertise rate-limit metadata."""
+    header_names = {name.lower() for name in response.headers}
+    assert "retry-after" not in header_names
+    assert not any(name.startswith("x-ratelimit-") for name in header_names)
+
+
 def test_middleware_returns_429_when_conversation_limit_exceeded() -> None:
     settings = Settings(_env_file=None, rate_limit_conversation_per_minute=2)
     app = FastAPI()
@@ -155,6 +155,7 @@ def test_middleware_returns_429_when_conversation_limit_exceeded() -> None:
         resp = client.get("/api/conversations")
         assert resp.status_code == 429
         assert resp.json()["error"]["code"] == "RATE_LIMITED"
+        _assert_no_rate_limit_headers(resp)
 
 
 def test_middleware_returns_429_on_global_exhaustion() -> None:
@@ -172,23 +173,38 @@ def test_middleware_returns_429_on_global_exhaustion() -> None:
         resp = client.get("/api/anything")
         assert resp.status_code == 429
         assert resp.json()["error"]["code"] == "RATE_LIMITED"
+        _assert_no_rate_limit_headers(resp)
 
 
-def _redis_available() -> bool:
-    import redis
+def test_middleware_degrades_when_shared_store_is_unreachable(unreachable_redis_url: str) -> None:
+    settings = Settings(_env_file=None, rate_limit_requests=2, rate_limit_window_seconds=3600)
+    limiter = RedisTokenBucket(unreachable_redis_url)
+    app = FastAPI()
+    app.add_middleware(RateLimitMiddleware, settings=settings, limiter=limiter)
 
-    try:
-        return bool(
-            redis.Redis.from_url("redis://localhost:6379/0", socket_connect_timeout=1).ping()
-        )
-    except redis.RedisError:
-        return False
+    @app.get("/api/anything")
+    def anything() -> dict[str, str]:
+        return {"ok": "yes"}
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        first = client.get("/api/anything")
+        second = client.get("/api/anything")
+        third = client.get("/api/anything")
+
+    # An unreachable shared store degrades the limiter; it must not fail the request.
+    assert first.status_code == 200
+    assert second.status_code == 200
+    # During the outage the in-process bucket keeps enforcing the same limit.
+    assert third.status_code == 429
+    assert third.json()["error"]["code"] == "RATE_LIMITED"
+    _assert_no_rate_limit_headers(third)
+    assert limiter._unavailable is True
 
 
-@pytest.mark.skipif(not _redis_available(), reason="Redis not available")
+@pytest.mark.requires_redis
 @pytest.mark.asyncio
-async def test_redis_bucket_grants_then_rejects() -> None:
-    limiter = RedisTokenBucket("redis://localhost:6379/0")
+async def test_redis_bucket_grants_then_rejects(local_redis_url: str) -> None:
+    limiter = RedisTokenBucket(local_redis_url)
     # Unique key so a prior run's bucket (TTL in the thousands of seconds) can
     # not leak tokens into this assertion.
     key = f"ratelimit:test:{uuid.uuid4().hex}"

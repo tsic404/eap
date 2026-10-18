@@ -27,7 +27,7 @@ const RESULT: RetrievalTestResult = {
     },
   ],
   score: 0.9,
-  latencyMs: 12,
+  latency_ms: 12,
 };
 
 function renderForm({ disabled = false }: { disabled?: boolean } = {}) {

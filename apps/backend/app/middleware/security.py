@@ -20,10 +20,11 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from app.config import Settings
 from app.errors import error_response
 from app.rate_limit import (
-    RateLimitRule,
     RedisTokenBucket,
     TokenBucket,
+    bucket_key,
     build_rules,
+    client_ip,
     matches_path,
 )
 
@@ -179,20 +180,22 @@ class RateLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
-        client_ip = self._client_ip(scope)
+        client_ip_value = client_ip(scope, self.trusted_proxy_count)
         state = scope.setdefault("state", {})
         user_id = state.get("user_id")
         for rule in self._rules:
             if rule.path_prefixes and not matches_path(path, rule.path_prefixes):
                 continue
-            key = self._bucket_key(rule, client_ip, user_id)
+            if matches_path(path, rule.self_limited_paths):
+                continue
+            key = bucket_key(rule, client_ip_value, user_id)
             granted = await self._limiter.acquire(key, rule.capacity, rule.refill_per_second)
             if not granted:
                 log.warning(
                     "rate_limited",
                     resource="rate_limit",
                     resourceId=rule.name,
-                    client_ip=client_ip,
+                    client_ip=client_ip_value,
                     user_id=user_id,
                     path=path,
                 )
@@ -201,25 +204,6 @@ class RateLimitMiddleware:
                 return
 
         await self.app(scope, receive, send)
-
-    @staticmethod
-    def _bucket_key(rule: RateLimitRule, client_ip: str, user_id: str | None) -> str:
-        identity = (user_id or client_ip) if rule.per_user else client_ip
-        return f"ratelimit:{rule.name}:{identity}"
-
-    def _client_ip(self, scope: Scope) -> str:
-        # Only honour X-Forwarded-For when a known number of trusted proxies sit
-        # in front: the rightmost `trusted_proxy_count` entries are appended by
-        # those proxies, so the real client is the entry just before them.
-        if self.trusted_proxy_count > 0:
-            forwarded = _header(scope, "x-forwarded-for")
-            if forwarded:
-                hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
-                if hops:
-                    index = max(0, len(hops) - self.trusted_proxy_count)
-                    return hops[index]
-        client = scope.get("client")
-        return str(client[0]) if client else "unknown"
 
 
 class JWTMiddleware:
