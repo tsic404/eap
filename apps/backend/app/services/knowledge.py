@@ -165,21 +165,38 @@ class KnowledgeService:
         kb = await self._require_kb(session, tenant, kb_id)
         return KnowledgeBaseDto.model_validate(kb)
 
-    async def delete(self, session: AsyncSession, tenant: Tenant, kb_id: str) -> None:
+    async def delete(
+        self,
+        session: AsyncSession,
+        tenant: Tenant,
+        kb_id: str,
+        *,
+        cascade: bool = False,
+    ) -> None:
+        """Delete a KB (C-38): bindings block the default path, cascade releases them.
+
+        Order is fixed: the upstream dataset goes first, and only a successful
+        (or already-absent) dataset delete is followed by the local transaction —
+        so a Dify failure answers 502 and leaves the record and its bindings
+        exactly as they were, instead of committing a half-deleted KB.
+        """
         kb = await self._require_kb(session, tenant, kb_id)
-        if kb.agent_bindings:
+        if kb.agent_bindings and not cascade:
             raise AppError(
                 409,
                 "KB_IN_USE",
                 "Knowledge base is bound to one or more agents",
+                details={"agents": await self._bound_agents(session, kb)},
             )
         try:
             await self._dify_console.delete_dataset(kb.dify_dataset_id)
         except DifyConsoleError as exc:
             if exc.status_code != 404:
-                raise
+                raise AppError(502, "DIFY_ERROR", "Dify request failed") from exc
             # Dataset already gone (e.g. retry after a partial delete) — the
             # local row still needs cleaning, so fall through.
+        if kb.agent_bindings:
+            await self._repository.delete_bindings(session, kb)
         await self._repository.delete(session, kb)
         await session.commit()
         await self._bus.emit(
@@ -188,6 +205,21 @@ class KnowledgeService:
             tenant_id=tenant.id,
             dify_dataset_id=kb.dify_dataset_id,
         )
+
+    async def _bound_agents(
+        self, session: AsyncSession, kb: KnowledgeBaseRegistry
+    ) -> list[dict[str, str]]:
+        """The binding list a 409 ``KB_IN_USE`` carries for the caller to render.
+
+        Read through the KB's own tenant, so the list can only ever name agents
+        the caller is already allowed to see.
+        """
+        return [
+            {"agent_id": agent_id, "name": name}
+            for agent_id, name in await self._repository.list_bound_agents(
+                session, kb_id=kb.kb_id, tenant_id=kb.tenant_id
+            )
+        ]
 
     # ── documents ──
 

@@ -94,6 +94,8 @@ class _FakeRepository:
         self._kbs = {kb.kb_id: kb for kb in kbs}
         self._documents = {(d.kb_id, d.document_id): d for d in documents}
         self.deleted: list[str] = []
+        self.released: list[str] = []
+        self.deletion_order: list[str] = []
         self.chunk_additions: list[tuple[str, int]] = []
         self.document_additions: list[str] = []
         self.releases: list[tuple[str, int]] = []
@@ -149,7 +151,21 @@ class _FakeRepository:
 
     async def delete(self, session: Any, kb: KnowledgeBaseRegistry) -> None:
         self.deleted.append(kb.kb_id)
+        self.deletion_order.append(f"delete:{kb.kb_id}")
         self._kbs.pop(kb.kb_id, None)
+
+    async def list_bound_agents(
+        self, session: Any, *, kb_id: str, tenant_id: uuid.UUID
+    ) -> list[tuple[str, str]]:
+        kb = self._kbs.get(kb_id)
+        if kb is None or kb.tenant_id != tenant_id:
+            return []
+        return [(b.agent_id, f"Agent {b.agent_id}") for b in kb.agent_bindings]
+
+    async def delete_bindings(self, session: Any, kb: KnowledgeBaseRegistry) -> None:
+        self.released.append(kb.kb_id)
+        self.deletion_order.append(f"release:{kb.kb_id}")
+        kb.agent_bindings = []
 
     async def insert_document(
         self, session: Any, *, kb_id: str, document_id: str, name: str
@@ -494,7 +510,44 @@ async def test_delete_rejects_bound_kb() -> None:
 
     assert exc.value.status_code == 409
     assert exc.value.code == "KB_IN_USE"
+    assert exc.value.details == {"agents": [{"agent_id": "agent-1", "name": "Agent agent-1"}]}
     dify.delete_dataset.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_with_cascade_releases_bindings_before_removing_the_kb() -> None:
+    tenant = _tenant()
+    dify = AsyncMock()
+    repo = _FakeRepository((_kb(tenant, bindings=("agent-1", "agent-2")),))
+    events, handler = _collector()
+    bus = EventBus()
+    bus.subscribe(KB_DELETED_EVENT, handler)
+    service = _service(dify, repo=repo, bus=bus)
+
+    await service.delete(AsyncMock(), tenant, "kb-1", cascade=True)
+
+    dify.delete_dataset.assert_awaited_once_with("ds-1")
+    assert repo.deletion_order == ["release:kb-1", "delete:kb-1"]
+    assert events == [
+        (KB_DELETED_EVENT, {"kb_id": "kb-1", "tenant_id": tenant.id, "dify_dataset_id": "ds-1"})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_delete_keeps_the_record_and_bindings_when_dify_delete_fails() -> None:
+    tenant = _tenant()
+    dify = AsyncMock()
+    dify.delete_dataset.side_effect = DifyConsoleError(500, "{}")
+    repo = _FakeRepository((_kb(tenant, bindings=("agent-1",)),))
+    service = _service(dify, repo=repo)
+
+    with pytest.raises(AppError) as exc:
+        await service.delete(AsyncMock(), tenant, "kb-1", cascade=True)
+
+    assert exc.value.status_code == 502
+    assert exc.value.code == "DIFY_ERROR"
+    assert repo.released == []
+    assert repo.deleted == []
 
 
 @pytest.mark.asyncio

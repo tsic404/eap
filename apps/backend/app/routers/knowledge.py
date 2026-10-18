@@ -82,8 +82,11 @@ async def delete_knowledge_base(
     tenant: ActiveTenant,
     _: KnowledgeAdmin,
     session: Session,
+    cascade: bool = False,
 ) -> None:
-    await service.delete(session, tenant, kb_id)
+    # C-38: the client re-sends with ``cascade`` once the user confirms the
+    # binding list carried by the 409.
+    await service.delete(session, tenant, kb_id, cascade=cascade)
 
 
 @router.post("/{kb_id}/documents", response_model=DocumentDto, status_code=201)
