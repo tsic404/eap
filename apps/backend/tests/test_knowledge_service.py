@@ -1210,6 +1210,52 @@ async def test_retrieval_test_returns_citations_score_and_latency() -> None:
 
 
 @pytest.mark.asyncio
+async def test_retrieval_test_sorts_citations_by_descending_score() -> None:
+    tenant = _tenant()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Dify does not promise an order; scores arrive non-descending.
+        return httpx.Response(
+            200,
+            json={
+                "records": [
+                    {"segment": {"content": "low"}, "score": 0.55},
+                    {"segment": {"content": "high"}, "score": 0.98},
+                    {"segment": {"content": "mid"}, "score": 0.7},
+                ]
+            },
+        )
+
+    retriever = DifyClientService("http://dify.test", "key", transport=httpx.MockTransport(handler))
+    service = _service(AsyncMock(), repo=_FakeRepository((_kb(tenant),)), retriever=retriever)
+
+    result = await service.retrieval_test(AsyncMock(), tenant, "kb-1", RetrieveTestDto(query="q"))
+
+    assert [c.content for c in result.citations] == ["high", "mid", "low"]
+    assert [c.score for c in result.citations] == [0.98, 0.7, 0.55]
+    assert result.score == 0.98
+    await retriever.aclose()
+
+
+@pytest.mark.asyncio
+async def test_retrieval_test_maps_upstream_failure_to_502_dify_error() -> None:
+    tenant = _tenant()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"message": "upstream exploded"})
+
+    retriever = DifyClientService("http://dify.test", "key", transport=httpx.MockTransport(handler))
+    service = _service(AsyncMock(), repo=_FakeRepository((_kb(tenant),)), retriever=retriever)
+
+    with pytest.raises(AppError) as exc:
+        await service.retrieval_test(AsyncMock(), tenant, "kb-1", RetrieveTestDto(query="q"))
+
+    assert exc.value.status_code == 502
+    assert exc.value.code == "DIFY_ERROR"
+    await retriever.aclose()
+
+
+@pytest.mark.asyncio
 async def test_retrieval_test_uses_dataset_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     tenant = _tenant()
     captured: dict[str, str] = {}

@@ -11,6 +11,7 @@ from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
+from app.core.exceptions import DifyApiError
 from app.dify_console import (
     CreateDatasetParams,
     CreateDocumentParams,
@@ -468,6 +469,9 @@ class KnowledgeService:
             started = time.perf_counter()
             result = await retriever.post(f"/v1/datasets/{kb.dify_dataset_id}/retrieve", body)
             latency_ms = (time.perf_counter() - started) * 1000
+        except DifyApiError as exc:
+            # C-43 step ④: any retrieval failure upstream is a 502, never a 500.
+            raise AppError(502, "DIFY_ERROR", "Dify request failed") from exc
         finally:
             if owns_client:
                 await retriever.aclose()
@@ -481,6 +485,8 @@ class KnowledgeService:
             )
             for record in result.get("records", [])
         ]
+        # Dify does not promise an order; the contract ranks citations by score.
+        citations.sort(key=lambda citation: citation.score, reverse=True)
         score = max((c.score for c in citations), default=0.0)
         return RetrieveTestResultDto(
             query=dto.query,
