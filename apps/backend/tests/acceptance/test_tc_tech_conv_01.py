@@ -487,13 +487,6 @@ async def test_an_upstream_error_event_is_relayed_with_its_own_code(api, monkeyp
     assert error["status"] == 429
 
 
-@pytest.mark.xfail(
-    reason=(
-        "C-101 'the stream ends after the error event' is not implemented at "
-        "main@68ad4b5: the adapter keeps relaying upstream frames after an error"
-    ),
-    strict=False,
-)
 @pytest.mark.asyncio
 async def test_the_stream_ends_after_an_upstream_error_event(api, monkeypatch) -> None:
     # The upstream keeps talking after its error frame, so a platform that only
