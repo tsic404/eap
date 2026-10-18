@@ -19,6 +19,7 @@ from app.events.task import (
     TASK_STATUS_CHANGED_EVENT,
     TaskStatusChangedEvent,
     emit_task_status_changed,
+    emit_task_status_changed_best_effort,
 )
 
 __all__ = [
@@ -39,4 +40,5 @@ __all__ = [
     "bus",
     "emit_audit_log",
     "emit_task_status_changed",
+    "emit_task_status_changed_best_effort",
 ]
