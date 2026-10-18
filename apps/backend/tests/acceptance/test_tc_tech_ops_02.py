@@ -372,14 +372,6 @@ def test_entry_proxy_serves_the_api_and_the_frontend_under_one_origin(tmp_path) 
     assert re.search(r"location\s+/\s*\{[^}]*proxy_pass\s+http://frontend:3000", conf)
 
 
-@pytest.mark.xfail(
-    reason=(
-        "C-16 browser requests ride the same-origin relative base, so the public API base "
-        "carries no scheme and no host; main@68ad4b5 inlines the absolute "
-        "http://localhost/api in the local and production shapes"
-    ),
-    strict=False,
-)
 def test_frontend_public_api_base_is_a_same_origin_relative_path(tmp_path) -> None:
     env_file = _template_copy(tmp_path)
 
