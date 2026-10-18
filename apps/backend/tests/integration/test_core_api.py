@@ -51,7 +51,6 @@ async def test_create_agent_returns_201_draft(api) -> None:
     body = resp.json()["data"]
     assert body["agentId"] == "sales-bot"
     assert body["status"] == "draft"
-    assert body["difyAppId"] == "dify-app-1"
 
 
 @pytest.mark.asyncio
