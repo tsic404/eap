@@ -1,15 +1,18 @@
-"""Auth routes: OIDC login/callback, refresh-token rotation, logout, /api/me."""
+"""Auth routes: OIDC login/callback, local login, refresh-token rotation, logout, /api/me."""
 
 from __future__ import annotations
 
-from typing import Annotated
+import json
+from typing import Annotated, Any
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import RedirectResponse
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
+from app.auth.local_login import LocalLoginService
 from app.auth.oidc import (
     OidcClient,
     code_challenge_from_verifier,
@@ -21,11 +24,12 @@ from app.auth.refresh import RefreshService, TokenPair
 from app.auth.revocation import revoke_access_token
 from app.auth.schemas import CurrentUser
 from app.auth.state_store import OidcStateStore
+from app.auth.tenants import resolve_tenant_by_email_domain
 from app.config import Settings
 from app.core.exceptions import AuthError
 from app.db import get_session
-from app.models.tenant import Tenant
 from app.models.user import User
+from app.rate_limit import client_ip
 
 router = APIRouter(tags=["auth"])
 
@@ -34,6 +38,19 @@ _REFRESH_COOKIE = "refresh_token"
 _REFRESH_COOKIE_PATH = "/api/auth"
 # Post-login landing page (served by the frontend, routed by nginx).
 _FRONTEND_HOME = "/user"
+# Login page, where a failed callback hands the browser back with its error code.
+_FRONTEND_LOGIN = "/login"
+
+
+def _login_error_redirect(code: str) -> RedirectResponse:
+    """Answer a callback failure with C-24's exit: 302 to the login page.
+
+    The error code travels as the ``error`` query parameter the login page reads;
+    the response carries no cookie, so the failure neither issues nor renews a
+    session. Clearing a live session here would let any caller with a bogus
+    callback URL log an unrelated user out.
+    """
+    return RedirectResponse(f"{_FRONTEND_LOGIN}?{urlencode({'error': code})}", status_code=302)
 
 
 def _set_refresh_cookie(response: Response, token_pair: TokenPair, settings: Settings) -> None:
@@ -46,6 +63,20 @@ def _set_refresh_cookie(response: Response, token_pair: TokenPair, settings: Set
         samesite="lax",
         secure=settings.cookie_secure,
     )
+
+
+async def _json_body(request: Request) -> dict[str, Any]:
+    """Parse the request body; anything unusable reads as an empty object.
+
+    A malformed or absent body must not be judged before the steps that precede
+    the request fields (C-111 ①/②), so the route takes responsibility for
+    reading it instead of letting the framework reject it up front.
+    """
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return {}
+    return body if isinstance(body, dict) else {}
 
 
 async def _revoke_bearer_token(request: Request) -> None:
@@ -74,19 +105,7 @@ async def _resolve_user(
     if not isinstance(sub, str) or not isinstance(email, str):
         raise AuthError(400, "INVALID_STATE", "IdP identity missing sub or email")
 
-    domain = email.rsplit("@", 1)[-1].lower()
-    tenants = (
-        (await session.execute(select(Tenant).where(func.lower(Tenant.sso_domain) == domain)))
-        .scalars()
-        .all()
-    )
-    if not tenants:
-        raise AuthError(403, "TENANT_NOT_FOUND", "No tenant matches this SSO domain")
-    if len(tenants) > 1:
-        # Case-folded collisions (e.g. "Acme.com" vs "acme.com") make the
-        # mapping ambiguous; refuse rather than guess the user's tenant.
-        raise AuthError(403, "TENANT_AMBIGUOUS", "Multiple tenants match this SSO domain")
-    tenant = tenants[0]
+    tenant = await resolve_tenant_by_email_domain(session, email)
 
     user = await session.scalar(
         select(User).where(User.tenant_id == tenant.id, User.sso_sub == sub)
@@ -139,14 +158,18 @@ async def login(request: Request) -> RedirectResponse:
     return RedirectResponse(url, status_code=302)
 
 
-@router.get("/api/auth/callback")
-async def callback(
+async def _establish_session(
     request: Request,
-    session: Annotated[AsyncSession, Depends(get_session)],
-    code: str | None = None,
-    state: str | None = None,
+    session: AsyncSession,
+    *,
+    code: str | None,
+    state: str | None,
 ) -> RedirectResponse:
-    """Consume the OIDC callback: verify id_token, resolve user, set session."""
+    """Verify the callback's code and identity, then answer the session redirect.
+
+    Every refusal raises :class:`AuthError`, which the route presents on the
+    login page rather than as a JSON body (C-24).
+    """
     settings: Settings = request.app.state.settings
     store: OidcStateStore = request.app.state.state_store
     oidc: OidcClient = request.app.state.oidc
@@ -175,6 +198,69 @@ async def callback(
     response = RedirectResponse(_FRONTEND_HOME, status_code=302)
     _set_refresh_cookie(response, token_pair, settings)
     return response
+
+
+@router.get("/api/auth/callback")
+async def callback(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    code: str | None = None,
+    state: str | None = None,
+) -> RedirectResponse:
+    """Consume the OIDC callback: verify id_token, resolve user, set session.
+
+    The browser arrives here as a redirect, so a refusal must not answer with the
+    JSON error envelope: it goes back to the login page with its error code
+    (C-24).
+    """
+    try:
+        return await _establish_session(request, session, code=code, state=state)
+    except AuthError as exc:
+        return _login_error_redirect(exc.code)
+
+
+@router.get("/api/auth/capabilities")
+async def capabilities(request: Request) -> dict[str, bool]:
+    """Public capability read point (C-110).
+
+    Answers without authentication and reports the state in both directions: a
+    deployment that never declared the local-login capability reads as disabled
+    rather than as missing.
+    """
+    settings: Settings = request.app.state.settings
+    return {"localLoginEnabled": settings.local_login_enabled}
+
+
+@router.post("/api/auth/login/local")
+async def local_login(
+    request: Request,
+    response: Response,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, bool]:
+    """Authenticate a local account with an email and password (C-111).
+
+    Body: ``{"email": "<address>", "password": "<secret>"}``. The body is parsed
+    here rather than declared, because the capability switch and the login rate
+    limit are judged before the request fields.
+
+    Success answers 200 with whether the account must change its password and
+    sets the refresh cookie (C-3); the access token still comes from the refresh
+    channel alone, and neither a password nor a token appears in this body.
+    """
+    settings: Settings = request.app.state.settings
+    service: LocalLoginService = request.app.state.local_login_service
+    refresh_service: RefreshService = request.app.state.refresh_service
+
+    payload = await _json_body(request)
+    result = await service.authenticate(
+        session,
+        email=payload.get("email"),
+        password=payload.get("password"),
+        client_ip=client_ip(request.scope, settings.trusted_proxy_count),
+    )
+    token_pair = await refresh_service.issue(session, result.user)
+    _set_refresh_cookie(response, token_pair, settings)
+    return {"mustChangePassword": result.must_change_password}
 
 
 @router.post("/api/auth/refresh")

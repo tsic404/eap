@@ -69,7 +69,9 @@ def _kb(
         created_at=datetime.now(UTC),
     )
     for agent_id in bindings:
-        kb.agent_bindings.append(AgentKnowledgeBinding(agent_id=agent_id, kb_id=kb_id))
+        kb.agent_bindings.append(
+            AgentKnowledgeBinding(tenant_id=tenant.id, agent_id=agent_id, kb_id=kb_id)
+        )
     return kb
 
 
@@ -991,9 +993,7 @@ async def test_delete_document_maps_missing_document_to_404_before_deleting() ->
     dify.get_document_indexing_status.side_effect = DifyConsoleError(
         404, json.dumps({"message": "Document Not Exists."})
     )
-    repo = _FakeRepository(
-        (_kb(tenant),), (_doc("kb-1", "doc-1", "completed"),)
-    )
+    repo = _FakeRepository((_kb(tenant),), (_doc("kb-1", "doc-1", "completed"),))
     service = _service(dify, repo=repo)
 
     with pytest.raises(AppError) as exc:
@@ -1099,7 +1099,7 @@ async def test_retrieval_test_returns_citations_score_and_latency() -> None:
     assert result.citations[0].kb_name == "DS Alpha"
     assert result.citations[1].kb_name == "Knowledge"
     assert result.score == 0.98
-    assert result.latencyMs >= 0
+    assert result.latency_ms >= 0
     await retriever.aclose()
 
 

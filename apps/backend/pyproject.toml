@@ -70,6 +70,7 @@ strict = true
 [tool.pytest.ini_options]
 markers = [
     "perf: performance gate (Agent list P95 < 240ms)",
+    "requires_redis: needs a shared store reachable at localhost:6379",
 ]
 
 [[tool.mypy.overrides]]

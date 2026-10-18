@@ -54,7 +54,6 @@ def test_user_memory_embedding_is_pgvector_1536() -> None:
         ("tenants", {"uq_tenants_slug", "uq_tenants_sso_domain"}),
         ("refresh_tokens", {"uq_refresh_tokens_token_hash"}),
         ("run_logs", {"uq_run_logs_trace_id"}),
-        ("agent_registry", {"uq_agent_registry_tenant_agent_id"}),
     ],
 )
 def test_unique_constraints(table: str, expected: set[str]) -> None:
@@ -74,6 +73,14 @@ def test_foreign_keys_wired() -> None:
     assert "tenants.id" in {fk.target_fullname for fk in tables["users"].foreign_keys}
     assert "tenants.id" in {fk.target_fullname for fk in tables["agent_registry"].foreign_keys}
     assert "users.id" in {fk.target_fullname for fk in tables["tasks"].foreign_keys}
+
+
+def test_agent_identity_is_unique_per_tenant() -> None:
+    """C-103: the agent identifier is unique within its tenant, not globally."""
+    tables = Base.metadata.tables
+    assert tuple(tables["agent_registry"].primary_key.columns.keys()) == ("tenant_id", "agent_id")
+    for table in ("agent_knowledge_bindings", "agent_tool_bindings", "agent_daily_stats"):
+        assert "tenant_id" in tables[table].primary_key.columns.keys()
 
 
 def test_tenant_scoped_composite_foreign_keys() -> None:
@@ -99,6 +106,24 @@ def test_tenant_scoped_composite_foreign_keys() -> None:
         (
             "run_logs",
             "fk_run_logs_tenant_agent_id_agent_registry",
+            "agent_registry",
+            "agent_registry.agent_id",
+        ),
+        (
+            "agent_knowledge_bindings",
+            "fk_agent_knowledge_bindings_tenant_agent_id_agent_registry",
+            "agent_registry",
+            "agent_registry.agent_id",
+        ),
+        (
+            "agent_tool_bindings",
+            "fk_agent_tool_bindings_tenant_agent_id_agent_registry",
+            "agent_registry",
+            "agent_registry.agent_id",
+        ),
+        (
+            "agent_daily_stats",
+            "fk_agent_daily_stats_tenant_agent_id_agent_registry",
             "agent_registry",
             "agent_registry.agent_id",
         ),

@@ -127,6 +127,21 @@ jobs:
       - name: Performance gate (Agent list P95 < 240ms)
         run: pytest -m perf
 
+      # Two branches that each add a revision on the same parent leave the graph
+      # with two heads, and `alembic upgrade head` then aborts. Catch that in the
+      # PR instead of at deploy time.
+      - name: Migration graph (single head)
+        env:
+          DATABASE_URL: postgresql+asyncpg://eap:eap_password@localhost:5432/eap
+        run: |
+          heads="$(alembic heads)"
+          count="$(printf '%s\n' "$heads" | grep -c '(head)' || true)"
+          if [ "$count" -ne 1 ]; then
+            echo "::error::expected exactly one alembic head, found ${count}:"
+            printf '%s\n' "$heads"
+            exit 1
+          fi
+
       - name: Migration smoke test (upgrade → downgrade)
         env:
           DATABASE_URL: postgresql+asyncpg://eap:eap_password@localhost:5432/eap

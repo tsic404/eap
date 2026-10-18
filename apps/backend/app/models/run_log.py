@@ -35,9 +35,7 @@ class RunLog(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False
     )
-    agent_id: Mapped[str] = mapped_column(
-        String(100), ForeignKey("agent_registry.agent_id"), nullable=False
-    )
+    agent_id: Mapped[str] = mapped_column(String(100), nullable=False)
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
@@ -59,7 +57,9 @@ class RunLog(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     tenant: Mapped[Tenant] = relationship(back_populates="run_logs")
-    agent: Mapped[AgentRegistry] = relationship(back_populates="run_logs", foreign_keys=[agent_id])
+    # Navigation only: the row's tenant/agent columns are written directly, so
+    # this relationship must not compete for ``tenant_id`` with ``tenant``.
+    agent: Mapped[AgentRegistry] = relationship(back_populates="run_logs", viewonly=True)
     user: Mapped[User] = relationship(back_populates="run_logs", foreign_keys=[user_id])
     steps: Mapped[list[TraceStep]] = relationship(
         back_populates="log", cascade="all, delete-orphan", lazy="selectin"

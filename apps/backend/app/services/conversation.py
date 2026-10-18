@@ -409,8 +409,8 @@ class ConversationService:
     async def _require_agent(
         self, session: AsyncSession, tenant_id: uuid.UUID, agent_id: str
     ) -> AgentRegistry:
-        agent = await session.get(AgentRegistry, agent_id)
-        if agent is None or agent.tenant_id != tenant_id:
+        agent = await session.get(AgentRegistry, (tenant_id, agent_id))
+        if agent is None:
             raise AppError(404, "AGENT_NOT_FOUND", "Agent not found")
         return agent
 

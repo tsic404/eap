@@ -29,7 +29,7 @@ _TYPE_TO_DIFY_MODE: dict[str, str] = {
     "data": "chat",
 }
 
-_DUPLICATE_AGENT_CONSTRAINTS = frozenset({"pk_agent_registry", "uq_agent_registry_tenant_agent_id"})
+_DUPLICATE_AGENT_CONSTRAINTS = frozenset({"pk_agent_registry"})
 
 # ``offline`` is the only state that must not be publishable: it is the
 # deliberate "taken down" state, so a publish there is a state conflict rather
@@ -262,10 +262,16 @@ class AgentService:
     def _bind(self, agent: AgentRegistry, kb_ids: list[str], tool_ids: list[str]) -> None:
         for kb_id in kb_ids:
             agent.knowledge_bindings.append(
-                AgentKnowledgeBinding(agent_id=agent.agent_id, kb_id=kb_id)
+                AgentKnowledgeBinding(
+                    tenant_id=agent.tenant_id, agent_id=agent.agent_id, kb_id=kb_id
+                )
             )
         for tool_id in tool_ids:
-            agent.tool_bindings.append(AgentToolBinding(agent_id=agent.agent_id, tool_id=tool_id))
+            agent.tool_bindings.append(
+                AgentToolBinding(
+                    tenant_id=agent.tenant_id, agent_id=agent.agent_id, tool_id=tool_id
+                )
+            )
 
     async def _replace_bindings(
         self,
@@ -276,17 +282,29 @@ class AgentService:
         if kb_ids is not None:
             await self._session.execute(
                 delete(AgentKnowledgeBinding).where(
-                    AgentKnowledgeBinding.agent_id == agent.agent_id
+                    AgentKnowledgeBinding.tenant_id == agent.tenant_id,
+                    AgentKnowledgeBinding.agent_id == agent.agent_id,
                 )
             )
             for kb_id in kb_ids:
-                self._session.add(AgentKnowledgeBinding(agent_id=agent.agent_id, kb_id=kb_id))
+                self._session.add(
+                    AgentKnowledgeBinding(
+                        tenant_id=agent.tenant_id, agent_id=agent.agent_id, kb_id=kb_id
+                    )
+                )
         if tool_ids is not None:
             await self._session.execute(
-                delete(AgentToolBinding).where(AgentToolBinding.agent_id == agent.agent_id)
+                delete(AgentToolBinding).where(
+                    AgentToolBinding.tenant_id == agent.tenant_id,
+                    AgentToolBinding.agent_id == agent.agent_id,
+                )
             )
             for tool_id in tool_ids:
-                self._session.add(AgentToolBinding(agent_id=agent.agent_id, tool_id=tool_id))
+                self._session.add(
+                    AgentToolBinding(
+                        tenant_id=agent.tenant_id, agent_id=agent.agent_id, tool_id=tool_id
+                    )
+                )
 
 
 def _require_id(response: object, label: str) -> str:
