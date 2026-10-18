@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { loginViaSso } from "./helpers/api";
+import { envelope, loginViaSso } from "./helpers/api";
 
 // Visual regression (§33.7.5): five stable, deterministic UI states. Baselines
 // live under `e2e/visual.spec.ts-snapshots/` (Playwright's default per-spec
@@ -15,6 +15,11 @@ const SCREENSHOT_OPTIONS = {
 } as const;
 
 test("login page matches the baseline", async ({ page }) => {
+  // The harness stack declares the capability on; the baseline pins the
+  // deployment default (closed), so the read point is answered as closed here.
+  await page.route("**/api/auth/capabilities", (route) =>
+    route.fulfill({ json: envelope({ localLoginEnabled: false }) }),
+  );
   await page.goto("/login");
   await expect(page.getByRole("button", { name: "SSO 登录" })).toBeVisible();
   await expect(page).toHaveScreenshot("login.png", SCREENSHOT_OPTIONS);

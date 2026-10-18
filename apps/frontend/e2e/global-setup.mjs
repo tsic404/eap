@@ -23,6 +23,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import accounts from "./helpers/accounts.cjs";
+
+const { LOCAL_ACCOUNT_PASSWORD, LOCAL_ACCOUNTS } = accounts;
+
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(dirname, "../../..");
 const backendDir = path.join(repoRoot, "apps/backend");
@@ -53,6 +57,37 @@ const SEED_SQL = `
   WHERE t.sso_domain = 'acme.com'
     AND NOT EXISTS (SELECT 1 FROM users u WHERE u.tenant_id = t.id AND u.sso_sub = 'user-1');
 `;
+
+/** Seed rows for the two local accounts the local-login journeys sign in with. */
+function localAccountSeedSql(passwordHash) {
+  return Object.entries(LOCAL_ACCOUNTS)
+    .map(
+      ([key, account]) => `
+  INSERT INTO users (id, tenant_id, sso_sub, email, name, role, status, password_hash, must_change_password)
+  SELECT gen_random_uuid(), t.id, 'local-${key}', '${account.email}', '${account.name}',
+         '${account.role}', 'active', '${passwordHash}', false
+  FROM tenants t
+  WHERE t.sso_domain = 'acme.com'
+    AND NOT EXISTS (SELECT 1 FROM users u WHERE u.tenant_id = t.id AND u.email = '${account.email}');
+`,
+    )
+    .join("");
+}
+
+/**
+ * Hash a seeded password with the backend's own password module, so the seeded
+ * credentials are verified by the real slow-hash path rather than a fixture
+ * encoding the login route might not accept.
+ */
+function localAccountPasswordHash() {
+  const script = `from app.auth.password import hash_password; print(hash_password(${JSON.stringify(
+    LOCAL_ACCOUNT_PASSWORD,
+  )}))`;
+  return execFileSync(BACKEND_PYTHON, ["-c", script], {
+    cwd: backendDir,
+    encoding: "utf8",
+  }).trim();
+}
 
 // The harness owns a throwaway Redis container on a dedicated port so the SSO
 // flow never depends on the host's shared Redis, which can be in MISCONF (RDB
@@ -225,7 +260,7 @@ export default async function globalSetup() {
     env: { ...process.env, DATABASE_URL },
   });
 
-  runPsql(PSQL_DSN, ["-c", SEED_SQL]);
+  runPsql(PSQL_DSN, ["-c", SEED_SQL + localAccountSeedSql(localAccountPasswordHash())]);
 
   // Start the Redis container only after the DB reset succeeds: any earlier
   // failure exits globalSetup, which skips teardown, so a container started

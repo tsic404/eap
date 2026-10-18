@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { postMock, requestUse, responseUse, clientMock } = vi.hoisted(() => {
+const { postMock, requestUse, responseUse, clientMock, toastMock } = vi.hoisted(() => {
   const postMock = vi.fn();
   const requestUse = vi.fn();
   const responseUse = vi.fn();
@@ -10,7 +10,7 @@ const { postMock, requestUse, responseUse, clientMock } = vi.hoisted(() => {
       response: { use: responseUse },
     },
   });
-  return { postMock, requestUse, responseUse, clientMock };
+  return { postMock, requestUse, responseUse, clientMock, toastMock: vi.fn() };
 });
 
 vi.mock("axios", () => ({
@@ -18,6 +18,10 @@ vi.mock("axios", () => ({
     create: vi.fn(() => clientMock),
     post: postMock,
   },
+}));
+
+vi.mock("./toast-bus", () => ({
+  toast: toastMock,
 }));
 
 import { refreshAccessToken } from "./http-client";
@@ -163,5 +167,23 @@ describe("response interceptor", () => {
 
     await expect(onRejected({ config, response: { status: 401 } })).rejects.toBeTruthy();
     expect(postMock).not.toHaveBeenCalled();
+  });
+
+  it("raises the permission toast for a 403 on a business request", async () => {
+    toastMock.mockClear();
+    const onRejected = responseUse.mock.calls[0][1];
+    const config = { url: "/agents", headers: { set: vi.fn() } };
+
+    await expect(onRejected({ config, response: { status: 403 } })).rejects.toBeTruthy();
+    expect(toastMock).toHaveBeenCalledWith({ type: "error", title: "无权限访问" });
+  });
+
+  it("leaves a rejection from an auth endpoint to the caller's own message", async () => {
+    toastMock.mockClear();
+    const onRejected = responseUse.mock.calls[0][1];
+    const config = { url: "/auth/login/local", headers: { set: vi.fn() } };
+
+    await expect(onRejected({ config, response: { status: 403 } })).rejects.toBeTruthy();
+    expect(toastMock).not.toHaveBeenCalled();
   });
 });

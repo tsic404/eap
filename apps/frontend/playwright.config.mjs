@@ -80,6 +80,16 @@ export default defineConfig({
         OIDC_REDIRECT_URI: `${PROXY_ORIGIN}/api/auth/callback`,
         JWT_PRIVATE_KEY: privateKey,
         JWT_PUBLIC_KEY: publicKey,
+        // The local/development family orchestrates the capability on (C-110),
+        // so the harness stack signs local accounts in over the real route; the
+        // closed state is asserted by answering the public read point as closed.
+        LOCAL_LOGIN_ENABLED: "true",
+        // One browser drives the whole suite from one address, and the local-login
+        // journeys spend six requests on the identifier lockout alone. The login
+        // bucket is a production throttle (C-10, covered by the backend suite),
+        // not the identifier lockout (C-112) these journeys assert. Keep it high
+        // enough that the throttle never turns a login assertion into a 429.
+        RATE_LIMIT_LOGIN_PER_MINUTE: "300",
         // The proxy origin is the browser's same-origin; the backend's CORS
         // whitelist must admit it or same-origin POSTs (refresh/logout) are
         // rejected with 403.

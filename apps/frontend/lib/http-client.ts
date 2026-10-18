@@ -95,10 +95,13 @@ apiClient.interceptors.response.use(
   async (error: AxiosError) => {
     const config = error.config as RetriableConfig | undefined;
     const status = error.response?.status;
+    // Auth endpoints judge the call itself: their rejections carry their own
+    // meaning (e.g. a tenant mismatch on login) and are rendered by the caller,
+    // so neither a refresh replay nor the generic permission toast applies.
+    const isAuthRequest = (config?.url ?? "").startsWith("/auth/");
 
     if (status === 401 && config && !config._retried) {
       // Never attempt to refresh the auth endpoints themselves — that would loop.
-      const isAuthRequest = (config.url ?? "").startsWith("/auth/");
       if (!isAuthRequest) {
         config._retried = true;
         const token = await refreshAccessToken();
@@ -109,7 +112,7 @@ apiClient.interceptors.response.use(
         redirectToLogin();
       }
     }
-    if (status === 403) {
+    if (status === 403 && !isAuthRequest) {
       toast({ type: "error", title: "无权限访问" });
     }
     if (status !== undefined && status >= 500) {
