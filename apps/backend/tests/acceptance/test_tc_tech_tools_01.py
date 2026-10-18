@@ -594,20 +594,20 @@ async def test_auth_injection_omits_the_header_when_the_credential_is_missing(ap
         assert "x-api-key" not in echoed, tool_id
 
 
-@pytest.mark.xfail(
-    reason=(
-        "C-66 credentials-absent-no-header (basic) not implemented at "
-        "main@68ad4b5: empty credentials are encoded into the header"
-    ),
-    strict=False,
-)
 @pytest.mark.asyncio
 async def test_auth_injection_omits_the_basic_header_when_credentials_are_missing(api) -> None:
     tenant, admin = await api.seed(role="agent_admin")
     headers = api.auth(admin, tenant)
     calls = _install_proxy(api, _echo_received_headers)
 
-    for tool_id, auth_config in (("auth-basic-empty", {}), ("auth-basic-null", None)):
+    # C-66: a field-level ``null`` credential is missing too — unnormalized it
+    # becomes the literal string "None" and would be encoded into a real token.
+    for tool_id, auth_config in (
+        ("auth-basic-empty", {}),
+        ("auth-basic-null", None),
+        ("auth-basic-null-fields", {"username": None, "password": None}),
+        ("auth-basic-mixed-null", {"username": "", "password": None}),
+    ):
         created = await api.client.post(
             "/api/tools",
             headers=headers,
