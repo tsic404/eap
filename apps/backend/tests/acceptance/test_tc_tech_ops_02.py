@@ -136,7 +136,12 @@ def _bootstrap_root(tmp_path: Path) -> Path:
     return root
 
 
-def _run_bootstrap(root: Path, env_file: Path) -> subprocess.CompletedProcess[str]:
+def _run_bootstrap(
+    root: Path,
+    env_file: Path,
+    *,
+    extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     """Run the bootstrap command itself against ``env_file``, inside ``root``."""
     # The make flags a caller may have exported describe the outer build, not this
     # one; leaving them in place makes the sub-make warn about them.
@@ -148,7 +153,12 @@ def _run_bootstrap(root: Path, env_file: Path) -> subprocess.CompletedProcess[st
     return subprocess.run(
         list(_BOOTSTRAP_COMMAND),
         cwd=root,
-        env={**env, "ENV_FILE": str(env_file), "ENV_EXAMPLE": str(root / ".env.example")},
+        env={
+            **env,
+            **(extra_env or {}),
+            "ENV_FILE": str(env_file),
+            "ENV_EXAMPLE": str(root / ".env.example"),
+        },
         capture_output=True,
         text=True,
         check=False,
@@ -343,6 +353,23 @@ def test_bootstrap_command_replaces_every_template_placeholder(tmp_path) -> None
         if values.get(key, "") == value
     }
     assert not survivors, survivors
+
+
+def test_bootstrap_command_clears_the_placeholder_under_an_exported_value(tmp_path) -> None:
+    # A shell export overrides .env at compose time, but C-92 ③ judges the file:
+    # the template placeholder must still be gone, and the caller's value stays
+    # in the environment rather than being copied to disk.
+    root = _bootstrap_root(tmp_path)
+    env_file = _template_copy(tmp_path, "bootstrapped.env")
+    key = "WEAVIATE_API_KEY"
+    exported = "exported-real-key"
+
+    result = _run_bootstrap(root, env_file, extra_env={key: exported})
+
+    assert result.returncode == 0, result.stderr
+    value = _env_values(env_file)[key]
+    assert value and value != _template_placeholders()[key], value
+    assert value != exported
 
 
 def test_entry_proxy_serves_the_api_and_the_frontend_under_one_origin(tmp_path) -> None:
