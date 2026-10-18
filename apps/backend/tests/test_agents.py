@@ -464,7 +464,6 @@ async def test_create_agent_returns_201(session_factory) -> None:  # type: ignor
     assert resp.status_code == 201
     body = resp.json()
     assert body["data"]["status"] == "draft"
-    assert body["data"]["difyAppId"] == "dify-app-1"
 
 
 @pytest.mark.asyncio

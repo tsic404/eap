@@ -108,11 +108,6 @@ async def test_agent_responses_never_carry_the_upstream_app_key(api) -> None:
         assert upstream_key not in response.text
 
 
-@pytest.mark.xfail(
-    reason="C-35 upstream app id must stay server-private, but AgentDto.difyAppId "
-    "exposes it at main@68ad4b5",
-    strict=False,
-)
 @pytest.mark.asyncio
 async def test_agent_responses_expose_only_the_contracted_fields(api) -> None:
     """C-35/C-109: no payload carries the upstream application id either.
