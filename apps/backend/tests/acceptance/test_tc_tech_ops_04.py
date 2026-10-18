@@ -112,14 +112,6 @@ async def test_identifier_falls_back_to_the_key_and_entries_without_one_are_skip
     ]
 
 
-@pytest.mark.xfail(
-    reason=(
-        "C-20 provider identifier must be the entry's non-empty string (a non-string value "
-        "falls back to the alternative key, and without one the entry is skipped); "
-        "main@68ad4b5 stringifies any truthy value instead"
-    ),
-    strict=False,
-)
 @pytest.mark.asyncio
 async def test_non_string_identifier_falls_back_to_the_key_or_is_skipped(api) -> None:
     tenant, admin = await api.seed(role="agent_admin")
@@ -168,13 +160,6 @@ async def test_display_name_prefers_chinese_then_english_and_falls_back_to_the_i
     assert all(item["label"] for item in providers)
 
 
-@pytest.mark.xfail(
-    reason=(
-        "C-20 display name must only consider non-empty string values inside the locale map "
-        "(Chinese before English); main@68ad4b5 stringifies whatever value it finds"
-    ),
-    strict=False,
-)
 @pytest.mark.asyncio
 async def test_display_name_skips_non_string_locale_values(api) -> None:
     tenant, admin = await api.seed(role="agent_admin")
@@ -195,13 +180,6 @@ async def test_display_name_skips_non_string_locale_values(api) -> None:
     }
 
 
-@pytest.mark.xfail(
-    reason=(
-        "C-20 display name falls back to the identifier when no Chinese or English value is "
-        "available; main@68ad4b5 falls back to any other locale first"
-    ),
-    strict=False,
-)
 @pytest.mark.asyncio
 async def test_display_name_ignores_locales_outside_chinese_and_english(api) -> None:
     tenant, admin = await api.seed(role="agent_admin")
@@ -236,9 +214,6 @@ async def test_deployment_type_passes_through_and_is_the_present_null_field(api)
     assert all("deploymentType" in item for item in providers)
 
 
-@pytest.mark.xfail(
-    reason="C-20 non-string deployment type is not nulled at main@68ad4b5", strict=False
-)
 @pytest.mark.asyncio
 async def test_non_string_deployment_type_becomes_null_instead_of_an_error(api) -> None:
     tenant, admin = await api.seed(role="agent_admin")
@@ -307,9 +282,6 @@ async def test_model_count_is_zero_for_missing_unnumberable_or_malformed_configu
     assert all(isinstance(item["modelCount"], int) for item in providers)
 
 
-@pytest.mark.xfail(
-    reason="C-20 system configuration block still counts at main@68ad4b5", strict=False
-)
 @pytest.mark.asyncio
 async def test_system_configuration_block_does_not_contribute_to_the_model_count(api) -> None:
     tenant, admin = await api.seed(role="agent_admin")
@@ -365,9 +337,6 @@ async def test_empty_provider_list_is_a_plain_empty_array(api) -> None:
     assert await _providers(api, headers, {"data": []}) == []
 
 
-@pytest.mark.xfail(
-    reason="C-20 unrecognizable payload is not reported at main@68ad4b5", strict=False
-)
 @pytest.mark.asyncio
 async def test_unrecognizable_upstream_payload_returns_502_not_an_empty_array(api) -> None:
     tenant, admin = await api.seed(role="agent_admin")

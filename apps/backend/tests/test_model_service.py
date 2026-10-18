@@ -83,9 +83,39 @@ def test_normalize_providers_handles_data_envelope_and_list() -> None:
 
 
 def test_normalize_providers_skips_malformed_entries() -> None:
-    assert _normalize_providers({"unexpected": 1}) == []
     assert _normalize_providers([{"label": "no provider"}]) == []
-    assert _normalize_providers(None) == []
+    assert _normalize_providers([{"provider": "", "key": ""}]) == []
+
+
+@pytest.mark.parametrize("provider", [123, ["openai"], {"id": "openai"}])
+def test_provider_identifier_falls_back_to_key_for_non_string_values(provider: object) -> None:
+    providers = _normalize_providers([{"provider": provider, "key": "fallback-key"}])
+
+    assert [item.provider for item in providers] == ["fallback-key"]
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"provider": 456},
+        {"provider": ["openai"]},
+        {"provider": None},
+        {"provider": 123, "key": 456},
+    ],
+)
+def test_provider_identifier_skips_entries_without_a_string_identifier(
+    entry: dict[str, object],
+) -> None:
+    assert _normalize_providers([entry]) == []
+
+
+@pytest.mark.parametrize("payload", [{"unexpected": 1}, {"data": "nope"}, None])
+def test_normalize_providers_rejects_unrecognizable_payload(payload: object) -> None:
+    with pytest.raises(AppError) as exc:
+        _normalize_providers(payload)
+
+    assert exc.value.status_code == 502
+    assert exc.value.code == "DIFY_ERROR"
 
 
 @pytest.mark.asyncio
