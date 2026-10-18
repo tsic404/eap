@@ -58,6 +58,14 @@ export async function deleteConversation(conversationId: string): Promise<void> 
   await apiClient.delete(`${API_ROUTES.conversations}/${conversationId}`);
 }
 
+/** Undo a soft delete; the conversation returns to the user's list. */
+export async function restoreConversation(conversationId: string): Promise<Conversation> {
+  const response = await apiClient.post<ApiEnvelope<Conversation>>(
+    `${API_ROUTES.conversations}/${conversationId}/restore`,
+  );
+  return response.data.data;
+}
+
 /**
  * POST the message and return the raw SSE `Response`. Callers own the stream
  * lifecycle (reading/aborting) and the JSON-error branch for non-SSE bodies.

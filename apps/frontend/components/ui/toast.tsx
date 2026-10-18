@@ -12,7 +12,7 @@ import {
 import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from "lucide-react";
 
 import { subscribeToToasts } from "@/lib/toast-bus";
-import type { ToastOptions, ToastType } from "@/lib/toast-bus";
+import type { ToastAction, ToastOptions, ToastType } from "@/lib/toast-bus";
 import { cn } from "@/lib/utils";
 
 import { Button } from "./button";
@@ -23,6 +23,7 @@ interface ToastItem {
   title: string;
   description?: string;
   duration: number;
+  action?: ToastAction;
 }
 
 interface ToastContextValue {
@@ -62,6 +63,19 @@ function ToastCard({
           <p className="text-sm text-muted-foreground">{item.description}</p>
         )}
       </div>
+      {item.action && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 shrink-0 px-2 text-xs"
+          onClick={() => {
+            onDismiss(item.id);
+            item.action?.onClick();
+          }}
+        >
+          {item.action.label}
+        </Button>
+      )}
       <Button
         variant="ghost"
         size="sm"
@@ -99,6 +113,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         title: options.title,
         description: options.description,
         duration: options.duration ?? DEFAULT_DURATION_MS,
+        action: options.action,
       };
       setToasts((prev) => [...prev, item]);
       timersRef.current.set(

@@ -1,10 +1,17 @@
 export type ToastType = "success" | "error" | "warning" | "info";
 
+/** Inline control on a toast (e.g. undoing the action the toast reports). */
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface ToastOptions {
   type?: ToastType;
   title: string;
   description?: string;
   duration?: number;
+  action?: ToastAction;
 }
 
 const TOAST_EVENT = "eap:toast";
