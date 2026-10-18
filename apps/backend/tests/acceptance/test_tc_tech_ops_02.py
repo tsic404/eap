@@ -326,14 +326,6 @@ def test_bootstrap_command_fills_the_local_required_secrets(tmp_path) -> None:
     assert _compose_config(_PROD_COMPOSE, env_file).returncode == 0
 
 
-@pytest.mark.xfail(
-    reason=(
-        "C-92 ③ template placeholder values must not survive the bootstrap command; "
-        "main@68ad4b5 replaces the four generated secrets only, so the OIDC / JWT / "
-        "Dify-console placeholders stay as the template ships them"
-    ),
-    strict=False,
-)
 def test_bootstrap_command_replaces_every_template_placeholder(tmp_path) -> None:
     root = _bootstrap_root(tmp_path)
     env_file = _template_copy(tmp_path, "bootstrapped.env")
