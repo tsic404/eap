@@ -7,12 +7,13 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
+import httpx
 import structlog
 from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dify_console import CreateAppParams, DifyConsoleClient, ModelConfig
+from app.dify_console import CreateAppParams, DifyConsoleClient, DifyConsoleError, ModelConfig
 from app.errors import AppError
 from app.events.agent import AGENT_CREATED, AGENT_DELETED, AGENT_OFFLINE, AGENT_PUBLISHED
 from app.events.bus import EventBus, bus
@@ -137,10 +138,21 @@ class AgentService:
             if mapped is not None:
                 raise mapped from exc
             raise
-        except Exception:
+        except Exception as exc:
             await self._session.rollback()
             if dify_app_id is not None:
                 await _delete_app_best_effort(self._console, dify_app_id)
+            mapped = _map_upstream_error(exc)
+            if mapped is not None:
+                # F1 keeps the engine payload out of the response, so this
+                # warning is the only server-side record of the failed call.
+                log.warning(
+                    "agent_upstream_call_failed",
+                    dify_app_id=dify_app_id,
+                    status_code=getattr(exc, "status_code", None),
+                    exc_info=True,
+                )
+                raise mapped from exc
             raise
 
         await self._emit(
@@ -387,6 +399,18 @@ def _unknown_binding_error() -> AppError:
     never an existence oracle for another tenant's assets (C-14).
     """
     return AppError(400, "INVALID_BINDING", "Unknown knowledge base or tool id")
+
+
+def _map_upstream_error(exc: Exception) -> AppError | None:
+    """Map an inference-engine call failure to the contract's 502; ``None`` otherwise.
+
+    C-99 pins every engine call failure — including a transport failure that never
+    reached Dify — to 502 ``DIFY_ERROR``. Without this the exception escapes as the
+    catch-all 500, which reads as a platform bug instead of an upstream outage.
+    """
+    if isinstance(exc, (DifyConsoleError, httpx.HTTPError)):
+        return AppError(502, "DIFY_ERROR", "Inference engine request failed")
+    return None
 
 
 def _map_integrity_error(exc: IntegrityError) -> AppError | None:
