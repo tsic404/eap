@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.e2e.json --noEmit",
     "test": "vitest run",
+    "acceptance": "node tests/acceptance/run.mjs",
     "test:e2e": "playwright test"
   },
   "dependencies": {

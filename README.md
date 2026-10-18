@@ -109,6 +109,30 @@ uv run pytest -m perf
 
 集成测试用 `testcontainers` 起真实 PostgreSQL(pgvector) 与 Redis 容器，Dify 边界保持 mock。测试数据通过 factory 函数构造（每 worker 独立 tenant 前缀），每个用例跑在事务回滚内。受 cgroup 限制的本地 Docker 启动 Ryuk 会报 `operation not permitted` 并导致全部用例超时，集成测试的 conftest 已默认 `TESTCONTAINERS_RYUK_DISABLED=true` 关闭 Ryuk（正常退出时 testcontainers 的 context manager 负责停容器；测试被强杀时残留容器用 `docker container prune -f` 清理）。容器启动/拉取同样经由宿主 Docker daemon：conftest 把 docker-py 客户端的读超时从默认 60s 放宽到 300s，避免高负载（例如 compose 冷启动、并发构建）下夹具以 `ReadTimeout` 集体失败。
 
+### 验收用例（技术验收 TC-tech-*）
+
+设计仓 `docs/03-acceptance.md` 的每条技术用例在实现仓有唯一可执行形态：`apps/backend/tests/acceptance/` 下的模块名对应用例标识（`TC-tech-kb-01` → `test_tc_tech_kb_01.py`），模块内断言对应该用例的可观察判据；执行入口按标识运行：
+
+```bash
+cd apps/backend
+uv run python -m tests.acceptance                  # 全部后端 TC-tech-* 用例
+uv run python -m tests.acceptance TC-tech-kb-01    # 单条按标识执行
+uv run python -m tests.acceptance --list           # 列出可用标识
+```
+
+验收用例与集成测试共用同一套夹具（Testcontainers PostgreSQL/Redis + Dify mock），同样需要 Docker；CI 的 `pytest -m "not perf"` 会连带执行整套用例（也可 `uv run pytest tests/acceptance`）。
+
+前端用例 `TC-tech-ui-01` 位于 `apps/frontend/tests/acceptance/`，模块名与标识一一对应，执行入口等价：
+
+```bash
+cd apps/frontend
+pnpm acceptance                  # 全部前端 TC-tech-* 用例
+pnpm acceptance TC-tech-ui-01    # 单条按标识执行
+pnpm acceptance --list           # 列出可用标识
+```
+
+根目录另有 `make acceptance-ui`（单条：`make acceptance-ui TC=TC-tech-ui-01`）。`TC-tech-ops-02` 末条「浏览器请求实际落在同源相对路径」由 `apps/frontend/e2e/same-origin.spec.ts` 在真实浏览器中取证，随 `pnpm test:e2e` 执行。
+
 ## QA 环境（SSO 端到端）
 
 一键拉起与 Playwright e2e 回归同源的 SSO 栈（mock IdP + backend + eap_e2e DB + frontend + 反向代理），无需再手动 `docker build` / `uv sync` / 建库 / socat。
