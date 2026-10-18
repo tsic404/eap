@@ -55,7 +55,10 @@ prod 占位值不参与；单机 `docker compose up -d` 即可用 `alice@acme.co
 （默认 80 / `http://localhost`，两处需指向同一地址；`OIDC_REDIRECT_URI` 与 CORS 允许来源由它推出）。
 接真实 IdP 时把这三个 `MOCK_IDP_*` 值置空并填 `OIDC_ISSUER` / `OIDC_CLIENT_ID` /
 `OIDC_CLIENT_SECRET`；后端若要用另一个网络名访问 IdP，再设 `OIDC_DISCOVERY_URL`。
-`db-seed` 会幂等种入 `acme.com` 租户与 alice（agent_admin），登录后可直接进入管理端。
+`db-seed` 会幂等种入 `acme.com` 租户与 alice（agent_admin）；本地主栈与 QA 变体显式开启本地登录，
+因此同一容器还会种入首个平台管理员 `admin@acme.com`（本地账号，初始口令 `Local-Admin-1`，首次登录
+强制改密；可用 `LOCAL_ADMIN_EMAIL` / `LOCAL_ADMIN_PASSWORD` 覆盖）。生产形态不开启该能力，也不
+自动种入本地账号。
 
 常驻容器：`nginx`、`frontend`、`backend`、`mock-idp`、`dify-api`、`dify-worker`、
 `plugin-daemon`、`postgres`、`redis`、`weaviate`。另有三个一次性引导容器，成功即退出：
@@ -63,8 +66,9 @@ prod 占位值不参与；单机 `docker compose up -d` 即可用 `alice@acme.co
 - `dify-db-init`：幂等创建 `dify` 与 `dify_plugin` 两个库（后者供 plugin daemon 使用），
   每次 `up` 都跑，因此旧数据卷也能补建。
 - `init_permissions`：把 plugin daemon 存储卷 chown 给 uid 1001（该镜像以非 root 运行）。
-- `db-seed`：幂等种入 mock IdP 身份映射的 `acme.com` 租户与 `alice@acme.com`（agent_admin）；
-  在 backend healthy（schema 迁移完成）后执行。
+- `db-seed`：以 backend 镜像运行 `app.bootstrap`，幂等种入 mock IdP 身份映射的
+  `acme.com` 租户与 `alice@acme.com`（agent_admin）；本地登录开启时还种入首个平台管理员
+  （本地账号、须改密），平台已有平台管理员时不创建。在 backend healthy（schema 迁移完成）后执行。
 
 Dify 1.x 的模型/工具插件不在 api 进程内，而由 `plugin-daemon` 托管，并使用独立的
 `dify_plugin` 库；api / worker 通过 `PLUGIN_DAEMON_URL` + `PLUGIN_DAEMON_KEY` 访问它，

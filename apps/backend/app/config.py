@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     # Local account password login (ADR-007, C-110): two states only, and an
     # undeclared deployment gets the disabled one (``LOCAL_LOGIN_ENABLED``).
     local_login_enabled: bool = False
+    # First platform administrator seeded by the local family's one-shot
+    # bootstrap container when the capability is on (C-117). Production never
+    # runs that container, so these values only matter where a bootstrap runs.
+    local_admin_email: str = "admin@acme.com"
+    local_admin_password: str = ""
     # The refresh-token cookie is Secure only when the app runs behind HTTPS
     # (production). Local HTTP development leaves it unset so browsers accept it.
     cookie_secure: bool = False
