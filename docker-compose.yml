@@ -89,6 +89,7 @@ services:
     restart: unless-stopped
 
   backend:
+    image: eap-backend:local
     build:
       context: ./apps/backend
       dockerfile: Dockerfile
@@ -96,6 +97,9 @@ services:
       - "3001"
     environment:
       APP_ENV: ${APP_ENV:-development}
+      # C-110: the local family declares the capability on; a deployment that
+      # never declares it (the production shape) stays off.
+      LOCAL_LOGIN_ENABLED: "true"
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://eap:eap_password@postgres:5432/eap}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       DIFY_API_BASE_URL: ${DIFY_API_BASE_URL:-http://dify-api:5001}
@@ -176,28 +180,22 @@ services:
 
   # One-shot: the mock IdP's alice@acme.com resolves to a tenant by email
   # domain (sso_domain), so the `acme.com` tenant and alice's agent_admin user
-  # must exist before the first SSO login. Idempotent; waits for the backend so
-  # the migrated schema is in place.
+  # must exist before the first SSO login. With local login enabled (this stack
+  # declares it on) the same container seeds the first platform administrator
+  # as a local account that must change its password (C-117). Idempotent;
+  # waits for the backend so the migrated schema is in place.
   db-seed:
-    image: postgres:16-alpine
+    image: eap-backend:local
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile
     environment:
-      PGPASSWORD: ${POSTGRES_PASSWORD:-eap_password}
-    volumes:
-      - ./deploy/postgres/seed-mock-idp.sql:/seed-mock-idp.sql:ro
-    command:
-      [
-        "psql",
-        "-h",
-        "postgres",
-        "-U",
-        "${POSTGRES_USER:-eap}",
-        "-d",
-        "${POSTGRES_DB:-eap}",
-        "-v",
-        "ON_ERROR_STOP=1",
-        "-f",
-        "/seed-mock-idp.sql",
-      ]
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://eap:eap_password@postgres:5432/eap}
+      LOCAL_LOGIN_ENABLED: "true"
+      LOCAL_ADMIN_EMAIL: ${LOCAL_ADMIN_EMAIL:-admin@acme.com}
+      LOCAL_ADMIN_PASSWORD: ${LOCAL_ADMIN_PASSWORD:-Local-Admin-1}
+    command: ["python", "-m", "app.bootstrap"]
     depends_on:
       backend:
         condition: service_healthy

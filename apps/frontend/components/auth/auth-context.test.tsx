@@ -1,14 +1,21 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { refreshAccessTokenMock, apiPostMock, apiGetMock, loginWithLocalAccountMock } = vi.hoisted(
-  () => ({
-    refreshAccessTokenMock: vi.fn(),
-    apiPostMock: vi.fn(),
-    apiGetMock: vi.fn(),
-    loginWithLocalAccountMock: vi.fn(),
-  }),
-);
+import { publishAuthSignal, type AuthSignal } from "@/lib/auth-channel";
+
+const {
+  refreshAccessTokenMock,
+  apiPostMock,
+  apiGetMock,
+  loginWithLocalAccountMock,
+  channelMock,
+} = vi.hoisted(() => ({
+  refreshAccessTokenMock: vi.fn(),
+  apiPostMock: vi.fn(),
+  apiGetMock: vi.fn(),
+  loginWithLocalAccountMock: vi.fn(),
+  channelMock: { listener: null as null | ((signal: AuthSignal) => void) },
+}));
 
 vi.mock("@/lib/http-client", () => ({
   apiClient: {
@@ -22,11 +29,38 @@ vi.mock("@/lib/auth-service", () => ({
   loginWithLocalAccount: loginWithLocalAccountMock,
 }));
 
-import { AuthProvider, useAuth } from "./auth-context";
-import { clearAccessToken, setAccessToken } from "@/lib/token-store";
+vi.mock("@/lib/auth-channel", () => ({
+  publishAuthSignal: vi.fn(),
+  subscribeAuthSignal: (listener: (signal: AuthSignal) => void) => {
+    channelMock.listener = listener;
+    return () => {
+      channelMock.listener = null;
+    };
+  },
+}));
 
-const COOKIE = "eap_access_token";
+import { AuthProvider, useAuth } from "./auth-context";
+import { getAccessToken, setAccessToken } from "@/lib/token-store";
+
+const LEGACY_COOKIE = "eap_access_token";
 const ROLE_COOKIE = "eap_role";
+const SAMPLE_TOKEN = "header.payload.signature";
+
+const ALICE = {
+  data: {
+    code: 0,
+    data: {
+      id: "u1",
+      tenantId: "t1",
+      email: "alice@acme.com",
+      name: "Alice",
+      department: null,
+      role: "agent_admin",
+      avatarText: null,
+    },
+    message: "",
+  },
+};
 
 function LogoutTrigger() {
   const { logout } = useAuth();
@@ -37,6 +71,11 @@ function LogoutTrigger() {
   );
 }
 
+function AuthProbe() {
+  const { user, isAuthenticated } = useAuth();
+  return <span>{isAuthenticated ? user?.email : "anonymous"}</span>;
+}
+
 const originalLocation = window.location;
 
 afterEach(() => {
@@ -44,10 +83,11 @@ afterEach(() => {
     configurable: true,
     value: originalLocation,
   });
+  channelMock.listener = null;
 });
 
 describe("AuthProvider logout", () => {
-  it("expires the access cookie and redirects when the backend logout fails", async () => {
+  it("clears the role cookie and redirects when the backend logout fails", async () => {
     refreshAccessTokenMock.mockResolvedValue(null);
     apiGetMock.mockResolvedValue({ data: { code: 0, data: null, message: "" } });
     apiPostMock.mockRejectedValue(new Error("backend down"));
@@ -66,41 +106,75 @@ describe("AuthProvider logout", () => {
 
     await waitFor(() => expect(refreshAccessTokenMock).toHaveBeenCalled());
 
-    // A stale cookie left behind by a prior login must not survive logout.
-    document.cookie = `${COOKIE}=stale-token; path=/`;
     document.cookie = `${ROLE_COOKIE}=agent_admin; path=/`;
     fireEvent.click(screen.getByRole("button", { name: "logout" }));
 
     await waitFor(() => {
-      expect(document.cookie).toBe("");
       expect(assign).toHaveBeenCalledWith("/login");
     });
+    expect(getAccessToken()).toBeNull();
+    expect(document.cookie).not.toContain(`${ROLE_COOKIE}=`);
+    expect(publishAuthSignal).toHaveBeenCalledWith("sign-out");
+  });
+});
+
+describe("AuthProvider session credentials", () => {
+  afterEach(() => {
+    setAccessToken(null);
+    document.cookie = `${LEGACY_COOKIE}=; Max-Age=0; path=/`;
+    document.cookie = `${ROLE_COOKIE}=; Max-Age=0; path=/`;
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  it("leaves the access token in memory only while the session is up", async () => {
+    setAccessToken(SAMPLE_TOKEN);
+    apiGetMock.mockResolvedValue(ALICE);
+
+    render(
+      <AuthProvider>
+        <div />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(document.cookie).toContain(`${ROLE_COOKIE}=agent_admin`);
+    });
+    expect(document.cookie).not.toContain(LEGACY_COOKIE);
+    expect(document.cookie).not.toContain(SAMPLE_TOKEN);
+    expect(localStorage.length).toBe(0);
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it("drops the session when another tab signals sign-out", async () => {
+    setAccessToken(SAMPLE_TOKEN);
+    apiGetMock.mockResolvedValue(ALICE);
+
+    render(
+      <AuthProvider>
+        <AuthProbe />
+      </AuthProvider>,
+    );
+    await screen.findByText("alice@acme.com");
+    expect(document.cookie).toContain(`${ROLE_COOKIE}=agent_admin`);
+
+    channelMock.listener?.("sign-out");
+
+    await screen.findByText("anonymous");
+    expect(getAccessToken()).toBeNull();
+    expect(document.cookie).not.toContain(`${ROLE_COOKIE}=`);
   });
 });
 
 describe("AuthProvider loadUser", () => {
   afterEach(() => {
-    clearAccessToken();
+    setAccessToken(null);
     document.cookie = `${ROLE_COOKIE}=; Max-Age=0; path=/`;
   });
 
   it("persists the backend role into the eap_role cookie", async () => {
     setAccessToken("test-token");
-    apiGetMock.mockResolvedValue({
-      data: {
-        code: 0,
-        data: {
-          id: "u1",
-          tenantId: "t1",
-          email: "alice@acme.com",
-          name: "Alice",
-          department: null,
-          role: "agent_admin",
-          avatarText: null,
-        },
-        message: "",
-      },
-    });
+    apiGetMock.mockResolvedValue(ALICE);
 
     render(
       <AuthProvider>
@@ -174,7 +248,7 @@ describe("AuthProvider local account login", () => {
     refreshAccessTokenMock.mockReset();
     apiGetMock.mockReset();
     loginWithLocalAccountMock.mockReset();
-    clearAccessToken();
+    setAccessToken(null);
   });
 
   it("takes the access token from the refresh channel and lands the workspace", async () => {

@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { loginViaSso } from "./helpers/api";
+
 // SSO end-to-end regression (UC-01-1 / UC-01-4).
 //
 // A real browser completes the OIDC authorization-code + PKCE flow against a
@@ -13,6 +15,8 @@ import { expect, test } from "@playwright/test";
 
 const REFRESH_COOKIE = "refresh_token";
 const REFRESH_TTL_SECONDS = 2592000;
+/** A JWT is three dot-separated segments; matched by shape, not by cookie name. */
+const JWT_SHAPE = /[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/;
 
 test("SSO login lands on /user and honours the refresh-cookie contract", async ({
   page,
@@ -113,4 +117,32 @@ test("SSO login lands on /user and honours the refresh-cookie contract", async (
     return res.status;
   });
   expect(replay).toBe(401);
+});
+
+test("the access token stays out of script-readable storage and follows the session across tabs", async ({
+  page,
+  context,
+}) => {
+  await loginViaSso(page);
+
+  // 1. Nothing a page script can read carries the access token (F4 / C-2).
+  const readable = await page.evaluate(() => ({
+    cookie: document.cookie,
+    local: JSON.stringify(localStorage),
+    session: JSON.stringify(sessionStorage),
+  }));
+  expect(readable.cookie).not.toContain("eap_access_token");
+  expect(`${readable.cookie} ${readable.local} ${readable.session}`).not.toMatch(JWT_SHAPE);
+
+  // 2. A second tab holds no token of its own, so it re-enters the refresh
+  //    channel (the shared HttpOnly cookie) and reaches the workspace (C-3).
+  const secondTab = await context.newPage();
+  await secondTab.goto("/user");
+  await expect(secondTab.getByText("alice@acme.com")).toBeVisible();
+
+  // 3. Signing out in one tab ends the session in the other.
+  await page.getByTitle("Alice").click();
+  await page.getByRole("menuitem", { name: "登出" }).click();
+  await page.waitForURL("**/login");
+  await secondTab.waitForURL("**/login");
 });

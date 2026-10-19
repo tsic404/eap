@@ -3,11 +3,7 @@ import type { AxiosInstance, InternalAxiosRequestConfig } from "axios";
 import * as Sentry from "@sentry/nextjs";
 
 import { API_ROUTES, ROUTES } from "./api-routes";
-import {
-  getAccessToken,
-  readAccessTokenCookie,
-  setAccessToken,
-} from "./token-store";
+import { getAccessToken, setAccessToken } from "./token-store";
 import { toast } from "./toast-bus";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
@@ -23,21 +19,12 @@ export const apiClient: AxiosInstance = axios.create({
 let refreshPromise: Promise<string | null> | null = null;
 
 // Web Locks serialises the refresh across tabs so only one tab calls the
-// backend; the others re-read the rotated cookie once the lock is released.
+// backend at a time; the next one then refreshes against the rotated cookie.
 const REFRESH_LOCK = "eap-auth-refresh";
 
 type RetriableConfig = InternalAxiosRequestConfig & { _retried?: boolean };
 
 async function requestRefresh(): Promise<string | null> {
-  // A tab that waited for the lock sees a cookie that no longer matches its
-  // stale in-memory token when another tab already rotated it — adopt it
-  // instead of issuing a second refresh request.
-  if (readAccessTokenCookie() !== getAccessToken()) {
-    const adopted = readAccessTokenCookie();
-    setAccessToken(adopted);
-    return adopted;
-  }
-
   try {
     // Raw axios (not apiClient) so the response interceptor cannot re-enter.
     // The backend returns the rotated access token in the response body

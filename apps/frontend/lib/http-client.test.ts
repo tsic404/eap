@@ -25,17 +25,9 @@ vi.mock("./toast-bus", () => ({
 }));
 
 import { refreshAccessToken } from "./http-client";
-import { clearAccessToken, readAccessTokenCookie, setAccessToken } from "./token-store";
+import { getAccessToken, setAccessToken } from "./token-store";
 
-const COOKIE = "eap_access_token";
-
-function setCookie(value: string) {
-  document.cookie = `${COOKIE}=${encodeURIComponent(value)}; path=/`;
-}
-
-function clearCookie() {
-  document.cookie = `${COOKIE}=; path=/; Max-Age=0`;
-}
+const LEGACY_COOKIE = "eap_access_token";
 
 const originalLocation = window.location;
 
@@ -51,8 +43,8 @@ function stubLocation(pathname = "/user") {
 beforeEach(() => {
   postMock.mockReset();
   clientMock.mockReset();
-  clearAccessToken();
-  clearCookie();
+  setAccessToken(null);
+  document.cookie = `${LEGACY_COOKIE}=; path=/; Max-Age=0`;
 });
 
 afterEach(() => {
@@ -63,7 +55,7 @@ afterEach(() => {
 });
 
 describe("refreshAccessToken", () => {
-  it("returns the access token from the refresh body and persists it", async () => {
+  it("keeps the access token from the refresh body in memory only", async () => {
     postMock.mockImplementationOnce(async () => ({
       data: { code: 0, data: { accessToken: "new-token", expiresIn: 900 } },
     }));
@@ -71,7 +63,8 @@ describe("refreshAccessToken", () => {
     const token = await refreshAccessToken();
 
     expect(token).toBe("new-token");
-    expect(readAccessTokenCookie()).toBe("new-token");
+    expect(getAccessToken()).toBe("new-token");
+    expect(document.cookie).toBe("");
     expect(postMock).toHaveBeenCalledTimes(1);
   });
 
@@ -90,22 +83,23 @@ describe("refreshAccessToken", () => {
     expect(b).toBe("rotated");
   });
 
-  it("adopts the cookie when another tab already rotated it", async () => {
+  it("returns null and drops the token when the refresh request fails", async () => {
     setAccessToken("stale-token");
-    setCookie("other-tab-token");
-
-    const token = await refreshAccessToken();
-
-    expect(token).toBe("other-tab-token");
-    expect(postMock).not.toHaveBeenCalled();
-  });
-
-  it("returns null when the refresh request fails", async () => {
     postMock.mockRejectedValueOnce(new Error("network"));
 
     const token = await refreshAccessToken();
 
     expect(token).toBeNull();
+    expect(getAccessToken()).toBeNull();
+  });
+
+  it("returns null when the refresh body carries no token", async () => {
+    postMock.mockImplementationOnce(async () => ({ data: { code: 0, data: {} } }));
+
+    const token = await refreshAccessToken();
+
+    expect(token).toBeNull();
+    expect(getAccessToken()).toBeNull();
   });
 });
 
@@ -130,6 +124,16 @@ describe("request interceptor", () => {
 
     expect(headersSet).not.toHaveBeenCalled();
   });
+
+  it("ignores an access-token cookie a page script could have written", () => {
+    document.cookie = `${LEGACY_COOKIE}=forged-token; path=/`;
+    const onRequest = requestUse.mock.calls[0][0];
+    const headersSet = vi.fn();
+
+    onRequest({ url: "/me", headers: { set: headersSet } });
+
+    expect(headersSet).not.toHaveBeenCalled();
+  });
 });
 
 describe("response interceptor", () => {
@@ -148,6 +152,7 @@ describe("response interceptor", () => {
     expect(headersSet).toHaveBeenCalledWith("Authorization", "Bearer fresh-token");
     expect(clientMock).toHaveBeenCalledWith(config);
     expect(config).toHaveProperty("_retried", true);
+    expect(document.cookie).toBe("");
   });
 
   it("redirects to login when the refresh fails", async () => {
