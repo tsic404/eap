@@ -63,10 +63,11 @@ class RefreshService:
         """Start a new token family for ``user`` (login / re-authentication)."""
         now = now or datetime.now(UTC)
         raw = generate_refresh_token()
+        family_id = uuid.uuid4()
         session.add(
             RefreshToken(
                 user_id=user.id,
-                family_id=uuid.uuid4(),
+                family_id=family_id,
                 token_hash=hash_token(raw),
                 expires_at=now + self._refresh_ttl,
             )
@@ -77,6 +78,7 @@ class RefreshService:
             sub=str(user.id),
             tenant_id=str(user.tenant_id),
             role=user.role,
+            family_id=family_id,
             raw_refresh_token=raw,
             now=now,
         )
@@ -142,6 +144,7 @@ class RefreshService:
             sub=str(identity.id),
             tenant_id=str(identity.tenant_id),
             role=identity.role,
+            family_id=token.family_id,
             raw_refresh_token=successor,
             now=now,
         )
@@ -219,6 +222,7 @@ class RefreshService:
         sub: str,
         tenant_id: str,
         role: str,
+        family_id: uuid.UUID,
         raw_refresh_token: str,
         now: datetime,
     ) -> TokenPair:
@@ -227,6 +231,7 @@ class RefreshService:
             sub=sub,
             tenant_id=tenant_id,
             role=role,
+            session_id=str(family_id),
             now=now,
         )
         return TokenPair(

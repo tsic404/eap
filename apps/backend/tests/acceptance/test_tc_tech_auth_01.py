@@ -33,6 +33,7 @@ from sqlalchemy import delete, select
 from app.auth.oidc import OidcClient
 from app.auth.refresh import RefreshService
 from app.auth.state_store import OidcStateStore
+from app.auth.tokens import ACCESS_TOKEN_TTL_SECONDS
 from app.config import Settings
 from app.models.refresh_token import RefreshToken
 from app.models.tenant import Tenant
@@ -49,6 +50,8 @@ _LOGIN_PAGE = "/login"
 _USER_HOME = "/user"
 _REFRESH_COOKIE = "refresh_token"
 _REFRESH_ENDPOINT = "/api/auth/refresh"
+# The wider path the cookie carried before C-3 confined it; older browsers keep a duplicate.
+_PRE_CONFINEMENT_PATH = "/api/auth"
 _LOGOUT_ENDPOINT = "/api/auth/logout"
 # The rotation grace window: a replay inside it is a retried double-submit.
 _GRACE_WINDOW_SECONDS = 30
@@ -335,6 +338,17 @@ def _cookies(response: httpx.Response) -> list[dict[str, str]]:
     return [_parse_cookie(header) for header in response.headers.get_list("set-cookie")]
 
 
+def _assert_retires_pre_confinement_path(response: httpx.Response) -> None:
+    """A browser that logged in before the path narrowed still holds a duplicate."""
+    retired = [
+        cookie
+        for cookie in _cookies(response)
+        if cookie["name"] == _REFRESH_COOKIE and cookie.get("path") == _PRE_CONFINEMENT_PATH
+    ]
+    assert retired, "the pre-confinement cookie path was not retired"
+    assert retired[0]["max-age"] == "0"
+
+
 def _assert_no_token_cookie(response: httpx.Response) -> None:
     """C-3/F4: the access token never reaches the browser as a cookie.
 
@@ -373,6 +387,19 @@ def _access_token(response: httpx.Response) -> str:
     token = response.json()["data"]["accessToken"]
     assert token
     return token
+
+
+def _expired_access_token(api: Any, token: str) -> str:
+    """``token``'s claims re-signed with its validity window moved into the past.
+
+    The result is what an idle browser presents after 900 seconds: authentic,
+    but past ``exp``.
+    """
+    claims = jwt.decode(token, options={"verify_signature": False})
+    expired_at = datetime.now(UTC) - timedelta(seconds=60)
+    claims["iat"] = expired_at - timedelta(seconds=ACCESS_TOKEN_TTL_SECONDS)
+    claims["exp"] = expired_at
+    return jwt.encode(claims, api.private_key, algorithm="RS256")
 
 
 # ── C-22: login initiation ──────────────────────────────────────────────────
@@ -956,10 +983,15 @@ async def test_logout_clears_the_cookie_and_revokes_the_refresh_family(api) -> N
     async with _auth_stack(api, idp):
         await _seed_sso_tenant(api)
         await _login(api, idp)
+        access_token = _access_token(await api.client.post(_REFRESH_ENDPOINT))
         active = api.client.cookies.get(_REFRESH_COOKIE)
         assert active
 
-        logout = await api.client.post(_LOGOUT_ENDPOINT)
+        # C-3 confines the cookie to the refresh endpoint, so a browser never
+        # presents it here; the access token names the session instead.
+        logout = await api.client.post(
+            _LOGOUT_ENDPOINT, headers={"Authorization": f"Bearer {access_token}"}
+        )
         assert logout.status_code == 200, logout.text
         assert _cookie_attrs(logout)["max-age"] == "0"
 
@@ -967,6 +999,82 @@ async def test_logout_clears_the_cookie_and_revokes_the_refresh_family(api) -> N
         assert replay.status_code == 401, replay.text
         # C-25: only a rotation replay inside the window is retryable (409);
         # a token revoked by logout is a breach, whatever the window says.
+        assert replay.json()["error"]["code"] == "TOKEN_REUSE_DETECTED"
+
+
+@pytest.mark.asyncio
+async def test_logout_without_an_access_token_revokes_the_presented_family(api) -> None:
+    """C-27 fallback: a client presenting only the credential still ends its session."""
+    idp = _FakeIdP(api.private_key)
+    async with _auth_stack(api, idp):
+        await _seed_sso_tenant(api)
+        await _login(api, idp)
+        active = api.client.cookies.get(_REFRESH_COOKIE)
+        assert active
+
+        logout = await api.client.post(_LOGOUT_ENDPOINT, headers=_cookie_header(active))
+        assert logout.status_code == 200, logout.text
+
+        replay = await api.client.post(_REFRESH_ENDPOINT, headers=_cookie_header(active))
+        assert replay.status_code == 401, replay.text
+        assert replay.json()["error"]["code"] == "TOKEN_REUSE_DETECTED"
+
+
+@pytest.mark.asyncio
+async def test_logout_with_an_expired_access_token_ends_the_session(api) -> None:
+    """C-27 on the idle path: the token has expired, the session still ends.
+
+    An idle browser reaches logout holding the last access token it obtained,
+    and C-3 keeps the refresh credential out of this request — a logout that
+    accepted only unexpired tokens would end nothing at all.
+    """
+    idp = _FakeIdP(api.private_key)
+    async with _auth_stack(api, idp):
+        await _seed_sso_tenant(api)
+        await _login(api, idp)
+        access_token = _access_token(await api.client.post(_REFRESH_ENDPOINT))
+        active = api.client.cookies.get(_REFRESH_COOKIE)
+        assert active
+
+        expired = _expired_access_token(api, access_token)
+        logout = await api.client.post(
+            _LOGOUT_ENDPOINT, headers={"Authorization": f"Bearer {expired}"}
+        )
+        assert logout.status_code == 200, logout.text
+
+        replay = await api.client.post(_REFRESH_ENDPOINT, headers=_cookie_header(active))
+        assert replay.status_code == 401, replay.text
+        assert replay.json()["error"]["code"] == "TOKEN_REUSE_DETECTED"
+
+
+@pytest.mark.asyncio
+async def test_logout_retires_the_pre_confinement_cookie_path(api) -> None:
+    """A browser that logged in before the path narrowed keeps a wider-path duplicate.
+
+    Deletion matches name and path, so the confined path alone leaves it behind;
+    the access token's session must also be ended by the same request.
+    """
+    idp = _FakeIdP(api.private_key)
+    async with _auth_stack(api, idp):
+        await _seed_sso_tenant(api)
+        await _login(api, idp)
+        access_token = _access_token(await api.client.post(_REFRESH_ENDPOINT))
+        active = api.client.cookies.get(_REFRESH_COOKIE)
+        assert active
+
+        logout = await api.client.post(
+            _LOGOUT_ENDPOINT, headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert logout.status_code == 200, logout.text
+        retired = {
+            (cookie["path"], cookie["max-age"])
+            for cookie in _cookies(logout)
+            if cookie["name"] == _REFRESH_COOKIE
+        }
+        assert retired == {(_REFRESH_ENDPOINT, "0"), (_PRE_CONFINEMENT_PATH, "0")}
+
+        replay = await api.client.post(_REFRESH_ENDPOINT, headers=_cookie_header(active))
+        assert replay.status_code == 401, replay.text
         assert replay.json()["error"]["code"] == "TOKEN_REUSE_DETECTED"
 
 
@@ -1012,24 +1120,24 @@ async def test_refresh_cookie_is_httponly_lax_and_without_a_domain(api) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    reason=(
-        "C-3 refresh credential path confined to the refresh endpoint "
-        "not implemented at main@68ad4b5"
-    ),
-    strict=False,
-)
 async def test_refresh_cookie_path_is_confined_to_the_refresh_endpoint(api) -> None:
     idp = _FakeIdP(api.private_key)
     async with _auth_stack(api, idp):
         await _seed_sso_tenant(api)
-        issued = _cookie_attrs(await _login(api, idp))
-        rotated = _cookie_attrs(await api.client.post(_REFRESH_ENDPOINT))
+        issued_response = await _login(api, idp)
+        rotated_response = await api.client.post(_REFRESH_ENDPOINT)
+        issued = _cookie_attrs(issued_response)
+        rotated = _cookie_attrs(rotated_response)
 
         # C-3: the path is limited to the refresh endpoint itself, so the
         # browser never presents this credential to login, callback or logout.
         assert issued["path"] == _REFRESH_ENDPOINT
         assert rotated["path"] == _REFRESH_ENDPOINT
+
+        # Both same-named cookies would reach the refresh endpoint, and the wider
+        # path is sent last, so a leftover duplicate would shadow the rotation.
+        _assert_retires_pre_confinement_path(issued_response)
+        _assert_retires_pre_confinement_path(rotated_response)
 
 
 @pytest.mark.asyncio
