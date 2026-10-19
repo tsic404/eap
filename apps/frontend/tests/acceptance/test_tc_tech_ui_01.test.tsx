@@ -175,6 +175,30 @@ describe("TC-tech-ui-01 semantic colour pairs", () => {
     }
   });
 
+  it("resolves template-interpolated class names through constant maps", () => {
+    const usage = scanSemanticPairs();
+    for (const key of ["muted|success", "muted|warning", "muted|danger"]) {
+      const locations = usage.get(key)?.locations ?? [];
+      expect(
+        locations.some((location) =>
+          location.startsWith("components/dashboard/health-status-panel.tsx:"),
+        ),
+        key,
+      ).toBe(true);
+    }
+  });
+
+  it("models the highlighted excerpt foreground instead of hiding it", () => {
+    const usage = scanSemanticPairs();
+    const locations =
+      usage.get("warning-subtle|muted-foreground")?.locations ?? [];
+    expect(
+      locations.some((location) =>
+        location.startsWith("components/knowledge/chunk-list.tsx:"),
+      ),
+    ).toBe(true);
+  });
+
   it("normalizes text-white only when the family foreground is white", () => {
     expect(normalizeForeground("white", "danger")).toBe("danger-foreground");
     expect(normalizeForeground("white", "muted")).toBe("white");

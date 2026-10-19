@@ -74,32 +74,104 @@ function combine(left: string[][], right: string[][]): string[][] {
     .slice(0, MAX_ALTERNATIVES);
 }
 
+type ConstantIndex = ReadonlyMap<string, ts.Expression>;
+
+/** Strips the wrappers (`as const`, `satisfies`, parentheses) around a value. */
+function unwrapExpression(node: ts.Expression): ts.Expression {
+  let current = node;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isSatisfiesExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+/** Module-scope `const` initializers that template interpolations can name. */
+function collectConstants(sourceFile: ts.SourceFile): ConstantIndex {
+  const constants = new Map<string, ts.Expression>();
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    if ((statement.declarationList.flags & ts.NodeFlags.Const) === 0) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name) || !declaration.initializer) {
+        continue;
+      }
+      constants.set(declaration.name.text, declaration.initializer);
+    }
+  }
+  return constants;
+}
+
+/**
+ * Every value a known constant map/array can yield for `NAME[...]`. The index
+ * expression is not evaluated, so each element is a possible alternative.
+ */
+function constantAlternatives(
+  node: ts.ElementAccessExpression,
+  constants: ConstantIndex,
+): string[][] | undefined {
+  if (!ts.isIdentifier(node.expression)) return undefined;
+  const initializer = constants.get(node.expression.text);
+  if (!initializer) return undefined;
+  const target = unwrapExpression(initializer);
+  if (ts.isObjectLiteralExpression(target)) {
+    return target.properties.flatMap((property) =>
+      ts.isPropertyAssignment(property)
+        ? classAlternatives(property.initializer, constants)
+        : [],
+    );
+  }
+  if (ts.isArrayLiteralExpression(target)) {
+    return target.elements.flatMap((element) =>
+      classAlternatives(element, constants),
+    );
+  }
+  return undefined;
+}
+
 /**
  * Every statically known combination of class strings a `className`
  * expression can contribute. Conditional branches become separate
  * alternatives; a `cn(...)` call crosses its arguments, since all of them
- * apply together.
+ * apply together. Template interpolations resolve through module-scope
+ * constant maps/arrays, so `LEVEL_ICON_CLASS[level]` contributes each class
+ * the map can yield instead of disappearing.
  */
-function classAlternatives(node: ts.Node | undefined): string[][] {
+function classAlternatives(
+  node: ts.Node | undefined,
+  constants: ConstantIndex,
+): string[][] {
   if (!node) return [[]];
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
     return [[node.text]];
   }
   if (ts.isTemplateExpression(node)) {
-    const parts = [
-      node.head.text,
-      ...node.templateSpans.map((span) => span.literal.text),
-    ];
-    return [[parts.join(" ")]];
+    let alternatives: string[][] = [[node.head.text]];
+    for (const span of node.templateSpans) {
+      alternatives = combine(
+        alternatives,
+        classAlternatives(span.expression, constants),
+      );
+      alternatives = combine(alternatives, [[span.literal.text]]);
+    }
+    return alternatives;
   }
-  if (ts.isJsxExpression(node)) return classAlternatives(node.expression);
+  if (ts.isElementAccessExpression(node)) {
+    return constantAlternatives(node, constants) ?? [[]];
+  }
+  if (ts.isJsxExpression(node)) {
+    return classAlternatives(node.expression, constants);
+  }
   if (ts.isParenthesizedExpression(node)) {
-    return classAlternatives(node.expression);
+    return classAlternatives(node.expression, constants);
   }
   if (ts.isConditionalExpression(node)) {
     return [
-      ...classAlternatives(node.whenTrue),
-      ...classAlternatives(node.whenFalse),
+      ...classAlternatives(node.whenTrue, constants),
+      ...classAlternatives(node.whenFalse, constants),
     ];
   }
   if (ts.isBinaryExpression(node)) {
@@ -109,24 +181,24 @@ function classAlternatives(node: ts.Node | undefined): string[][] {
       operator === ts.SyntaxKind.BarBarToken ||
       operator === ts.SyntaxKind.QuestionQuestionToken
     ) {
-      return [[], ...classAlternatives(node.right)];
+      return [[], ...classAlternatives(node.right, constants)];
     }
     return [
-      ...classAlternatives(node.left),
-      ...classAlternatives(node.right),
+      ...classAlternatives(node.left, constants),
+      ...classAlternatives(node.right, constants),
     ];
   }
   if (ts.isCallExpression(node)) {
     let combined: string[][] = [[]];
     for (const argument of node.arguments) {
-      combined = combine(combined, classAlternatives(argument));
+      combined = combine(combined, classAlternatives(argument, constants));
     }
     return combined;
   }
   if (ts.isArrayLiteralExpression(node)) {
     let combined: string[][] = [[]];
     for (const element of node.elements) {
-      combined = combine(combined, classAlternatives(element));
+      combined = combine(combined, classAlternatives(element, constants));
     }
     return combined;
   }
@@ -163,7 +235,13 @@ function addStateToken(
     return;
   }
   const foreground = utility.match(SEMANTIC_FOREGROUND);
-  if (foreground) state.foregrounds.add(foreground[1]);
+  // Only real colour slots count; `text-inherit`/size utilities set no colour.
+  if (
+    foreground &&
+    (foreground[1] === "white" || COLOR_TOKENS[foreground[1]] !== undefined)
+  ) {
+    state.foregrounds.add(foreground[1]);
+  }
 }
 
 function readStates(classLists: readonly string[]): Map<string, ClassState> {
@@ -238,8 +316,11 @@ class Scanner {
     ts.JsxElement | ts.JsxSelfClosingElement,
     string[][]
   >();
+  private readonly constants: ConstantIndex;
 
-  constructor(private readonly index: SourceIndex) {}
+  constructor(private readonly index: SourceIndex) {
+    this.constants = collectConstants(index.sourceFile);
+  }
 
   scan(): Map<string, PairUsage> {
     const visit = (node: ts.Node): void => {
@@ -266,7 +347,10 @@ class Scanner {
     const cached = this.elementAlternatives.get(node);
     if (cached) return cached;
     const attribute = classAttribute(node);
-    const alternatives = classAlternatives(attribute?.initializer);
+    const alternatives = classAlternatives(
+      attribute?.initializer,
+      this.constants,
+    );
     this.elementAlternatives.set(node, alternatives);
     return alternatives;
   }

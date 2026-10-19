@@ -149,6 +149,13 @@ export const DECLARED_PAIRS: readonly DeclaredPair[] = [
     textSize: "small",
     usage: "页面上的成功文字 / 图标",
   },
+  {
+    family: "success",
+    background: { token: "muted" },
+    foreground: "success",
+    textSize: "small",
+    usage: "健康状态正常图标（浅灰底）",
+  },
   // warning — recall <0.5 badge, warning banner, warning text.
   {
     family: "warning",
@@ -170,6 +177,20 @@ export const DECLARED_PAIRS: readonly DeclaredPair[] = [
     foreground: "foreground",
     textSize: "small",
     usage: "警告横幅内正文",
+  },
+  {
+    family: "warning",
+    background: { token: "warning-subtle" },
+    foreground: "muted-foreground",
+    textSize: "small",
+    usage: "召回命中高亮 mark 内的辅助文字",
+  },
+  {
+    family: "warning",
+    background: { token: "muted" },
+    foreground: "warning",
+    textSize: "small",
+    usage: "健康状态告警图标（浅灰底）",
   },
   {
     family: "warning",
@@ -226,7 +247,7 @@ export const DECLARED_PAIRS: readonly DeclaredPair[] = [
     background: { token: "muted" },
     foreground: "danger",
     textSize: "small",
-    usage: "列表项 hover 的危险图标",
+    usage: "列表项 hover 的危险图标 / 健康状态严重图标",
   },
   // info — informational actions, badges, banners, timeline.
   {
