@@ -104,6 +104,53 @@ async def test_transition_document_status_missing_row_returns_false(session_fact
 
 
 @pytest.mark.asyncio
+async def test_transition_document_status_from_status_limits_the_departure(session_factory) -> None:  # type: ignore[no-untyped-def]
+    """``from_status`` carries the departure state in the SQL predicate.
+
+    The retry path moves the record back to ``indexing`` with it, so a completed
+    document — which the unguarded ``status <> :status`` form would also match —
+    is never dragged back onto the transition path.
+    """
+    await _seed_kb(session_factory)
+    repo = KnowledgeRepository()
+
+    async with session_factory() as session:
+        await repo.insert_document(session, kb_id="kb-1", document_id="doc-1", name="a.pdf")
+        await session.commit()
+
+        # A freshly tracked document is indexing, not a failure: nothing moves.
+        assert not await repo.transition_document_status(
+            session, kb_id="kb-1", document_id="doc-1", status="indexing", from_status="failed"
+        )
+
+        assert await repo.transition_document_status(
+            session, kb_id="kb-1", document_id="doc-1", status="failed"
+        )
+        assert await repo.transition_document_status(
+            session, kb_id="kb-1", document_id="doc-1", status="indexing", from_status="failed"
+        )
+        assert await repo.transition_document_status(
+            session, kb_id="kb-1", document_id="doc-1", status="completed"
+        )
+        await session.commit()
+
+        # Only a failure is a retryable departure, so the completion stands.
+        assert not await repo.transition_document_status(
+            session, kb_id="kb-1", document_id="doc-1", status="indexing", from_status="failed"
+        )
+        await session.commit()
+
+        doc = await session.scalar(
+            select(KnowledgeDocument).where(
+                KnowledgeDocument.kb_id == "kb-1",
+                KnowledgeDocument.document_id == "doc-1",
+            )
+        )
+        assert doc is not None
+        assert doc.status == "completed"
+
+
+@pytest.mark.asyncio
 async def test_add_chunk_count_accumulates_across_calls(session_factory) -> None:  # type: ignore[no-untyped-def]
     """Each completed document adds its segments to the KB-wide total."""
     await _seed_kb(session_factory)

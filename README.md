@@ -37,16 +37,20 @@ make setup-env         # 生成 .env、补全必填密钥、生成 JWT 密钥对
 docker compose up -d
 ```
 
-`make setup-env` 幂等：`.env` 不存在时从 `.env.example` 复制，否则原地补全仍为空、或仍是
-`.env.example` 占位值（`replace-me-*`）的
-`WEAVIATE_API_KEY` / `DIFY_SECRET_KEY` / `PLUGIN_DAEMON_KEY` / `PLUGIN_DIFY_INNER_API_KEY`
-（`openssl rand -hex 32`），并生成 RS256 JWT 密钥对到 `deploy/keys/`（gitignored，compose
-以只读 secret 挂载给 backend）；已填写/已生成的值不会被覆盖。
+`make setup-env` 幂等：`.env` 不存在时从 `.env.example` 复制，否则原地替换仍为空、或仍是
+`.env.example` 占位值（`replace-me-*`）的项——`WEAVIATE_API_KEY` / `DIFY_SECRET_KEY` /
+`PLUGIN_DAEMON_KEY` / `PLUGIN_DIFY_INNER_API_KEY` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` /
+`DIFY_CONSOLE_PASSWORD` / `JWT_PRIVATE_KEY` / `JWT_PUBLIC_KEY` 用 `openssl rand -hex 32` 生成，
+`OIDC_ISSUER` 与 `DIFY_CONSOLE_EMAIL` 生成随机不可解析值；面向外部系统的生成值（IdP、Dify 控制台、
+签名密钥）故意不可用，生产须按部署清单换成真实值。
+`make setup-env` 另外生成 RS256 JWT 密钥对到 `deploy/keys/`（gitignored，compose 以只读 secret
+挂载给 backend，本地签名用它，不读 `.env` 里的 PEM 槽位）；已填写/已生成的值不会被覆盖。
 不要跳过这一步：占位值能让 compose 的 `${VAR:?}` 校验通过，但 Weaviate / Dify / plugin-daemon
 的共享内部鉴权会退化成模板里公开已知的占位密钥（dev 下这些服务只在 compose 网络内可达）。
 若 shell 已导出同名空变量或模板占位值（如 `export WEAVIATE_API_KEY=`，或 `set -a; . ./.env`
-把占位值导出的情形），其优先级高于 `.env` 会让 compose 仍硬失败，脚本会报错退出——先
-`unset WEAVIATE_API_KEY DIFY_SECRET_KEY PLUGIN_DAEMON_KEY PLUGIN_DIFY_INNER_API_KEY` 再重跑。
+把占位值导出的情形），其优先级高于 `.env`，脚本会报错退出——先 `unset` 该变量再重跑。
+导出的是真实值时，compose 仍以导出值为准，但脚本同样会把 `.env` 里残留的占位值换成生成值
+（导出值不写入文件），保证引导后文件中不再有模板占位值。
 
 SSO 默认走 compose 内的 `mock-idp`（与 e2e / QA 栈同一个桩 IdP）：`.env` 的 `MOCK_IDP_ISSUER` /
 `MOCK_IDP_DISCOVERY_URL` / `MOCK_IDP_CLIENT_ID` 非空时（模板默认）compose 就用它们，OIDC 区块里的
@@ -113,6 +117,30 @@ uv run pytest -m perf
 
 集成测试用 `testcontainers` 起真实 PostgreSQL(pgvector) 与 Redis 容器，Dify 边界保持 mock。测试数据通过 factory 函数构造（每 worker 独立 tenant 前缀），每个用例跑在事务回滚内。受 cgroup 限制的本地 Docker 启动 Ryuk 会报 `operation not permitted` 并导致全部用例超时，集成测试的 conftest 已默认 `TESTCONTAINERS_RYUK_DISABLED=true` 关闭 Ryuk（正常退出时 testcontainers 的 context manager 负责停容器；测试被强杀时残留容器用 `docker container prune -f` 清理）。容器启动/拉取同样经由宿主 Docker daemon：conftest 把 docker-py 客户端的读超时从默认 60s 放宽到 300s，避免高负载（例如 compose 冷启动、并发构建）下夹具以 `ReadTimeout` 集体失败。
 
+### 验收用例（技术验收 TC-tech-*）
+
+设计仓 `docs/03-acceptance.md` 的每条技术用例在实现仓有唯一可执行形态：`apps/backend/tests/acceptance/` 下的模块名对应用例标识（`TC-tech-kb-01` → `test_tc_tech_kb_01.py`），模块内断言对应该用例的可观察判据；执行入口按标识运行：
+
+```bash
+cd apps/backend
+uv run python -m tests.acceptance                  # 全部后端 TC-tech-* 用例
+uv run python -m tests.acceptance TC-tech-kb-01    # 单条按标识执行
+uv run python -m tests.acceptance --list           # 列出可用标识
+```
+
+验收用例与集成测试共用同一套夹具（Testcontainers PostgreSQL/Redis + Dify mock），同样需要 Docker；CI 的 `pytest -m "not perf"` 会连带执行整套用例（也可 `uv run pytest tests/acceptance`）。
+
+前端用例 `TC-tech-ui-01` 位于 `apps/frontend/tests/acceptance/`，模块名与标识一一对应，执行入口等价：
+
+```bash
+cd apps/frontend
+pnpm acceptance                  # 全部前端 TC-tech-* 用例
+pnpm acceptance TC-tech-ui-01    # 单条按标识执行
+pnpm acceptance --list           # 列出可用标识
+```
+
+根目录另有 `make acceptance-ui`（单条：`make acceptance-ui TC=TC-tech-ui-01`）。`TC-tech-ops-02` 末条「浏览器请求实际落在同源相对路径」由 `apps/frontend/e2e/same-origin.spec.ts` 在真实浏览器中取证，随 `pnpm test:e2e` 执行。
+
 ## QA 环境（SSO 端到端）
 
 一键拉起与 Playwright e2e 回归同源的 SSO 栈（mock IdP + backend + eap_e2e DB + frontend + 反向代理），无需再手动 `docker build` / `uv sync` / 建库 / socat。
@@ -174,13 +202,13 @@ schema 变更通过 Alembic 管理（`apps/backend/alembic/`）。迁移脚本�
 
 ```bash
 cp .env.example .env          # 占位值与开发默认值都按 deploy/checklist.md 逐项替换
-make setup-env                # 把 WEAVIATE_API_KEY / DIFY_SECRET_KEY /
-                              # PLUGIN_DAEMON_KEY / PLUGIN_DIFY_INNER_API_KEY 的占位值
-                              # 换成随机密钥（openssl rand -hex 32）
-# 手工填写 OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_CLIENT_SECRET、OIDC_REDIRECT_URI（真实公网
+make setup-env                # 清除全部 replace-me-* 占位值：共享密钥与 PEM 槽位换成随机值、
+                              # OIDC 与 Dify 控制台值换成随机不可解析值（均非生产可用值）
+# 生产仍须手工填写 OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_CLIENT_SECRET、OIDC_REDIRECT_URI（真实公网
 # https 回调，COOKIE_SECURE=true 下 http 回调会被浏览器丢弃 cookie）、JWT_PRIVATE_KEY /
-# JWT_PUBLIC_KEY（生成方式见 deploy/checklist.md）、DIFY_CONSOLE_EMAIL / DIFY_CONSOLE_PASSWORD，
-# 并把 POSTGRES_PASSWORD 连同内嵌同一口令的 DATABASE_URL 一起换掉
+# JWT_PUBLIC_KEY（生产自有密钥对，生成方式见 deploy/checklist.md）、DIFY_CONSOLE_EMAIL /
+# DIFY_CONSOLE_PASSWORD（真实控制台账号），并把 POSTGRES_PASSWORD 连同内嵌同一口令的
+# DATABASE_URL 一起换掉
 docker compose -f docker-compose.prod.yml config -q   # 校验必填项，期望退出码 0
 docker compose -f docker-compose.prod.yml up -d --build
 curl http://localhost/api/health/ready   # 期望 200（dify 项还要求控制台账号可登录且已配置模型供应商）

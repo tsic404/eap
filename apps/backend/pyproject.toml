@@ -60,6 +60,7 @@ extend-immutable-calls = [
     "fastapi.File",
     "fastapi.Form",
     "app.dependencies.require_roles",
+    "app.dependencies.require_tenant_roles",
 ]
 
 [tool.mypy]

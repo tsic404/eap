@@ -89,7 +89,6 @@ class RunLogDto(BaseModel):
 class AgentDto(BaseModel):
     agentId: str
     tenantId: str
-    difyAppId: str
     name: str
     description: str | None
     type: str
@@ -120,7 +119,6 @@ def agent_to_dto(agent: AgentRegistry) -> AgentDto:
     return AgentDto(
         agentId=agent.agent_id,
         tenantId=str(agent.tenant_id),
-        difyAppId=agent.dify_app_id,
         name=agent.name,
         description=agent.description,
         type=agent.type,

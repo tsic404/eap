@@ -136,6 +136,14 @@ class _Repo:
     ) -> None:
         return None
 
+    async def refresh_indexing_status(self, session: Any, *, kb_id: str) -> None:
+        # This double tracks no document rows, so there is nothing to aggregate.
+        return None
+
+    async def has_indexing_document(self, session: Any, *, kb_id: str) -> bool:
+        # No document rows are tracked, so no document can be indexing.
+        return False
+
     async def transition_document_status(
         self,
         session: Any,
@@ -144,6 +152,7 @@ class _Repo:
         document_id: str,
         status: str,
         error: str | None = None,
+        from_status: str | None = None,
     ) -> bool:
         return True
 
@@ -154,6 +163,11 @@ class _Repo:
         self, session: Any, *, kb_id: str, document_id: str
     ) -> KnowledgeDocument | None:
         return None
+
+    async def get_documents(
+        self, session: Any, *, kb_id: str, document_ids: list[str]
+    ) -> dict[str, KnowledgeDocument]:
+        return {}
 
     async def add_document_count(self, session: Any, *, kb_id: str) -> None:
         return None

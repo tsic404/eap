@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any
+from datetime import datetime
+from typing import Any, cast
 
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
+from app.core.exceptions import DifyApiError
 from app.dify_console import (
     CreateDatasetParams,
     CreateDocumentParams,
@@ -27,7 +29,7 @@ from app.events.knowledge import (
 )
 from app.files import MAX_FILE_SIZE_BYTES, validate_document_file
 from app.logging_conf import get_logger
-from app.models.knowledge import KnowledgeBaseRegistry
+from app.models.knowledge import KnowledgeBaseRegistry, KnowledgeDocument
 from app.models.tenant import Tenant
 from app.repositories.knowledge import KnowledgeRepository
 from app.schemas.knowledge import (
@@ -60,6 +62,26 @@ def _document_status(indexing_status: str | None) -> DocumentStatus:
     if indexing_status in {"error", "failed"}:
         return "failed"
     return "indexing"
+
+
+def _answered_status(
+    recorded: KnowledgeDocument | None,
+    folded_status: DocumentStatus,
+    error: str | None,
+) -> tuple[DocumentStatus, str | None]:
+    """The status one observation answers, held to what the record reached.
+
+    A document that already reached a terminal state is never answered as an
+    earlier one: a later read can still return an unfinished upstream state, and
+    the record — not the read — is what the document has reached. Only an
+    explicit retry moves the record itself back to indexing, which is why the
+    record is read here instead of the reached state being frozen.
+    """
+    if recorded is None or folded_status in _TERMINAL_STATUSES:
+        return folded_status, error
+    if recorded.status in _TERMINAL_STATUSES:
+        return cast(DocumentStatus, recorded.status), recorded.error
+    return folded_status, error
 
 
 def _segment_count(status: dict[str, Any]) -> int:
@@ -164,21 +186,38 @@ class KnowledgeService:
         kb = await self._require_kb(session, tenant, kb_id)
         return KnowledgeBaseDto.model_validate(kb)
 
-    async def delete(self, session: AsyncSession, tenant: Tenant, kb_id: str) -> None:
+    async def delete(
+        self,
+        session: AsyncSession,
+        tenant: Tenant,
+        kb_id: str,
+        *,
+        cascade: bool = False,
+    ) -> None:
+        """Delete a KB (C-38): bindings block the default path, cascade releases them.
+
+        Order is fixed: the upstream dataset goes first, and only a successful
+        (or already-absent) dataset delete is followed by the local transaction —
+        so a Dify failure answers 502 and leaves the record and its bindings
+        exactly as they were, instead of committing a half-deleted KB.
+        """
         kb = await self._require_kb(session, tenant, kb_id)
-        if kb.agent_bindings:
+        if kb.agent_bindings and not cascade:
             raise AppError(
                 409,
                 "KB_IN_USE",
                 "Knowledge base is bound to one or more agents",
+                details={"agents": await self._bound_agents(session, kb)},
             )
         try:
             await self._dify_console.delete_dataset(kb.dify_dataset_id)
         except DifyConsoleError as exc:
             if exc.status_code != 404:
-                raise
+                raise AppError(502, "DIFY_ERROR", "Dify request failed") from exc
             # Dataset already gone (e.g. retry after a partial delete) — the
             # local row still needs cleaning, so fall through.
+        if kb.agent_bindings:
+            await self._repository.delete_bindings(session, kb)
         await self._repository.delete(session, kb)
         await session.commit()
         await self._bus.emit(
@@ -187,6 +226,21 @@ class KnowledgeService:
             tenant_id=tenant.id,
             dify_dataset_id=kb.dify_dataset_id,
         )
+
+    async def _bound_agents(
+        self, session: AsyncSession, kb: KnowledgeBaseRegistry
+    ) -> list[dict[str, str]]:
+        """The binding list a 409 ``KB_IN_USE`` carries for the caller to render.
+
+        Read through the KB's own tenant, so the list can only ever name agents
+        the caller is already allowed to see.
+        """
+        return [
+            {"agent_id": agent_id, "name": name}
+            for agent_id, name in await self._repository.list_bound_agents(
+                session, kb_id=kb.kb_id, tenant_id=kb.tenant_id
+            )
+        ]
 
     # ── documents ──
 
@@ -228,6 +282,8 @@ class KnowledgeService:
             document_id=document["id"],
             name=filename,
         )
+        # The new document enters indexing, which the KB-level status aggregates.
+        await self._repository.refresh_indexing_status(session, kb_id=kb.kb_id)
         await session.commit()
 
         await self._bus.emit(
@@ -249,17 +305,20 @@ class KnowledgeService:
     ) -> DocumentPageDto:
         kb = await self._require_kb(session, tenant, kb_id)
         result = await self._dify_console.list_documents(kb.dify_dataset_id, page=page, limit=limit)
-        observed = [
-            (
-                DocumentDto(
-                    id=doc["id"],
-                    name=doc.get("name") or "",
-                    status=_document_status(doc.get("indexing_status")),
-                ),
+        listed = result.get("data", [])
+        records = await self._repository.get_documents(
+            session, kb_id=kb.kb_id, document_ids=[doc["id"] for doc in listed]
+        )
+        observed: list[tuple[DocumentDto, str | None]] = []
+        for doc in listed:
+            status, error = _answered_status(
+                records.get(doc["id"]),
+                _document_status(doc.get("indexing_status")),
                 doc.get("error"),
             )
-            for doc in result.get("data", [])
-        ]
+            observed.append(
+                (DocumentDto(id=doc["id"], name=doc.get("name") or "", status=status), error)
+            )
         # The UI polls this listing while documents index and never calls the
         # per-document status endpoint, so a terminal status is usually first
         # observed here: record it, or the completion state machine (and the
@@ -284,6 +343,10 @@ class KnowledgeService:
         )
         new_status = _document_status(status.get("indexing_status"))
         error = status.get("error")
+        recorded = await self._repository.get_document(
+            session, kb_id=kb.kb_id, document_id=document_id
+        )
+        answered, answered_error = _answered_status(recorded, new_status, error)
 
         # Commit first so the event only fires once the state change is durable.
         transitioned = False
@@ -301,7 +364,7 @@ class KnowledgeService:
         if transitioned:
             await self._emit_terminal_event(kb.kb_id, document_id, new_status, error)
 
-        return DocumentStatusDto(id=document_id, status=new_status, error=error)
+        return DocumentStatusDto(id=document_id, status=answered, error=answered_error)
 
     async def retry_document(
         self,
@@ -310,13 +373,37 @@ class KnowledgeService:
         kb_id: str,
         document_id: str,
     ) -> None:
-        """Restart indexing for a failed document; Dify owns the resulting state."""
+        """Restart indexing for a failed document; the record follows it back.
+
+        C-45 admits only a document the record holds as ``failed``: anything else
+        is refused before Dify is called, because rewinding a completion would
+        re-arm the completion transition and count the same segments — and emit
+        the same event — a second time (C-40 / C-108). The roll-back is the same
+        guarded move the observers use, restricted to the departure it allows.
+        """
         kb = await self._require_kb(session, tenant, kb_id)
         _require_document_id(document_id)
+        recorded = await self._repository.get_document(
+            session, kb_id=kb.kb_id, document_id=document_id
+        )
+        if recorded is not None and recorded.status != "failed":
+            raise AppError(422, "INVALID_STATE", "仅失败文档可重试")
         try:
             await self._dify_console.retry_document_indexing(kb.dify_dataset_id, [document_id])
         except DifyConsoleError as exc:
+            # Dify never saw a restart, so the record keeps the failure it shows.
             raise _document_operation_error(exc, code="DOCUMENT_RETRY_FAILED") from exc
+        await self._repository.transition_document_status(
+            session,
+            kb_id=kb.kb_id,
+            document_id=document_id,
+            status="indexing",
+            from_status="failed",
+        )
+        # C-41: every status transition re-folds the aggregate; a retry is one,
+        # and the recall gate reads what it leaves behind.
+        await self._repository.refresh_indexing_status(session, kb_id=kb.kb_id)
+        await session.commit()
 
     async def delete_document(
         self,
@@ -353,6 +440,8 @@ class KnowledgeService:
             await self._repository.release_document_counts(
                 session, kb_id=kb.kb_id, segments=segments
             )
+            # Re-fold the aggregate now that the document row is gone.
+            await self._repository.refresh_indexing_status(session, kb_id=kb.kb_id)
         await session.commit()
 
     # ── retrieval test ──
@@ -365,6 +454,13 @@ class KnowledgeService:
         dto: RetrieveTestDto,
     ) -> RetrieveTestResultDto:
         kb = await self._require_kb(session, tenant, kb_id)
+        # C-41/C-43 ②: refuse while indexing, before the key is resolved or upstream
+        # called. The rows are asked as well as the aggregate: the aggregate is as
+        # fresh as its last refresh, and the gate may not rely on one still owed.
+        if kb.indexing_status == "indexing" or await self._repository.has_indexing_document(
+            session, kb_id=kb.kb_id
+        ):
+            raise AppError(409, "KB_INDEXING", "知识库正在索引中，召回测试暂不可用")
 
         retriever = self._retriever
         owns_client = retriever is None
@@ -380,6 +476,9 @@ class KnowledgeService:
             started = time.perf_counter()
             result = await retriever.post(f"/v1/datasets/{kb.dify_dataset_id}/retrieve", body)
             latency_ms = (time.perf_counter() - started) * 1000
+        except DifyApiError as exc:
+            # C-43 step ④: any retrieval failure upstream is a 502, never a 500.
+            raise AppError(502, "DIFY_ERROR", "Dify request failed") from exc
         finally:
             if owns_client:
                 await retriever.aclose()
@@ -393,6 +492,8 @@ class KnowledgeService:
             )
             for record in result.get("records", [])
         ]
+        # Dify does not promise an order; the contract ranks citations by score.
+        citations.sort(key=lambda citation: citation.score, reverse=True)
         score = max((c.score for c in citations), default=0.0)
         return RetrieveTestResultDto(
             query=dto.query,
@@ -451,6 +552,8 @@ class KnowledgeService:
         )
         if not transitioned:
             return False
+        # A document leaving indexing moves the aggregate in this same transaction.
+        await self._repository.refresh_indexing_status(session, kb_id=kb.kb_id)
         if status == "completed":
             if segments is None:
                 payload = await self._dify_console.get_document_indexing_status(
@@ -477,15 +580,18 @@ class KnowledgeService:
             )
 
     async def _get_or_create_dataset_api_key(self) -> str:
-        """Reuse the tenant's existing dataset API key, creating one only if absent.
+        """Reuse the tenant's earliest-created dataset API key, or create one.
 
         Dify 1.17.0 caps dataset keys at 10 per tenant, so a key per knowledge
         base would exhaust the pool; all KBs in a tenant share one key instead.
+        The upstream returns the tenant's keys in no defined order, so the one
+        it created first is found by its stamp — which is also what makes keys
+        created concurrently converge on the same entry.
         """
         keys = await self._dify_console.get_dataset_api_keys()
         existing = keys.get("data") or []
         if existing:
-            return str(existing[0]["token"])
+            return str(min(existing, key=_dataset_key_order)["token"])
         created = await self._dify_console.create_dataset_api_key()
         return str(created["token"])
 
@@ -496,6 +602,25 @@ class KnowledgeService:
         if kb is None:
             raise AppError(404, "KB_NOT_FOUND", "Knowledge base not found")
         return kb
+
+
+def _dataset_key_order(key: dict[str, Any]) -> float:
+    """Sort value placing the tenant's earliest-created dataset API key first.
+
+    ``created_at`` is Dify's creation stamp — Unix epoch seconds, or an ISO-8601
+    string. The field is nullable, and a key carrying no readable stamp cannot
+    be shown to be the earliest one, so it sorts behind every dated key instead
+    of winning on its position.
+    """
+    stamp = key.get("created_at")
+    if isinstance(stamp, str):
+        try:
+            return datetime.fromisoformat(stamp).timestamp()
+        except ValueError:
+            return float("inf")
+    if isinstance(stamp, (int, float)) and not isinstance(stamp, bool):
+        return float(stamp)
+    return float("inf")
 
 
 def _citation_content(record: dict[str, Any]) -> str:

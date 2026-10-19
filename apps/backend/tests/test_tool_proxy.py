@@ -338,7 +338,78 @@ async def test_circuit_breaker_recovers_after_window(monkeypatch: pytest.MonkeyP
     assert result.status_code == 200
 
 
-# -- debug -------------------------------------------------------------------
+# -- debug / circuit sharing --------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_debug_failures_open_the_shared_circuit() -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(503, json={"error": "down"})
+
+    proxy = _proxy(handler)
+    tool = _make_tool()
+
+    # Debug does not retry, and every non-2xx response counts toward the shared
+    # breaker the way it does on the execution path.
+    for _ in range(5):
+        result = await proxy.debug(tool, {})
+        assert result.status_code == 503
+    assert calls["n"] == 5
+
+    with pytest.raises(AppError) as exc:
+        await proxy.debug(tool, {})
+    assert exc.value.status_code == 503
+    assert exc.value.code == "TOOL_CIRCUIT_OPEN"
+    assert calls["n"] == 5
+
+    # Shared breaker: a debug-driven opening refuses the execution surface too,
+    # without either call reaching upstream.
+    with pytest.raises(AppError) as exc:
+        await proxy.execute(tool, {})
+    assert exc.value.code == "TOOL_CIRCUIT_OPEN"
+    assert calls["n"] == 5
+
+
+@pytest.mark.asyncio
+async def test_debug_probe_after_the_recovery_window_clears_the_circuit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [1000.0]
+    monkeypatch.setattr("app.services.tool_proxy.time.monotonic", lambda: now[0])
+    state = {"ok": False}
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if state["ok"]:
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(503, json={"error": "down"})
+
+    proxy = _proxy(handler)
+    tool = _make_tool(retry_policy={"max_retries": 0, "base_delay_ms": 0})
+
+    # Open the shared breaker through the execution surface (one upstream call
+    # per attempt), then let the debug surface consume the half-open trial.
+    for _ in range(5):
+        with pytest.raises(AppError):
+            await proxy.execute(tool, {})
+    assert calls["n"] == 5
+
+    now[0] += 61.0
+    state["ok"] = True
+    result = await proxy.debug(tool, {})
+    assert result.status_code == 200
+    assert calls["n"] == 6
+
+    # The successful trial clears the counter: the next call is admitted
+    # (reaches upstream) instead of being refused by a stale half-open breaker.
+    state["ok"] = False
+    result = await proxy.debug(tool, {})
+    assert result.status_code == 503
+    assert calls["n"] == 7
 
 
 @pytest.mark.asyncio

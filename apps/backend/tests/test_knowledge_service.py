@@ -69,7 +69,9 @@ def _kb(
         created_at=datetime.now(UTC),
     )
     for agent_id in bindings:
-        kb.agent_bindings.append(AgentKnowledgeBinding(agent_id=agent_id, kb_id=kb_id))
+        kb.agent_bindings.append(
+            AgentKnowledgeBinding(tenant_id=tenant.id, agent_id=agent_id, kb_id=kb_id)
+        )
     return kb
 
 
@@ -94,9 +96,13 @@ class _FakeRepository:
         self._kbs = {kb.kb_id: kb for kb in kbs}
         self._documents = {(d.kb_id, d.document_id): d for d in documents}
         self.deleted: list[str] = []
+        self.released: list[str] = []
+        self.deletion_order: list[str] = []
         self.chunk_additions: list[tuple[str, int]] = []
         self.document_additions: list[str] = []
         self.releases: list[tuple[str, int]] = []
+        # Every status move as it was called: (kb_id, document_id, status, from_status).
+        self.transitions: list[tuple[str, str, str, str | None]] = []
 
     async def get_for_tenant(
         self, session: Any, kb_id: str, tenant_id: uuid.UUID
@@ -149,7 +155,21 @@ class _FakeRepository:
 
     async def delete(self, session: Any, kb: KnowledgeBaseRegistry) -> None:
         self.deleted.append(kb.kb_id)
+        self.deletion_order.append(f"delete:{kb.kb_id}")
         self._kbs.pop(kb.kb_id, None)
+
+    async def list_bound_agents(
+        self, session: Any, *, kb_id: str, tenant_id: uuid.UUID
+    ) -> list[tuple[str, str]]:
+        kb = self._kbs.get(kb_id)
+        if kb is None or kb.tenant_id != tenant_id:
+            return []
+        return [(b.agent_id, f"Agent {b.agent_id}") for b in kb.agent_bindings]
+
+    async def delete_bindings(self, session: Any, kb: KnowledgeBaseRegistry) -> None:
+        self.released.append(kb.kb_id)
+        self.deletion_order.append(f"release:{kb.kb_id}")
+        kb.agent_bindings = []
 
     async def insert_document(
         self, session: Any, *, kb_id: str, document_id: str, name: str
@@ -170,9 +190,13 @@ class _FakeRepository:
         document_id: str,
         status: str,
         error: str | None = None,
+        from_status: str | None = None,
     ) -> bool:
+        self.transitions.append((kb_id, document_id, status, from_status))
         doc = self._documents.get((kb_id, document_id))
         if doc is None or doc.status == status:
+            return False
+        if from_status is not None and doc.status != from_status:
             return False
         doc.status = status
         doc.error = error
@@ -183,11 +207,41 @@ class _FakeRepository:
     ) -> KnowledgeDocument | None:
         return self._documents.get((kb_id, document_id))
 
+    async def get_documents(
+        self, session: Any, *, kb_id: str, document_ids: list[str]
+    ) -> dict[str, KnowledgeDocument]:
+        return {
+            document_id: document
+            for (row_kb_id, document_id), document in self._documents.items()
+            if row_kb_id == kb_id and document_id in document_ids
+        }
+
     async def add_chunk_count(self, session: Any, *, kb_id: str, delta: int) -> None:
         self.chunk_additions.append((kb_id, delta))
         kb = self._kbs.get(kb_id)
         if kb is not None:
             kb.chunk_count += delta
+
+    async def refresh_indexing_status(self, session: Any, *, kb_id: str) -> None:
+        kb = self._kbs.get(kb_id)
+        if kb is None:
+            return
+        statuses = {
+            doc.status for (doc_kb_id, _), doc in self._documents.items() if doc_kb_id == kb_id
+        }
+        if "indexing" in statuses:
+            kb.indexing_status = "indexing"
+        elif "failed" in statuses:
+            kb.indexing_status = "failed"
+        else:
+            kb.indexing_status = "ready"
+
+    async def has_indexing_document(self, session: Any, *, kb_id: str) -> bool:
+        return any(
+            doc.status == "indexing"
+            for (doc_kb_id, _), doc in self._documents.items()
+            if doc_kb_id == kb_id
+        )
 
     async def add_document_count(self, session: Any, *, kb_id: str) -> None:
         self.document_additions.append(kb_id)
@@ -277,6 +331,28 @@ async def test_create_creates_dataset_api_key_when_none_exists() -> None:
     assert result.kb_id
     dify.get_dataset_api_keys.assert_awaited_once()
     dify.create_dataset_api_key.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_create_takes_the_earliest_dataset_api_key_by_stamp() -> None:
+    tenant = _tenant()
+    dify = AsyncMock()
+    dify.create_dataset.return_value = {"id": "ds-1"}
+    dify.get_dataset_api_keys.return_value = {
+        "data": [
+            {"id": "key-2", "token": "ds-newer", "created_at": 1_706_745_600},
+            {"id": "key-3", "token": "ds-undated"},
+            {"id": "key-1", "token": "ds-earliest", "created_at": "2024-01-01T00:00:00Z"},
+        ]
+    }
+    repo = _FakeRepository()
+    service = _service(dify, repo=repo)
+
+    await service.create(AsyncMock(), tenant, CreateKnowledgeBaseDto(name="KB"))
+
+    stored = next(iter(repo._kbs.values()))
+    assert stored.dify_api_key == "ds-earliest"
+    dify.create_dataset_api_key.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -472,7 +548,44 @@ async def test_delete_rejects_bound_kb() -> None:
 
     assert exc.value.status_code == 409
     assert exc.value.code == "KB_IN_USE"
+    assert exc.value.details == {"agents": [{"agent_id": "agent-1", "name": "Agent agent-1"}]}
     dify.delete_dataset.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_with_cascade_releases_bindings_before_removing_the_kb() -> None:
+    tenant = _tenant()
+    dify = AsyncMock()
+    repo = _FakeRepository((_kb(tenant, bindings=("agent-1", "agent-2")),))
+    events, handler = _collector()
+    bus = EventBus()
+    bus.subscribe(KB_DELETED_EVENT, handler)
+    service = _service(dify, repo=repo, bus=bus)
+
+    await service.delete(AsyncMock(), tenant, "kb-1", cascade=True)
+
+    dify.delete_dataset.assert_awaited_once_with("ds-1")
+    assert repo.deletion_order == ["release:kb-1", "delete:kb-1"]
+    assert events == [
+        (KB_DELETED_EVENT, {"kb_id": "kb-1", "tenant_id": tenant.id, "dify_dataset_id": "ds-1"})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_delete_keeps_the_record_and_bindings_when_dify_delete_fails() -> None:
+    tenant = _tenant()
+    dify = AsyncMock()
+    dify.delete_dataset.side_effect = DifyConsoleError(500, "{}")
+    repo = _FakeRepository((_kb(tenant, bindings=("agent-1",)),))
+    service = _service(dify, repo=repo)
+
+    with pytest.raises(AppError) as exc:
+        await service.delete(AsyncMock(), tenant, "kb-1", cascade=True)
+
+    assert exc.value.status_code == 502
+    assert exc.value.code == "DIFY_ERROR"
+    assert repo.released == []
+    assert repo.deleted == []
 
 
 @pytest.mark.asyncio
@@ -737,6 +850,83 @@ async def test_retry_document_wraps_single_id_in_document_ids() -> None:
 
 
 @pytest.mark.asyncio
+async def test_retry_document_rolls_the_record_back_to_indexing() -> None:
+    """C-45: a restart Dify accepted is what both read paths then answer from."""
+    tenant = _tenant()
+    dify = AsyncMock()
+    repo = _FakeRepository((_kb(tenant),), (_doc("kb-1", "doc-1", "failed"),))
+    service = _service(dify, repo=repo)
+
+    await service.retry_document(AsyncMock(), tenant, "kb-1", "doc-1")
+
+    stored = await repo.get_document(AsyncMock(), kb_id="kb-1", document_id="doc-1")
+    assert stored is not None
+    assert stored.status == "indexing"
+
+
+@pytest.mark.asyncio
+async def test_retry_document_rolls_back_only_from_the_failed_state() -> None:
+    """C-45: the roll-back is issued with the departure state it may leave.
+
+    Read off the call, not off the row it moved: the retry refuses a non-failed
+    document before it reaches the repository, so a guard dropped from this call
+    would stay invisible to any assertion that only reads a row the retry was
+    allowed to move. The document seeded here is a failure, so the assertion
+    holds with or without that refusal.
+    """
+    tenant = _tenant()
+    dify = AsyncMock()
+    repo = _FakeRepository((_kb(tenant),), (_doc("kb-1", "doc-1", "failed"),))
+    service = _service(dify, repo=repo)
+
+    await service.retry_document(AsyncMock(), tenant, "kb-1", "doc-1")
+
+    assert repo.transitions == [("kb-1", "doc-1", "indexing", "failed")]
+
+
+@pytest.mark.asyncio
+async def test_retry_document_refuses_a_document_that_did_not_fail() -> None:
+    """C-45: only a recorded failure is retryable; every other state is a 422.
+
+    A rewind out of ``completed`` would re-arm the completion transition, and the
+    next completion would count the document's segments and emit its event again.
+    """
+    tenant = _tenant()
+
+    for stored in ("completed", "indexing"):
+        dify = AsyncMock()
+        repo = _FakeRepository((_kb(tenant),), (_doc("kb-1", "doc-1", stored),))
+        service = _service(dify, repo=repo)
+
+        with pytest.raises(AppError) as exc:
+            await service.retry_document(AsyncMock(), tenant, "kb-1", "doc-1")
+
+        assert (exc.value.status_code, exc.value.code) == (422, "INVALID_STATE")
+        dify.retry_document_indexing.assert_not_awaited()
+        document = await repo.get_document(AsyncMock(), kb_id="kb-1", document_id="doc-1")
+        assert document is not None
+        assert document.status == stored
+
+
+@pytest.mark.asyncio
+async def test_retry_document_keeps_the_record_of_a_restart_dify_refused() -> None:
+    """C-45: a refused restart leaves the local state — and the retry — intact."""
+    tenant = _tenant()
+    dify = AsyncMock()
+    dify.retry_document_indexing.side_effect = DifyConsoleError(500, "upstream")
+    repo = _FakeRepository((_kb(tenant),), (_doc("kb-1", "doc-1", "failed"),))
+    service = _service(dify, repo=repo)
+
+    with pytest.raises(AppError) as exc:
+        await service.retry_document(AsyncMock(), tenant, "kb-1", "doc-1")
+
+    assert (exc.value.status_code, exc.value.code) == (502, "DIFY_ERROR")
+    stored = await repo.get_document(AsyncMock(), kb_id="kb-1", document_id="doc-1")
+    assert stored is not None
+    assert stored.status == "failed"
+
+
+@pytest.mark.asyncio
 async def test_retry_document_maps_dify_rejection_to_400_with_message() -> None:
     tenant = _tenant()
     dify = AsyncMock()
@@ -916,9 +1106,7 @@ async def test_delete_document_maps_missing_document_to_404_before_deleting() ->
     dify.get_document_indexing_status.side_effect = DifyConsoleError(
         404, json.dumps({"message": "Document Not Exists."})
     )
-    repo = _FakeRepository(
-        (_kb(tenant),), (_doc("kb-1", "doc-1", "completed"),)
-    )
+    repo = _FakeRepository((_kb(tenant),), (_doc("kb-1", "doc-1", "completed"),))
     service = _service(dify, repo=repo)
 
     with pytest.raises(AppError) as exc:
@@ -1029,6 +1217,52 @@ async def test_retrieval_test_returns_citations_score_and_latency() -> None:
 
 
 @pytest.mark.asyncio
+async def test_retrieval_test_sorts_citations_by_descending_score() -> None:
+    tenant = _tenant()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Dify does not promise an order; scores arrive non-descending.
+        return httpx.Response(
+            200,
+            json={
+                "records": [
+                    {"segment": {"content": "low"}, "score": 0.55},
+                    {"segment": {"content": "high"}, "score": 0.98},
+                    {"segment": {"content": "mid"}, "score": 0.7},
+                ]
+            },
+        )
+
+    retriever = DifyClientService("http://dify.test", "key", transport=httpx.MockTransport(handler))
+    service = _service(AsyncMock(), repo=_FakeRepository((_kb(tenant),)), retriever=retriever)
+
+    result = await service.retrieval_test(AsyncMock(), tenant, "kb-1", RetrieveTestDto(query="q"))
+
+    assert [c.content for c in result.citations] == ["high", "mid", "low"]
+    assert [c.score for c in result.citations] == [0.98, 0.7, 0.55]
+    assert result.score == 0.98
+    await retriever.aclose()
+
+
+@pytest.mark.asyncio
+async def test_retrieval_test_maps_upstream_failure_to_502_dify_error() -> None:
+    tenant = _tenant()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"message": "upstream exploded"})
+
+    retriever = DifyClientService("http://dify.test", "key", transport=httpx.MockTransport(handler))
+    service = _service(AsyncMock(), repo=_FakeRepository((_kb(tenant),)), retriever=retriever)
+
+    with pytest.raises(AppError) as exc:
+        await service.retrieval_test(AsyncMock(), tenant, "kb-1", RetrieveTestDto(query="q"))
+
+    assert exc.value.status_code == 502
+    assert exc.value.code == "DIFY_ERROR"
+    await retriever.aclose()
+
+
+@pytest.mark.asyncio
 async def test_retrieval_test_uses_dataset_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     tenant = _tenant()
     captured: dict[str, str] = {}
@@ -1061,6 +1295,25 @@ async def test_retrieval_test_rejects_missing_api_key() -> None:
         await service.retrieval_test(AsyncMock(), tenant, "kb-1", RetrieveTestDto(query="q"))
 
     assert exc.value.code == "KB_API_KEY_MISSING"
+
+
+@pytest.mark.asyncio
+async def test_retrieval_test_refuses_behind_an_aggregate_that_is_stale() -> None:
+    """C-41/C-43 (2): the gate reads the document rows, not only the stored fold.
+
+    The fold is as fresh as its last refresh; an indexing document behind a
+    ``ready`` aggregate must still close the recall entry.
+    """
+    tenant = _tenant()
+    service = _service(
+        AsyncMock(),
+        repo=_FakeRepository((_kb(tenant),), (_doc("kb-1", "doc-1", "indexing"),)),
+    )
+
+    with pytest.raises(AppError) as exc:
+        await service.retrieval_test(AsyncMock(), tenant, "kb-1", RetrieveTestDto(query="q"))
+
+    assert (exc.value.status_code, exc.value.code) == (409, "KB_INDEXING")
 
 
 @pytest.mark.asyncio

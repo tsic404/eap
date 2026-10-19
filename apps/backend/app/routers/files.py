@@ -13,14 +13,19 @@ from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, File, Request, UploadFile
 
-from app.dependencies import get_current_user
+from app.dependencies import get_active_tenant, get_current_user
 from app.dify_console import DifyConsoleClient, DifyConsoleError
 from app.errors import AppError
 from app.files import MAX_FILE_SIZE_BYTES, validate_document_file
 from app.models.user import User
 from app.schemas.conversation import UploadedFileDto
 
-router = APIRouter(prefix="/api/files", tags=["files"])
+router = APIRouter(
+    prefix="/api/files",
+    tags=["files"],
+    # Tenant gate (existence / status / quota) for every route in this module.
+    dependencies=[Depends(get_active_tenant)],
+)
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
 

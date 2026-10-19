@@ -1,10 +1,11 @@
 """RunLogController: run-log list + detail (architecture §32.6.2).
 
-Both endpoints are audit-only reads gated by ``require_roles`` on the four
-non-employee admin/auditor roles; the route-level gate is the outer
-defense-in-depth layer, while tenant scoping is enforced by passing
-``user.tenant_id`` into the service (whose repository filters every query on
-it).
+Both endpoints are audit-only reads gated by ``require_tenant_roles`` on the
+four non-employee admin/auditor roles; the route-level gate is the outer
+defense-in-depth layer, and it reaches the tenant verdict (existence, status,
+quota) before the role verdict so the fixed gate order holds. Tenant scoping is
+enforced separately by passing ``user.tenant_id`` into the service (whose
+repository filters every query on it).
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
-from app.dependencies import require_roles
+from app.dependencies import require_tenant_roles
 from app.models.user import User
 from app.schemas.run_log import RunLogDetailDto, RunLogPageDto
 from app.services.run_log import RUN_LOG_READ_ROLES, RunLogService
@@ -30,7 +31,7 @@ async def list_run_logs(
     to_date: str | None = Query(default=None, alias="to"),
     limit: int = Query(default=20, ge=1, le=100),
     cursor: str | None = Query(default=None),
-    user: User = Depends(require_roles(*RUN_LOG_READ_ROLES)),
+    user: User = Depends(require_tenant_roles(*RUN_LOG_READ_ROLES)),
     session: AsyncSession = Depends(get_session),
 ) -> RunLogPageDto:
     service = RunLogService(session)
@@ -49,7 +50,7 @@ async def list_run_logs(
 @router.get("/{trace_id}", response_model=RunLogDetailDto)
 async def get_run_log(
     trace_id: str,
-    user: User = Depends(require_roles(*RUN_LOG_READ_ROLES)),
+    user: User = Depends(require_tenant_roles(*RUN_LOG_READ_ROLES)),
     session: AsyncSession = Depends(get_session),
 ) -> RunLogDetailDto:
     service = RunLogService(session)

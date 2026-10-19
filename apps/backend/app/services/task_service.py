@@ -27,7 +27,7 @@ from sqlalchemy import CursorResult, and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import AppError
-from app.events.task import TaskStatusChangedEvent, emit_task_status_changed
+from app.events.task import TaskStatusChangedEvent, emit_task_status_changed_best_effort
 from app.models.task import Task
 from app.models.task_outbox import TaskOutboxEvent
 from app.models.user import User
@@ -299,25 +299,16 @@ class TaskService:
         actor: User,
         metadata: str | None,
     ) -> None:
-        try:
-            await emit_task_status_changed(
-                TaskStatusChangedEvent(
-                    task_id=str(task_uuid),
-                    from_status=from_status,
-                    to_status=to_status,
-                    actor_id=str(actor.id),
-                    metadata=metadata,
-                )
-            )
-        except Exception:
-            # A subscriber failure must never fail the already-committed
-            # transition; the state change is durable regardless.
-            log.warning(
-                "task_status_changed_emit_failed",
+        """Announce a committed transition, naming the acting user."""
+        await emit_task_status_changed_best_effort(
+            TaskStatusChangedEvent(
                 task_id=str(task_uuid),
+                from_status=from_status,
                 to_status=to_status,
-                exc_info=True,
+                actor_id=str(actor.id),
+                metadata=metadata,
             )
+        )
 
     async def _select_task(self, task_uuid: uuid.UUID, tenant_id: uuid.UUID) -> Task | None:
         result = await self.session.execute(

@@ -26,7 +26,7 @@ const eslintConfig = [
   },
   ...compat.extends("next/core-web-vitals", "next/typescript"),
   {
-    files: ["e2e/**/*.mjs", "playwright.config.mjs"],
+    files: ["e2e/**/*.mjs", "tests/acceptance/*.mjs", "playwright.config.mjs"],
     languageOptions: {
       globals: nodeGlobals,
     },

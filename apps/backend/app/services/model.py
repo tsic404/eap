@@ -20,18 +20,19 @@ from app.schemas.model import ModelProviderDto
 _LABEL_LOCALES = ("zh_Hans", "en_US", "zh-Hans", "en")
 
 
+def _non_empty_string(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
 def _localized_label(label: Any) -> str | None:
     """Extract a human-facing name from Dify's locale-keyed ``label`` field."""
     if isinstance(label, str):
         return label or None
     if isinstance(label, dict):
         for locale in _LABEL_LOCALES:
-            value = label.get(locale)
-            if value:
-                return str(value)
-        for value in label.values():
-            if value:
-                return str(value)
+            value = _non_empty_string(label.get(locale))
+            if value is not None:
+                return value
     return None
 
 
@@ -41,7 +42,8 @@ def _count_models(configuration: Any) -> int:
     Dify 1.17.0's console provider list builds ``custom_models`` from the
     provider's custom-model rows, so that key always carries a list — empty
     when the provider exposes none; a missing key, ``null`` or any other type
-    counts zero.
+    counts zero. Only custom configurations are counted: the system
+    configuration block is not a model list.
     """
     if not isinstance(configuration, dict):
         return 0
@@ -51,29 +53,41 @@ def _count_models(configuration: Any) -> int:
     return sum(1 for model in models if isinstance(model, dict) and not model.get("deprecated"))
 
 
+def _provider_entries(raw: Any) -> list[Any]:
+    """Unwrap the two accepted payload shapes; anything else is a failed call."""
+    if isinstance(raw, dict):
+        entries = raw.get("data")
+        if isinstance(entries, list):
+            return entries
+    if isinstance(raw, list):
+        return raw
+    raise AppError(502, "DIFY_ERROR", "Unrecognizable model provider payload")
+
+
+def _provider_identifier(entry: dict[str, Any]) -> str | None:
+    for field in ("provider", "key"):
+        value = _non_empty_string(entry.get(field))
+        if value is not None:
+            return value
+    return None
+
+
 def _normalize_providers(raw: Any) -> list[ModelProviderDto]:
     """Map Dify's ``ProviderListResponse`` onto ``ModelProviderDto`` items."""
-    if isinstance(raw, dict) and isinstance(raw.get("data"), list):
-        entries = raw["data"]
-    elif isinstance(raw, list):
-        entries = raw
-    else:
-        return []
-
     providers: list[ModelProviderDto] = []
-    for entry in entries:
+    for entry in _provider_entries(raw):
         if not isinstance(entry, dict):
             continue
-        provider = entry.get("provider") or entry.get("key")
-        if not provider:
+        provider = _provider_identifier(entry)
+        if provider is None:
             continue
+        deployment_type = entry.get("preferred_provider_type")
         providers.append(
             ModelProviderDto(
-                provider=str(provider),
-                label=_localized_label(entry.get("label")) or str(provider),
-                deploymentType=entry.get("preferred_provider_type"),
-                modelCount=_count_models(entry.get("custom_configuration"))
-                + _count_models(entry.get("system_configuration")),
+                provider=provider,
+                label=_localized_label(entry.get("label")) or provider,
+                deploymentType=deployment_type if isinstance(deployment_type, str) else None,
+                modelCount=_count_models(entry.get("custom_configuration")),
             )
         )
     return providers

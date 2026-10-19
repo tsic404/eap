@@ -119,6 +119,17 @@ class ToolService:
         """
         return tool.risk_level == "high" or tool.permission_mode == "confirm"
 
+    @staticmethod
+    def ensure_invocable(tool: ToolRegistry) -> None:
+        """Refuse an invocation of a disabled tool before any upstream contact.
+
+        Shared judgement (C-67) for the session execution, approval-triggered
+        execution and debug paths: an approval granted earlier must not outlive
+        a tool that was switched off afterwards.
+        """
+        if tool.permission_mode == "disabled":
+            raise AppError(409, "TOOL_DISABLED", "Tool is disabled")
+
     async def execute(
         self,
         tool: ToolRegistry,
@@ -128,8 +139,7 @@ class ToolService:
         conversation_id: str | None = None,
     ) -> dict[str, Any]:
         """Execute a tool on behalf of an agent run, gating on risk/approval."""
-        if tool.permission_mode == "disabled":
-            raise AppError(409, "TOOL_DISABLED", "Tool is disabled")
+        self.ensure_invocable(tool)
         if self.requires_approval(tool):
             task = await self._request_approval(tool, params, conversation_id, requester)
             return {"status": "pending_approval", "task_id": str(task.id)}
@@ -143,8 +153,7 @@ class ToolService:
 
     async def debug(self, tool: ToolRegistry, dto: DebugToolDto) -> dict[str, Any]:
         """Run a test call for the admin debug panel and optionally save a case."""
-        if tool.permission_mode == "disabled":
-            raise AppError(409, "TOOL_DISABLED", "Tool is disabled")
+        self.ensure_invocable(tool)
         result = await self.tool_proxy.debug(tool, dto.params)
         saved_case_id = None
         if dto.save_as_test_case:

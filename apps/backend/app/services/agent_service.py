@@ -7,12 +7,13 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
+import httpx
 import structlog
 from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dify_console import CreateAppParams, DifyConsoleClient, ModelConfig
+from app.dify_console import CreateAppParams, DifyConsoleClient, DifyConsoleError, ModelConfig
 from app.errors import AppError
 from app.events.agent import AGENT_CREATED, AGENT_DELETED, AGENT_OFFLINE, AGENT_PUBLISHED
 from app.events.bus import EventBus, bus
@@ -32,7 +33,7 @@ _TYPE_TO_DIFY_MODE: dict[str, str] = {
     "data": "chat",
 }
 
-_DUPLICATE_AGENT_CONSTRAINTS = frozenset({"pk_agent_registry", "uq_agent_registry_tenant_agent_id"})
+_DUPLICATE_AGENT_CONSTRAINTS = frozenset({"pk_agent_registry"})
 
 # ``offline`` is the only state that must not be publishable: it is the
 # deliberate "taken down" state, so a publish there is a state conflict rather
@@ -137,10 +138,21 @@ class AgentService:
             if mapped is not None:
                 raise mapped from exc
             raise
-        except Exception:
+        except Exception as exc:
             await self._session.rollback()
             if dify_app_id is not None:
                 await _delete_app_best_effort(self._console, dify_app_id)
+            mapped = _map_upstream_error(exc)
+            if mapped is not None:
+                # F1 keeps the engine payload out of the response, so this
+                # warning is the only server-side record of the failed call.
+                log.warning(
+                    "agent_upstream_call_failed",
+                    dify_app_id=dify_app_id,
+                    status_code=getattr(exc, "status_code", None),
+                    exc_info=True,
+                )
+                raise mapped from exc
             raise
 
         await self._emit(
@@ -312,10 +324,16 @@ class AgentService:
     def _bind(self, agent: AgentRegistry, kb_ids: list[str], tool_ids: list[str]) -> None:
         for kb_id in kb_ids:
             agent.knowledge_bindings.append(
-                AgentKnowledgeBinding(agent_id=agent.agent_id, kb_id=kb_id)
+                AgentKnowledgeBinding(
+                    tenant_id=agent.tenant_id, agent_id=agent.agent_id, kb_id=kb_id
+                )
             )
         for tool_id in tool_ids:
-            agent.tool_bindings.append(AgentToolBinding(agent_id=agent.agent_id, tool_id=tool_id))
+            agent.tool_bindings.append(
+                AgentToolBinding(
+                    tenant_id=agent.tenant_id, agent_id=agent.agent_id, tool_id=tool_id
+                )
+            )
 
     async def _replace_bindings(
         self,
@@ -326,17 +344,29 @@ class AgentService:
         if kb_ids is not None:
             await self._session.execute(
                 delete(AgentKnowledgeBinding).where(
-                    AgentKnowledgeBinding.agent_id == agent.agent_id
+                    AgentKnowledgeBinding.tenant_id == agent.tenant_id,
+                    AgentKnowledgeBinding.agent_id == agent.agent_id,
                 )
             )
             for kb_id in kb_ids:
-                self._session.add(AgentKnowledgeBinding(agent_id=agent.agent_id, kb_id=kb_id))
+                self._session.add(
+                    AgentKnowledgeBinding(
+                        tenant_id=agent.tenant_id, agent_id=agent.agent_id, kb_id=kb_id
+                    )
+                )
         if tool_ids is not None:
             await self._session.execute(
-                delete(AgentToolBinding).where(AgentToolBinding.agent_id == agent.agent_id)
+                delete(AgentToolBinding).where(
+                    AgentToolBinding.tenant_id == agent.tenant_id,
+                    AgentToolBinding.agent_id == agent.agent_id,
+                )
             )
             for tool_id in tool_ids:
-                self._session.add(AgentToolBinding(agent_id=agent.agent_id, tool_id=tool_id))
+                self._session.add(
+                    AgentToolBinding(
+                        tenant_id=agent.tenant_id, agent_id=agent.agent_id, tool_id=tool_id
+                    )
+                )
 
 
 def _require_id(response: object, label: str) -> str:
@@ -369,6 +399,18 @@ def _unknown_binding_error() -> AppError:
     never an existence oracle for another tenant's assets (C-14).
     """
     return AppError(400, "INVALID_BINDING", "Unknown knowledge base or tool id")
+
+
+def _map_upstream_error(exc: Exception) -> AppError | None:
+    """Map an inference-engine call failure to the contract's 502; ``None`` otherwise.
+
+    C-99 pins every engine call failure — including a transport failure that never
+    reached Dify — to 502 ``DIFY_ERROR``. Without this the exception escapes as the
+    catch-all 500, which reads as a platform bug instead of an upstream outage.
+    """
+    if isinstance(exc, (DifyConsoleError, httpx.HTTPError)):
+        return AppError(502, "DIFY_ERROR", "Inference engine request failed")
+    return None
 
 
 def _map_integrity_error(exc: IntegrityError) -> AppError | None:

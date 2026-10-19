@@ -6,9 +6,9 @@ import { loginViaSso } from "./helpers/api";
 //
 // A real browser completes the OIDC authorization-code + PKCE flow against a
 // mock IdP, lands on /user, and renders the authenticated profile. The refresh
-// cookie contract (HttpOnly, path=/api/auth, SameSite=Lax, 30-day Max-Age) and
-// the rotation / logout-revocation behaviour are asserted against the browser's
-// observable cookie store.
+// cookie contract (HttpOnly, path=/api/auth/refresh, SameSite=Lax, 30-day
+// Max-Age) and the rotation / logout behaviour are asserted against the
+// browser's observable cookie store.
 //
 // Note: the access-token TTL is `expiresIn: 900` in the refresh response BODY;
 // the refresh cookie itself carries the 30-day refresh TTL (2592000s), not 900.
@@ -22,35 +22,61 @@ test("SSO login lands on /user and honours the refresh-cookie contract", async (
   page,
   context,
 }) => {
-  // 1. Start the SSO login from the frontend login page.
+  // 1. A browser that logged in before the credential path narrowed still holds
+  // a cookie under the wider path. Two same-named cookies both reach the refresh
+  // endpoint, and the wider path is sent last, so the stale one would shadow
+  // every rotation; the login response must retire it.
+  await context.addCookies([
+    {
+      name: REFRESH_COOKIE,
+      value: "pre-confinement",
+      domain: "localhost",
+      path: "/api/auth",
+      httpOnly: true,
+      sameSite: "Lax",
+    },
+  ]);
+
+  // 2. Start the SSO login from the frontend login page.
   await page.goto("/login");
   await page.getByRole("button", { name: "SSO 登录" }).click();
 
-  // 2. The browser follows login → IdP authorize → callback → /user.
+  // 3. The browser follows login → IdP authorize → callback → /user.
   await page.waitForURL("**/user");
 
-  // 3. The frontend renders the authenticated profile from /api/me. The name
+  // 4. The frontend renders the authenticated profile from /api/me. The name
   // appears in both the header and the profile card, so target the unique
   // email and the first name match.
   await expect(page.getByText("alice@acme.com")).toBeVisible();
   await expect(page.getByText("Alice").first()).toBeVisible();
 
-  // 4. Refresh cookie attributes (rotated once by the frontend bootstrap).
+  // 5. The planted wider-path cookie is gone: exactly one refresh cookie
+  // remains, confined to the refresh endpoint.
+  const cookiesAfterLogin = (await context.cookies()).filter(
+    (c) => c.name === REFRESH_COOKIE,
+  );
+  expect(cookiesAfterLogin).toHaveLength(1);
+  expect(cookiesAfterLogin[0].path).toBe("/api/auth/refresh");
+
+  // 6. Refresh cookie attributes (rotated once by the frontend bootstrap).
   const refreshCookie = async () =>
     (await context.cookies()).find((c) => c.name === REFRESH_COOKIE);
   const initial = await refreshCookie();
   expect(initial).toBeTruthy();
   expect(initial!.httpOnly).toBe(true);
   expect(initial!.sameSite).toBe("Lax");
-  expect(initial!.path).toBe("/api/auth");
+  expect(initial!.path).toBe("/api/auth/refresh");
   const ttl = initial!.expires - Math.floor(Date.now() / 1000);
   expect(Math.abs(ttl - REFRESH_TTL_SECONDS)).toBeLessThan(60);
 
-  // 5. Refresh rotates the cookie and returns expiresIn: 900 in the body.
+  // 7. Refresh rotates the cookie and returns expiresIn: 900 in the body.
   const before = initial!.value;
   const refreshed = await page.evaluate(async () => {
     const res = await fetch("/api/auth/refresh", { method: "POST", credentials: "include" });
-    return { status: res.status, body: (await res.json()) as { data: { expiresIn: number } } };
+    return {
+      status: res.status,
+      body: (await res.json()) as { data: { accessToken: string; expiresIn: number } },
+    };
   });
   expect(refreshed.status).toBe(200);
   expect(refreshed.body.data.expiresIn).toBe(900);
@@ -58,24 +84,30 @@ test("SSO login lands on /user and honours the refresh-cookie contract", async (
   expect(rotated!.value).not.toBe(before);
   expect(rotated!.httpOnly).toBe(true);
   expect(rotated!.sameSite).toBe("Lax");
-  expect(rotated!.path).toBe("/api/auth");
+  expect(rotated!.path).toBe("/api/auth/refresh");
 
-  // 6. Logout clears the cookie and revokes the family (replay → 401).
+  // 8. Logout ends the session server-side. The app sends the access token,
+  // which names the session (the refresh family), so revocation does not need
+  // the browser to submit a credential C-3 confines to the refresh endpoint.
+  // Re-inject the pre-logout credential and pin that it no longer authenticates.
   const preLogout = rotated!.value;
-  const logout = await page.evaluate(async () => {
-    const res = await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+  const logout = await page.evaluate(async (token) => {
+    const res = await fetch("/api/auth/logout", {
+      method: "POST",
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    });
     return res.status;
-  });
+  }, refreshed.body.data.accessToken);
   expect(logout).toBe(200);
   expect(await refreshCookie()).toBeFalsy();
 
-  // Re-inject the revoked cookie and confirm the family no longer authenticates.
   await context.addCookies([
     {
       name: REFRESH_COOKIE,
       value: preLogout,
       domain: "localhost",
-      path: "/api/auth",
+      path: "/api/auth/refresh",
       httpOnly: true,
       sameSite: "Lax",
     },

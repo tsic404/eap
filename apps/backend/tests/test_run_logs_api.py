@@ -81,6 +81,7 @@ def _signed_token(private_key: object, user: User, tenant: Tenant) -> str:
 
 def _make_session(
     user: User,
+    tenant: Tenant,
     *,
     run_logs: list[RunLog] | None = None,
     detail: RunLog | None = None,
@@ -90,6 +91,8 @@ def _make_session(
     async def _get(model: object, pk: object, **kwargs: object) -> object | None:
         if model is User:
             return user
+        if model is Tenant:
+            return tenant
         return None
 
     session.get = AsyncMock(side_effect=_get)
@@ -124,7 +127,7 @@ def _auth(token: str) -> dict[str, str]:
 def test_list_requires_auditor_role(monkeypatch):
     tenant = _make_tenant()
     user = _make_user(tenant, role="employee")
-    session = _make_session(user)
+    session = _make_session(user, tenant)
 
     client, token = _make_client(user, tenant, session, monkeypatch)
     resp = client.get("/api/run-logs", headers=_auth(token))
@@ -137,7 +140,7 @@ def test_list_returns_page_for_auditor(monkeypatch):
     tenant = _make_tenant()
     user = _make_user(tenant, role="auditor")
     run_log = _make_run_log(tenant, user)
-    session = _make_session(user, run_logs=[run_log])
+    session = _make_session(user, tenant, run_logs=[run_log])
 
     client, token = _make_client(user, tenant, session, monkeypatch)
     resp = client.get("/api/run-logs", headers=_auth(token))
@@ -151,7 +154,7 @@ def test_list_returns_page_for_auditor(monkeypatch):
 def test_detail_unknown_trace_returns_404(monkeypatch):
     tenant = _make_tenant()
     user = _make_user(tenant, role="auditor")
-    session = _make_session(user, detail=None)
+    session = _make_session(user, tenant, detail=None)
 
     client, token = _make_client(user, tenant, session, monkeypatch)
     resp = client.get("/api/run-logs/nope", headers=_auth(token))
@@ -163,7 +166,7 @@ def test_detail_unknown_trace_returns_404(monkeypatch):
 def test_detail_requires_auditor_role(monkeypatch):
     tenant = _make_tenant()
     user = _make_user(tenant, role="employee")
-    session = _make_session(user)
+    session = _make_session(user, tenant)
 
     client, token = _make_client(user, tenant, session, monkeypatch)
     resp = client.get("/api/run-logs/trace-1", headers=_auth(token))

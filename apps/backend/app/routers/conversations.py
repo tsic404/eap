@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import DifyApiError
 from app.db import get_session
-from app.dependencies import get_current_user
+from app.dependencies import get_active_tenant, get_current_user
 from app.logging_conf import get_logger
 from app.models.user import User
 from app.schemas.conversation import (
@@ -27,7 +27,12 @@ from app.services.conversation import ConversationService, sse_frame
 
 log = get_logger(__name__)
 
-router = APIRouter(prefix="/api/conversations", tags=["conversations"])
+router = APIRouter(
+    prefix="/api/conversations",
+    tags=["conversations"],
+    # Tenant gate (existence / status / quota) for every route in this module.
+    dependencies=[Depends(get_active_tenant)],
+)
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
 Session = Annotated[AsyncSession, Depends(get_session)]

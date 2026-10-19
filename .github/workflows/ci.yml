@@ -52,13 +52,13 @@ jobs:
           docker compose -f docker-compose.yml config -q
 
       # `make setup-env` is what keeps the template placeholders out of a real
-      # deployment, so pin its contract: replace placeholders, stay idempotent,
-      # never overwrite a value someone filled in by hand.
+      # deployment, so pin its contract: replace every placeholder, stay
+      # idempotent, never overwrite a value someone filled in by hand.
       - name: Check setup-env replaces placeholders and keeps real values
         run: |
-          keys='WEAVIATE_API_KEY|DIFY_SECRET_KEY|PLUGIN_DAEMON_KEY|PLUGIN_DIFY_INNER_API_KEY'
+          keys='WEAVIATE_API_KEY|DIFY_SECRET_KEY|PLUGIN_DAEMON_KEY|PLUGIN_DIFY_INNER_API_KEY|OIDC_ISSUER|OIDC_CLIENT_ID|OIDC_CLIENT_SECRET|JWT_PRIVATE_KEY|JWT_PUBLIC_KEY|DIFY_CONSOLE_EMAIL|DIFY_CONSOLE_PASSWORD'
           make setup-env
-          if grep -Eq "^(${keys})=replace-me" .env; then
+          if grep -Eq "^(${keys})=.*replace-me" .env; then
             echo "::error::make setup-env left template placeholders in .env"
             exit 1
           fi
@@ -67,7 +67,7 @@ jobs:
           before="$(grep -E "^(${keys})=" .env | sort)"
           make setup-env
           if [[ "$(grep -E "^(${keys})=" .env | sort)" != "${before}" ]]; then
-            echo "::error::make setup-env regenerated keys that were already generated"
+            echo "::error::make setup-env regenerated values that were already generated"
             exit 1
           fi
 
@@ -126,6 +126,21 @@ jobs:
 
       - name: Performance gate (Agent list P95 < 240ms)
         run: pytest -m perf
+
+      # Two branches that each add a revision on the same parent leave the graph
+      # with two heads, and `alembic upgrade head` then aborts. Catch that in the
+      # PR instead of at deploy time.
+      - name: Migration graph (single head)
+        env:
+          DATABASE_URL: postgresql+asyncpg://eap:eap_password@localhost:5432/eap
+        run: |
+          heads="$(alembic heads)"
+          count="$(printf '%s\n' "$heads" | grep -c '(head)' || true)"
+          if [ "$count" -ne 1 ]; then
+            echo "::error::expected exactly one alembic head, found ${count}:"
+            printf '%s\n' "$heads"
+            exit 1
+          fi
 
       - name: Migration smoke test (upgrade → downgrade)
         env:

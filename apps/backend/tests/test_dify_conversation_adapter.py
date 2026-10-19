@@ -143,7 +143,6 @@ async def test_maps_all_18_dify_events() -> None:
         _frame(
             "workflow_finished", {"data": {"status": "succeeded", "outputs": {}, "error": None}}
         ),
-        _frame("error", {"code": "invoke_error", "message": "boom", "status": 500}),
         _frame(
             "message_end",
             {
@@ -163,6 +162,8 @@ async def test_maps_all_18_dify_events() -> None:
             },
         ),
         _frame("ping", {}),
+        # An error frame ends the stream, so it has to be the last one here.
+        _frame("error", {"code": "invoke_error", "message": "boom", "status": 500}),
     ]
 
     adapter, _dify, _memory, bus = _adapter(frames)
@@ -185,8 +186,8 @@ async def test_maps_all_18_dify_events() -> None:
         "tts_message",
         "tts_message_end",
         "workflow_finished",
-        "error",
         "message_end",
+        "error",
     ]
     assert "ping" not in names  # keepalive is dropped
 

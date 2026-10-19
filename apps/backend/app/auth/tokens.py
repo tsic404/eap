@@ -36,12 +36,14 @@ def issue_access_token(
     sub: str,
     tenant_id: str,
     role: str,
+    session_id: str,
     now: datetime | None = None,
 ) -> tuple[str, int]:
-    """Sign an RS256 access token carrying ``sub``/``tenantId``/``role``/``jti``.
+    """Sign an RS256 access token carrying ``sub``/``tenantId``/``role``/``jti``/``sid``.
 
-    Returns ``(token, ttl_seconds)``. ``sub`` is the user id, ``tenantId`` and
-    ``role`` mirror the claims the JWT middleware decodes into request identity.
+    Returns ``(token, ttl_seconds)``. ``sid`` names the session the token belongs
+    to — the refresh-token family — so logout can end it without the refresh
+    credential, which C-3 confines to the refresh endpoint.
     """
     now = now or datetime.now(UTC)
     payload = {
@@ -49,6 +51,7 @@ def issue_access_token(
         "tenantId": tenant_id,
         "role": role,
         "jti": str(uuid.uuid4()),
+        "sid": session_id,
         "iat": now,
         "exp": now + timedelta(seconds=ACCESS_TOKEN_TTL_SECONDS),
     }

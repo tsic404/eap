@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models.task_outbox import TaskOutboxEvent
 from app.queue import enqueue_process_task
+from app.services.task_expiry import SCAN_INTERVAL_SECONDS, expire_overdue_approvals
 
 log = structlog.get_logger(__name__)
 
@@ -92,7 +93,12 @@ async def reconcile_undelivered(session_factory: async_sessionmaker[AsyncSession
 
 
 def create_scheduler(session_factory: async_sessionmaker[AsyncSession]) -> AsyncIOScheduler:
-    """Build an ``AsyncIOScheduler`` running the reconciler every 15s."""
+    """Build the ``AsyncIOScheduler`` owning the task background scans.
+
+    Two 15s jobs, each fixing one stuck state with no request in flight: the
+    outbox reconciler re-dispatches undelivered rows, and the approval-expiry
+    scan retires pending approvals nobody acted on before their deadline.
+    """
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
         reconcile_undelivered,
@@ -100,6 +106,14 @@ def create_scheduler(session_factory: async_sessionmaker[AsyncSession]) -> Async
         seconds=_SCAN_INTERVAL_SECONDS,
         args=[session_factory],
         id="task-outbox-reconcile",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        expire_overdue_approvals,
+        "interval",
+        seconds=SCAN_INTERVAL_SECONDS,
+        args=[session_factory],
+        id="task-approval-expiry",
         replace_existing=True,
     )
     return scheduler

@@ -5,10 +5,11 @@ from __future__ import annotations
 import uuid
 from typing import cast
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.agent import AgentKnowledgeBinding, AgentRegistry
 from app.models.knowledge import KnowledgeBaseRegistry, KnowledgeDocument
 from app.schemas.knowledge import DocumentStatus
 
@@ -82,6 +83,31 @@ class KnowledgeRepository:
     async def delete(self, session: AsyncSession, kb: KnowledgeBaseRegistry) -> None:
         await session.delete(kb)
 
+    async def list_bound_agents(
+        self, session: AsyncSession, *, kb_id: str, tenant_id: uuid.UUID
+    ) -> list[tuple[str, str]]:
+        """``(agent_id, name)`` of every agent of ``tenant_id`` bound to ``kb_id``."""
+        stmt = (
+            select(AgentKnowledgeBinding.agent_id, AgentRegistry.name)
+            .join(AgentRegistry, AgentRegistry.agent_id == AgentKnowledgeBinding.agent_id)
+            .where(
+                AgentKnowledgeBinding.kb_id == kb_id,
+                AgentRegistry.tenant_id == tenant_id,
+            )
+            .order_by(AgentKnowledgeBinding.agent_id)
+        )
+        return [(agent_id, name) for agent_id, name in (await session.execute(stmt)).all()]
+
+    async def delete_bindings(self, session: AsyncSession, kb: KnowledgeBaseRegistry) -> None:
+        """Release every binding of ``kb`` ahead of the KB row's own deletion.
+
+        The rows go through the unit of work rather than a bulk DELETE behind its
+        back: the loaded collection is still tracked, so the parent delete would
+        otherwise try to clear a key on rows that are already gone.
+        """
+        for binding in list(kb.agent_bindings):
+            await session.delete(binding)
+
     async def insert_document(
         self, session: AsyncSession, *, kb_id: str, document_id: str, name: str
     ) -> None:
@@ -120,6 +146,23 @@ class KnowledgeRepository:
         )
         return cast(KnowledgeDocument | None, await session.scalar(stmt))
 
+    async def get_documents(
+        self, session: AsyncSession, *, kb_id: str, document_ids: list[str]
+    ) -> dict[str, KnowledgeDocument]:
+        """The tracked rows of ``document_ids``, keyed by document id.
+
+        One query serves a whole listing page, so the batch of answers a listing
+        returns is decided against the records as they stood together.
+        """
+        if not document_ids:
+            return {}
+        stmt = select(KnowledgeDocument).where(
+            KnowledgeDocument.kb_id == kb_id,
+            KnowledgeDocument.document_id.in_(document_ids),
+        )
+        rows = (await session.scalars(stmt)).all()
+        return {row.document_id: row for row in rows}
+
     async def transition_document_status(
         self,
         session: AsyncSession,
@@ -128,24 +171,74 @@ class KnowledgeRepository:
         document_id: str,
         status: DocumentStatus,
         error: str | None = None,
+        from_status: DocumentStatus | None = None,
     ) -> bool:
-        """Atomically record a terminal status; ``True`` only on a real transition.
+        """Atomically move a document's recorded status; ``True`` on a real move.
 
-        The conditional ``UPDATE ... WHERE status <> :status RETURNING`` fires only
-        when the previous status differed, so concurrent polls cannot double-emit.
+        One guarded ``UPDATE ... RETURNING`` carries the move, so concurrent
+        observers cannot double-emit. ``from_status`` narrows it to a single
+        departure state — an explicit retry only ever leaves ``failed`` — and
+        without one the guard is that the stored status differs from ``status``.
         """
+        guard = (
+            KnowledgeDocument.status != status
+            if from_status is None
+            else KnowledgeDocument.status == from_status
+        )
         stmt = (
             update(KnowledgeDocument)
             .where(
                 KnowledgeDocument.kb_id == kb_id,
                 KnowledgeDocument.document_id == document_id,
-                KnowledgeDocument.status != status,
+                guard,
             )
             .values(status=status, error=error)
             .returning(KnowledgeDocument.document_id)
         )
         result = await session.execute(stmt)
         return result.scalar_one_or_none() is not None
+
+    async def has_indexing_document(self, session: AsyncSession, *, kb_id: str) -> bool:
+        """Whether any tracked document of ``kb_id`` is still indexing.
+
+        The stored aggregate is refreshed on every transition, but a gate that
+        only reads it is as fresh as the last refresh: asking the rows directly
+        keeps an aggregate that is owed a refresh from opening a closed door.
+        """
+        stmt = (
+            select(KnowledgeDocument.document_id)
+            .where(
+                KnowledgeDocument.kb_id == kb_id,
+                KnowledgeDocument.status == "indexing",
+            )
+            .limit(1)
+        )
+        return (await session.scalars(stmt)).first() is not None
+
+    async def refresh_indexing_status(self, session: AsyncSession, *, kb_id: str) -> None:
+        """Recompute the KB's aggregated indexing status from its document rows.
+
+        The rule is fixed: any still-indexing document makes the knowledge base
+        indexing; otherwise a failed one makes it failed; otherwise — no
+        documents included — it is ready. Deriving and storing the aggregate in
+        one statement keeps it from being read between two writes.
+        """
+        indexing = (
+            select(KnowledgeDocument.document_id)
+            .where(KnowledgeDocument.kb_id == kb_id, KnowledgeDocument.status == "indexing")
+            .exists()
+        )
+        failed = (
+            select(KnowledgeDocument.document_id)
+            .where(KnowledgeDocument.kb_id == kb_id, KnowledgeDocument.status == "failed")
+            .exists()
+        )
+        stmt = (
+            update(KnowledgeBaseRegistry)
+            .where(KnowledgeBaseRegistry.kb_id == kb_id)
+            .values(indexing_status=case((indexing, "indexing"), (failed, "failed"), else_="ready"))
+        )
+        await session.execute(stmt)
 
     async def add_chunk_count(self, session: AsyncSession, *, kb_id: str, delta: int) -> None:
         """Add ``delta`` segments to the KB's chunk total.
