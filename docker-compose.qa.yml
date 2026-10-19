@@ -77,11 +77,13 @@ services:
     restart: unless-stopped
 
   backend:
+    image: eap-backend:qa-local
     build:
       context: ./apps/backend
       dockerfile: Dockerfile
     environment:
       APP_ENV: development
+      LOCAL_LOGIN_ENABLED: "true"
       DATABASE_URL: postgresql+asyncpg://eap:eap_password@postgres:5432/eap_e2e
       REDIS_URL: redis://redis:6379/0
       OIDC_ISSUER: http://localhost:${QA_IDP_PORT:-4000}
@@ -103,28 +105,21 @@ services:
     restart: unless-stopped
 
   # One-shot seed: the backend's entrypoint migrates the schema before serving,
-  # so once it is healthy the tenants table exists and the mock IdP's tenant can
-  # be inserted idempotently. Re-runs on every `make qa-up`; harmless.
+  # so once it is healthy the tenants table exists. The same container seeds the
+  # first platform administrator as a local account (must change) because this
+  # stack declares local login on. Re-runs on every `make qa-up`; harmless.
   db-seed:
-    image: postgres:16-alpine
+    image: eap-backend:qa-local
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile
     environment:
-      PGPASSWORD: eap_password
-    volumes:
-      - ./deploy/postgres/seed-mock-idp.sql:/seed-mock-idp.sql:ro
-    command:
-      [
-        "psql",
-        "-h",
-        "postgres",
-        "-U",
-        "eap",
-        "-d",
-        "eap_e2e",
-        "-v",
-        "ON_ERROR_STOP=1",
-        "-f",
-        "/seed-mock-idp.sql",
-      ]
+      APP_ENV: development
+      DATABASE_URL: postgresql+asyncpg://eap:eap_password@postgres:5432/eap_e2e
+      LOCAL_LOGIN_ENABLED: "true"
+      LOCAL_ADMIN_EMAIL: ${LOCAL_ADMIN_EMAIL:-admin@acme.com}
+      LOCAL_ADMIN_PASSWORD: ${LOCAL_ADMIN_PASSWORD:-Local-Admin-1}
+    command: ["python", "-m", "app.bootstrap"]
     depends_on:
       backend:
         condition: service_healthy

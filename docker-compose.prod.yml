@@ -82,6 +82,10 @@ services:
     environment:
       APP_ENV: production
       COOKIE_SECURE: "true"
+      # C-110 / F9: closed unless the deployment explicitly turns it on in its
+      # own configuration. This template never enables it, and no container
+      # here seeds a local account (C-117).
+      LOCAL_LOGIN_ENABLED: ${LOCAL_LOGIN_ENABLED:-false}
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set in .env}
       REDIS_URL: ${REDIS_URL:?REDIS_URL must be set in .env}
       DIFY_API_BASE_URL: ${DIFY_API_BASE_URL:-http://dify-api:5001}
