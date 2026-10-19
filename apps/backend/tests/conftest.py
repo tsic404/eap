@@ -43,6 +43,7 @@ from testcontainers.community.postgres import PostgresContainer
 from testcontainers.community.redis import RedisContainer
 
 import app.models  # noqa: F401  # registers every model on Base.metadata
+from app.auth.refresh import RefreshService
 from app.config import Settings
 from app.db import get_session
 from app.dify_console import DifyConsoleClient
@@ -474,6 +475,9 @@ async def api(
     app.state.conversation_service = ConversationService(
         settings=integration_settings, tool_proxy=app.state.tool_proxy
     )
+    # The runtime wires this in its lifespan; the member surface reads it to
+    # revoke a refreshed session, so the app under test has to carry it too.
+    app.state.refresh_service = RefreshService(integration_settings)
 
     async def override_get_session() -> AsyncIterator[AsyncSession]:
         async with db.session() as session:

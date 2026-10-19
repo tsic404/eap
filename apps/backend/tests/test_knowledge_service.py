@@ -236,6 +236,13 @@ class _FakeRepository:
         else:
             kb.indexing_status = "ready"
 
+    async def has_indexing_document(self, session: Any, *, kb_id: str) -> bool:
+        return any(
+            doc.status == "indexing"
+            for (doc_kb_id, _), doc in self._documents.items()
+            if doc_kb_id == kb_id
+        )
+
     async def add_document_count(self, session: Any, *, kb_id: str) -> None:
         self.document_additions.append(kb_id)
         kb = self._kbs.get(kb_id)
@@ -1288,6 +1295,25 @@ async def test_retrieval_test_rejects_missing_api_key() -> None:
         await service.retrieval_test(AsyncMock(), tenant, "kb-1", RetrieveTestDto(query="q"))
 
     assert exc.value.code == "KB_API_KEY_MISSING"
+
+
+@pytest.mark.asyncio
+async def test_retrieval_test_refuses_behind_an_aggregate_that_is_stale() -> None:
+    """C-41/C-43 (2): the gate reads the document rows, not only the stored fold.
+
+    The fold is as fresh as its last refresh; an indexing document behind a
+    ``ready`` aggregate must still close the recall entry.
+    """
+    tenant = _tenant()
+    service = _service(
+        AsyncMock(),
+        repo=_FakeRepository((_kb(tenant),), (_doc("kb-1", "doc-1", "indexing"),)),
+    )
+
+    with pytest.raises(AppError) as exc:
+        await service.retrieval_test(AsyncMock(), tenant, "kb-1", RetrieveTestDto(query="q"))
+
+    assert (exc.value.status_code, exc.value.code) == (409, "KB_INDEXING")
 
 
 @pytest.mark.asyncio

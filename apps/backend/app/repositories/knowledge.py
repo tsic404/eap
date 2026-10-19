@@ -198,6 +198,23 @@ class KnowledgeRepository:
         result = await session.execute(stmt)
         return result.scalar_one_or_none() is not None
 
+    async def has_indexing_document(self, session: AsyncSession, *, kb_id: str) -> bool:
+        """Whether any tracked document of ``kb_id`` is still indexing.
+
+        The stored aggregate is refreshed on every transition, but a gate that
+        only reads it is as fresh as the last refresh: asking the rows directly
+        keeps an aggregate that is owed a refresh from opening a closed door.
+        """
+        stmt = (
+            select(KnowledgeDocument.document_id)
+            .where(
+                KnowledgeDocument.kb_id == kb_id,
+                KnowledgeDocument.status == "indexing",
+            )
+            .limit(1)
+        )
+        return (await session.scalars(stmt)).first() is not None
+
     async def refresh_indexing_status(self, session: AsyncSession, *, kb_id: str) -> None:
         """Recompute the KB's aggregated indexing status from its document rows.
 

@@ -28,27 +28,21 @@ from app.models.user import User
 TC_ID = "TC-tech-auth-02"
 
 _AGENTS = "/api/agents"
-_MEMBERS = "/api/members"
+_MEMBERS = "/api/users"
 _CREATE_AGENT_BODY = {"agentId": "demo-agent", "name": "Demo Agent"}
-# C-29 fixes the *semantics* of deactivation, not the literal status value, and
-# the member-management API that would carry it is absent at main@68ad4b5. The
-# module therefore uses the one vocabulary its own gate case seeds.
-_DEACTIVATED = "suspended"
-# C-28: the member-management API is absent at main@68ad4b5, and the design does
-# not fix the request shape (endpoint, method, body field names).
-_MEMBER_API_XFAIL = pytest.mark.xfail(
+# C-28/C-29: the roster and the status switch are served by ``/api/users``; the
+# switch moves between the two status values the admin console exposes.
+_DEACTIVATED = "disabled"
+# The roster and the status switch are implemented; only the role adjustment the
+# same contract describes is absent — the PATCH body carries a status and refuses
+# every other field, so no request can issue a role change or exercise the
+# role-ladder validation. Those three cases stay registered against that gap.
+_ROLE_ADJUSTMENT_XFAIL = pytest.mark.xfail(
     reason=(
-        "C-28 member API not implemented at main@68ad4b5; "
-        "the list/detail request shape is undecided by the design"
+        "C-28 role adjustment is not implemented: PATCH /api/users/{id} accepts "
+        "status only and refuses a role field, so a role change has no request path"
     ),
-    strict=False,
-)
-_MEMBER_INVARIANT_XFAIL = pytest.mark.xfail(
-    reason=(
-        "C-28 member API not implemented at main@68ad4b5, so the C-29 invariant "
-        "cannot be exercised; the PATCH request shape is undecided by the design"
-    ),
-    strict=False,
+    strict=True,
 )
 
 
@@ -347,7 +341,6 @@ async def test_tenant_gate_does_not_replace_the_service_tenant_scope(api) -> Non
 
 
 @pytest.mark.asyncio
-@_MEMBER_API_XFAIL
 async def test_auditor_member_management_is_forbidden(api) -> None:
     tenant, auditor = await _seed_tenant_user(api, role="auditor")
     response = await api.client.get(_MEMBERS, headers=_bearer(_sign(api, auditor, tenant)))
@@ -356,7 +349,6 @@ async def test_auditor_member_management_is_forbidden(api) -> None:
 
 
 @pytest.mark.asyncio
-@_MEMBER_INVARIANT_XFAIL
 async def test_member_role_outside_the_role_ladder_is_a_validation_error(api) -> None:
     tenant, admin = await _seed_tenant_user(api, role="platform_admin")
     employee = await _seed_member(api, tenant, role="employee")
@@ -365,12 +357,20 @@ async def test_member_role_outside_the_role_ladder_is_a_validation_error(api) ->
         headers=_bearer(_sign(api, admin, tenant)),
         json={"role": "superuser"},
     )
+    if response.status_code == 422:
+        # Registered against the role-adjustment gap, not asserted as the ladder's
+        # verdict: the status-only body refuses the role field before any value is
+        # looked at, so this 422 does not evidence C-29's role-set validation.
+        pytest.xfail(
+            "C-28 role adjustment is absent: a status-only PATCH refuses the role "
+            "field as unknown, so the role-set validation has no path to observe"
+        )
     assert response.status_code == 422, response.text
     assert _code(response) == "VALIDATION_ERROR"
 
 
 @pytest.mark.asyncio
-@_MEMBER_INVARIANT_XFAIL
+@_ROLE_ADJUSTMENT_XFAIL
 async def test_demoting_the_last_platform_admin_is_refused(api) -> None:
     tenant, admin = await _seed_tenant_user(api, role="platform_admin")
     response = await api.client.patch(
@@ -383,7 +383,6 @@ async def test_demoting_the_last_platform_admin_is_refused(api) -> None:
 
 
 @pytest.mark.asyncio
-@_MEMBER_INVARIANT_XFAIL
 async def test_disabling_the_last_platform_admin_is_refused(api) -> None:
     tenant, admin = await _seed_tenant_user(api, role="platform_admin")
     response = await api.client.patch(
@@ -396,7 +395,6 @@ async def test_disabling_the_last_platform_admin_is_refused(api) -> None:
 
 
 @pytest.mark.asyncio
-@_MEMBER_INVARIANT_XFAIL
 async def test_disabling_oneself_is_refused(api) -> None:
     tenant, admin = await _seed_tenant_user(api, role="platform_admin")
     # A second platform admin keeps the tenant's last-admin invariant out of
@@ -412,7 +410,7 @@ async def test_disabling_oneself_is_refused(api) -> None:
 
 
 @pytest.mark.asyncio
-@_MEMBER_API_XFAIL
+@_ROLE_ADJUSTMENT_XFAIL
 async def test_platform_admin_changes_a_member_role(api) -> None:
     tenant, admin = await _seed_tenant_user(api, role="platform_admin")
     employee = await _seed_member(api, tenant, role="employee")

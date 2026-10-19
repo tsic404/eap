@@ -1007,6 +1007,62 @@ async def test_a_retried_document_reads_as_indexing_on_both_read_paths(api) -> N
 
 
 @pytest.mark.asyncio
+async def test_retry_refolds_the_kb_aggregate_to_indexing(api) -> None:
+    """C-41: the retry moves the document back to indexing, so the KB follows it.
+
+    The aggregate is what the console shows and what the recall gate reads; a
+    retry that only moves the document row leaves the knowledge base reporting
+    ``failed`` for the whole re-index.
+    """
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    await _upload_document(api, headers)
+    api.console.get_document_indexing_status.return_value = {
+        "indexing_status": "error",
+        "error": "boom",
+    }
+    assert (await _document_status(api, headers)).json()["data"]["status"] == "failed"
+    assert (await _kb_detail(api, headers))["indexing_status"] == "failed"
+
+    resp = await api.client.post(f"{_KB_URL}/kb-1/documents/doc-1/retry", headers=headers)
+
+    assert resp.status_code == 204
+    assert (await _kb_detail(api, headers))["indexing_status"] == "indexing"
+
+
+@pytest.mark.asyncio
+async def test_recall_is_refused_after_a_retry_returns_the_document_to_indexing(api) -> None:
+    """C-41 + C-43 (2): the re-index a retry starts closes the recall entry.
+
+    Judged against the document rows as well as the stored aggregate, so a
+    retry that leaves the aggregate stale cannot open recall over a document
+    that is indexing.
+    """
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    await _upload_document(api, headers)
+    api.console.get_document_indexing_status.return_value = {
+        "indexing_status": "error",
+        "error": "boom",
+    }
+    assert (await _document_status(api, headers)).json()["data"]["status"] == "failed"
+    retried = await api.client.post(f"{_KB_URL}/kb-1/documents/doc-1/retry", headers=headers)
+    assert retried.status_code == 204
+    calls: list[str] = []
+    _use_stub_retriever(api, _retrieve_handler([_record(0.5, "hit")], calls=calls))
+
+    recall = await api.client.post(
+        f"{_KB_URL}/kb-1/retrieval-test", headers=headers, json={"query": "anything"}
+    )
+
+    assert recall.status_code == 409
+    assert recall.json()["error"]["code"] == "KB_INDEXING"
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_a_retried_document_counts_its_completion_once(api) -> None:
     """C-40: the completion that follows a retry is counted once, not per attempt.
 

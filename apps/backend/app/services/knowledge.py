@@ -400,6 +400,9 @@ class KnowledgeService:
             status="indexing",
             from_status="failed",
         )
+        # C-41: every status transition re-folds the aggregate; a retry is one,
+        # and the recall gate reads what it leaves behind.
+        await self._repository.refresh_indexing_status(session, kb_id=kb.kb_id)
         await session.commit()
 
     async def delete_document(
@@ -451,8 +454,12 @@ class KnowledgeService:
         dto: RetrieveTestDto,
     ) -> RetrieveTestResultDto:
         kb = await self._require_kb(session, tenant, kb_id)
-        # C-41/C-43: refuse while indexing, before the key is resolved or upstream called.
-        if kb.indexing_status == "indexing":
+        # C-41/C-43 ②: refuse while indexing, before the key is resolved or upstream
+        # called. The rows are asked as well as the aggregate: the aggregate is as
+        # fresh as its last refresh, and the gate may not rely on one still owed.
+        if kb.indexing_status == "indexing" or await self._repository.has_indexing_document(
+            session, kb_id=kb.kb_id
+        ):
             raise AppError(409, "KB_INDEXING", "知识库正在索引中，召回测试暂不可用")
 
         retriever = self._retriever

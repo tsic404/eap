@@ -140,6 +140,10 @@ class _Repo:
         # This double tracks no document rows, so there is nothing to aggregate.
         return None
 
+    async def has_indexing_document(self, session: Any, *, kb_id: str) -> bool:
+        # No document rows are tracked, so no document can be indexing.
+        return False
+
     async def transition_document_status(
         self,
         session: Any,
