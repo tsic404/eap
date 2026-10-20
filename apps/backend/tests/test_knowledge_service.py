@@ -28,7 +28,12 @@ from app.files import MAX_FILE_SIZE_BYTES
 from app.models.agent import AgentKnowledgeBinding
 from app.models.knowledge import KnowledgeBaseRegistry, KnowledgeDocument
 from app.models.tenant import Tenant
-from app.schemas.knowledge import CreateKnowledgeBaseDto, DocumentDto, RetrieveTestDto
+from app.schemas.knowledge import (
+    CreateKnowledgeBaseDto,
+    DocumentDto,
+    RetrieveTestDto,
+    RetrieveTestModelDto,
+)
 from app.services.dify_client import DifyClientService
 from app.services.knowledge import KnowledgeService
 
@@ -1205,7 +1210,7 @@ async def test_retrieval_test_returns_citations_score_and_latency() -> None:
     )
 
     assert captured["url"] == "http://dify.test/v1/datasets/ds-1/retrieve"
-    assert captured["body"] == {"query": "what is eap?"}
+    assert captured["body"] == {"query": "what is eap?", "retrieval_model": {"top_k": 5}}
     assert [c.content for c in result.citations] == ["chunk one", "chunk two"]
     assert result.citations[0].score == 0.98
     assert result.citations[0].source_name == "report.pdf"
@@ -1213,6 +1218,63 @@ async def test_retrieval_test_returns_citations_score_and_latency() -> None:
     assert result.citations[1].kb_name == "Knowledge"
     assert result.score == 0.98
     assert result.latency_ms >= 0
+    await retriever.aclose()
+
+
+@pytest.mark.asyncio
+async def test_retrieval_test_passes_the_retrieval_model_through_to_upstream() -> None:
+    """C-43: the result-count cap and score threshold are the upstream's own."""
+    tenant = _tenant()
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"records": []})
+
+    retriever = DifyClientService("http://dify.test", "key", transport=httpx.MockTransport(handler))
+    service = _service(AsyncMock(), repo=_FakeRepository((_kb(tenant),)), retriever=retriever)
+
+    result = await service.retrieval_test(
+        AsyncMock(),
+        tenant,
+        "kb-1",
+        RetrieveTestDto(
+            query="q",
+            retrieval_model=RetrieveTestModelDto(top_k=10, score_threshold=0.5),
+        ),
+    )
+
+    assert captured["body"] == {
+        "query": "q",
+        "retrieval_model": {"top_k": 10, "score_threshold": 0.5},
+    }
+    assert result.citations == []
+    await retriever.aclose()
+
+
+@pytest.mark.asyncio
+async def test_retrieval_test_omits_an_absent_score_threshold_upstream() -> None:
+    """C-43: the threshold is optional; an absent one is not sent as null."""
+    tenant = _tenant()
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"records": []})
+
+    retriever = DifyClientService("http://dify.test", "key", transport=httpx.MockTransport(handler))
+    service = _service(AsyncMock(), repo=_FakeRepository((_kb(tenant),)), retriever=retriever)
+
+    result = await service.retrieval_test(
+        AsyncMock(),
+        tenant,
+        "kb-1",
+        RetrieveTestDto(query="q", retrieval_model=RetrieveTestModelDto()),
+    )
+
+    # Defaulting to top_k 5 is observable: the count cap travels upstream.
+    assert captured["body"] == {"query": "q", "retrieval_model": {"top_k": 5}}
+    assert result.citations == []
     await retriever.aclose()
 
 

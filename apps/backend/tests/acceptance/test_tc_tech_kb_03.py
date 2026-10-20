@@ -2,7 +2,8 @@
 
 Document/KB status folding and one-shot counting, KB deletion (bound, cascading,
 upstream failure), the dataset API key the creation and recall paths do and do not
-touch, the recall ordering/score contract, and tenant scoping.
+touch, the recall ordering/score contract, the C-43 retrieval parameters and query
+length bounds, and tenant scoping.
 
 The concurrent first-observation clause runs its two observations as genuinely
 concurrent requests on their own connections (see ``_own_connections``); the shared
@@ -10,10 +11,8 @@ harness transaction serialises statements, so it cannot express two transactions
 racing on one document row.
 
 Deliberately not covered here, so the gaps stay visible instead of being implied:
-the C-43 retrieval parameters (result count 1-10 defaulting to 5, score threshold,
-query length 1-1000 with the empty-query 422), the auditor's recall-test
-entitlement and the employee read baseline (C-36), and the in-tenant 404s for a
-document that does not exist (C-45/C-46).
+the auditor's recall-test entitlement and the employee read baseline (C-36), and
+the in-tenant 404s for a document that does not exist (C-45/C-46).
 """
 
 from __future__ import annotations
@@ -183,11 +182,14 @@ def _retrieve_handler(
     *,
     status_code: int = 200,
     calls: list[str] | None = None,
+    bodies: list[dict[str, Any]] | None = None,
     delay: float = 0.0,
 ) -> _RetrieveHandler:
     def _handle(request: httpx.Request) -> httpx.Response:
         if calls is not None:
             calls.append(request.url.path)
+        if bodies is not None:
+            bodies.append(json.loads(request.content))
         if delay:
             time.sleep(delay)
         if status_code != 200:
@@ -805,6 +807,160 @@ async def test_recall_without_hits_returns_empty_citations_and_zero_score(api) -
     body = resp.json()["data"]
     assert body["citations"] == []
     assert body["score"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_recall_defaults_the_result_count_to_five_upstream(api) -> None:
+    """C-43: omitted retrieval parameters still send the default 5 count cap up."""
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    bodies: list[dict[str, Any]] = []
+    _use_stub_retriever(api, _retrieve_handler([_record(0.5, "hit")], bodies=bodies))
+
+    resp = await api.client.post(
+        f"{_KB_URL}/kb-1/retrieval-test", headers=headers, json={"query": "defaults"}
+    )
+
+    assert resp.status_code == 200
+    assert bodies == [{"query": "defaults", "retrieval_model": {"top_k": 5}}]
+
+
+@pytest.mark.asyncio
+async def test_recall_passes_the_result_count_cap_through_to_upstream(api) -> None:
+    """C-43: the chosen top_k is the upstream retrieve call's count cap."""
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    bodies: list[dict[str, Any]] = []
+    _use_stub_retriever(api, _retrieve_handler([_record(0.5, "hit")], bodies=bodies))
+
+    resp = await api.client.post(
+        f"{_KB_URL}/kb-1/retrieval-test",
+        headers=headers,
+        json={"query": "capped", "retrieval_model": {"top_k": 10}},
+    )
+
+    assert resp.status_code == 200
+    assert bodies == [{"query": "capped", "retrieval_model": {"top_k": 10}}]
+
+
+@pytest.mark.asyncio
+async def test_recall_passes_the_score_threshold_through_to_upstream(api) -> None:
+    """C-43: a given score threshold travels upstream with the count cap."""
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    bodies: list[dict[str, Any]] = []
+    _use_stub_retriever(api, _retrieve_handler([_record(0.5, "hit")], bodies=bodies))
+
+    resp = await api.client.post(
+        f"{_KB_URL}/kb-1/retrieval-test",
+        headers=headers,
+        json={"query": "filtered", "retrieval_model": {"top_k": 7, "score_threshold": 0.5}},
+    )
+
+    assert resp.status_code == 200
+    assert bodies == [
+        {"query": "filtered", "retrieval_model": {"top_k": 7, "score_threshold": 0.5}}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_recall_omits_an_absent_score_threshold_upstream(api) -> None:
+    """C-43: no threshold means upstream's own no-threshold behaviour, not null."""
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    bodies: list[dict[str, Any]] = []
+    _use_stub_retriever(api, _retrieve_handler([_record(0.5, "hit")], bodies=bodies))
+
+    resp = await api.client.post(
+        f"{_KB_URL}/kb-1/retrieval-test",
+        headers=headers,
+        json={"query": "unfiltered", "retrieval_model": {"top_k": 3}},
+    )
+
+    assert resp.status_code == 200
+    assert bodies == [{"query": "unfiltered", "retrieval_model": {"top_k": 3}}]
+
+
+@pytest.mark.asyncio
+async def test_recall_rejects_a_result_count_outside_the_one_to_ten_range(api) -> None:
+    """C-43: the count cap is bounded at 1-10, both ends refused with 422."""
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    bodies: list[dict[str, Any]] = []
+    _use_stub_retriever(api, _retrieve_handler([_record(0.5, "hit")], bodies=bodies))
+
+    for top_k in (0, 11):
+        resp = await api.client.post(
+            f"{_KB_URL}/kb-1/retrieval-test",
+            headers=headers,
+            json={"query": "bounded", "retrieval_model": {"top_k": top_k}},
+        )
+
+        assert resp.status_code == 422
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert bodies == []
+
+
+@pytest.mark.asyncio
+async def test_recall_accepts_a_query_of_any_length_up_to_one_thousand(api) -> None:
+    """C-43: the query length bound is 1-1000, and 1000 characters is accepted."""
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    bodies: list[dict[str, Any]] = []
+    _use_stub_retriever(api, _retrieve_handler([_record(0.5, "hit")], bodies=bodies))
+
+    resp = await api.client.post(
+        f"{_KB_URL}/kb-1/retrieval-test",
+        headers=headers,
+        json={"query": "x" * 1000},
+    )
+
+    assert resp.status_code == 200
+    assert bodies == [{"query": "x" * 1000, "retrieval_model": {"top_k": 5}}]
+
+
+@pytest.mark.asyncio
+async def test_recall_rejects_a_query_longer_than_one_thousand_characters(api) -> None:
+    """C-43: a query past 1000 characters is refused with 422."""
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    bodies: list[dict[str, Any]] = []
+    _use_stub_retriever(api, _retrieve_handler([_record(0.5, "hit")], bodies=bodies))
+
+    resp = await api.client.post(
+        f"{_KB_URL}/kb-1/retrieval-test",
+        headers=headers,
+        json={"query": "x" * 1001},
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert bodies == []
+
+
+@pytest.mark.asyncio
+async def test_recall_rejects_an_empty_query_with_422(api) -> None:
+    """C-43: an empty query is refused with 422, before any upstream call."""
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    bodies: list[dict[str, Any]] = []
+    _use_stub_retriever(api, _retrieve_handler([_record(0.5, "hit")], bodies=bodies))
+
+    resp = await api.client.post(
+        f"{_KB_URL}/kb-1/retrieval-test", headers=headers, json={"query": ""}
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert bodies == []
 
 
 @pytest.mark.asyncio

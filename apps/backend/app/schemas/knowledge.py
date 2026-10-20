@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -65,11 +65,23 @@ class DocumentStatusDto(BaseModel):
     error: str | None = None
 
 
+class RetrieveTestModelDto(BaseModel):
+    """Retrieval parameters for the recall test, mirroring Dify's model config.
+
+    ``top_k`` is the result-count cap (1-10, default 5) the contract passes
+    straight through as the upstream retrieval's count cap; ``score_threshold``
+    is optional and omitted upstream when not given.
+    """
+
+    top_k: int = Field(default=5, ge=1, le=10)
+    score_threshold: float | None = None
+
+
 class RetrieveTestDto(BaseModel):
     """Request body for ``POST /api/knowledge-bases/:id/retrieval-test``."""
 
-    query: str = Field(min_length=1)
-    retrieval_model: dict[str, Any] | None = None
+    query: str = Field(min_length=1, max_length=1000)
+    retrieval_model: RetrieveTestModelDto | None = None
 
 
 class RetrieveTestCitationDto(BaseModel):
