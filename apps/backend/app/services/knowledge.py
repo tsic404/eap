@@ -470,8 +470,16 @@ class KnowledgeService:
             # Dataset-scoped bearer: a per-KB key, never the global app key.
             retriever = DifyClientService(self._settings.dify_api_base_url, kb.dify_api_key)
         body: dict[str, Any] = {"query": dto.query}
-        if dto.retrieval_model is not None:
-            body["retrieval_model"] = dto.retrieval_model
+        # C-43: the result-count cap is the upstream retrieve call's count cap,
+        # so the 5 default travels upstream even when the client omits the
+        # parameters; an absent score threshold is left out rather than sent as
+        # null, keeping upstream's own "no threshold" behaviour.
+        model: dict[str, Any] = {
+            "top_k": 5 if dto.retrieval_model is None else dto.retrieval_model.top_k
+        }
+        if dto.retrieval_model is not None and dto.retrieval_model.score_threshold is not None:
+            model["score_threshold"] = dto.retrieval_model.score_threshold
+        body["retrieval_model"] = model
         try:
             started = time.perf_counter()
             result = await retriever.post(f"/v1/datasets/{kb.dify_dataset_id}/retrieve", body)
