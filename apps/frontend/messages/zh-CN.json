@@ -105,6 +105,86 @@
   "modal": {
     "close": "关闭"
   },
+  "members": {
+    "title": "成员管理",
+    "description": "管理本租户成员、角色状态与本地账号",
+    "create": "新建本地账号",
+    "createTitle": "新建本地账号",
+    "createSubmit": "创建",
+    "reset": "重置口令",
+    "resetTitle": "重置口令",
+    "resetSubmit": "重置",
+    "resetFor": "为 {email} 设置新口令",
+    "disable": "停用",
+    "enable": "启用",
+    "cancel": "取消",
+    "email": "邮箱",
+    "name": "姓名",
+    "initialPassword": "初始口令",
+    "newPassword": "新口令",
+    "searchLabel": "搜索成员",
+    "searchPlaceholder": "按姓名或邮箱搜索",
+    "search": "搜索",
+    "roleFilter": "角色",
+    "statusFilter": "状态",
+    "allRoles": "全部角色",
+    "allStatuses": "全部状态",
+    "columns": {
+      "member": "成员",
+      "role": "角色",
+      "status": "状态",
+      "source": "账号来源",
+      "mustChange": "须改密",
+      "actions": "操作"
+    },
+    "roles": {
+      "platform_admin": "平台管理员",
+      "agent_admin": "智能体管理员",
+      "knowledge_admin": "知识库管理员",
+      "auditor": "审计员",
+      "employee": "员工"
+    },
+    "statuses": {
+      "active": "启用",
+      "disabled": "已停用"
+    },
+    "sources": {
+      "local": "本地",
+      "sso": "SSO"
+    },
+    "mustChange": {
+      "yes": "须改密",
+      "no": "无需改密"
+    },
+    "created": "本地账号已创建",
+    "disabled": "账号已停用",
+    "enabled": "账号已启用",
+    "passwordReset": "口令已重置，该账号下次登录须改密",
+    "empty": {
+      "title": "暂无成员",
+      "description": "调整筛选条件，或创建本地账号",
+      "descriptionClosed": "调整筛选条件"
+    },
+    "pagination": {
+      "total": "共 {total} 条",
+      "page": "第 {page} / {pages} 页",
+      "prev": "上一页",
+      "next": "下一页"
+    },
+    "errors": {
+      "accountExists": "该邮箱已存在账号",
+      "emailDomain": "邮箱须使用本租户域名",
+      "requiredEmail": "请输入邮箱",
+      "requiredName": "请输入姓名",
+      "requiredPassword": "请输入口令",
+      "requiredNewPassword": "请输入新口令",
+      "lastAdmin": "不能停用最后一个平台管理员",
+      "selfDisable": "不能停用当前登录的账号",
+      "forbidden": "无权限执行此操作",
+      "unavailable": "该操作当前不可用，请刷新列表后重试",
+      "generic": "操作失败，请稍后重试"
+    }
+  },
   "chat": {
     "back": "返回会话列表",
     "defaultAgent": "智能体",

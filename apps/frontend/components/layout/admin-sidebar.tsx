@@ -13,21 +13,39 @@ import {
   Users,
   Wrench,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useTranslations } from "next-intl";
 
+import { useRole } from "@/components/auth/role-context";
 import { cn } from "@/lib/utils";
+import type { UserRole } from "@/lib/roles";
 
-const NAV_ITEMS = [
+interface NavItem {
+  key: string;
+  labelKey: string;
+  icon: LucideIcon;
+  href: string;
+  /** Absent means every admin role may see the entry. */
+  roles?: readonly UserRole[];
+}
+
+const NAV_ITEMS: readonly NavItem[] = [
   { key: "dashboard", labelKey: "dashboard", icon: LayoutDashboard, href: "#" },
   { key: "knowledge", labelKey: "knowledge", icon: BookOpen, href: "/admin/knowledge" },
   { key: "tools", labelKey: "tools", icon: Wrench, href: "/admin/tools" },
-  { key: "users", labelKey: "users", icon: Users, href: "#" },
+  {
+    key: "users",
+    labelKey: "users",
+    icon: Users,
+    href: "/admin/users",
+    roles: ["platform_admin"],
+  },
   { key: "review", labelKey: "review", icon: ShieldCheck, href: "#" },
   { key: "runLogs", labelKey: "runLogs", icon: Activity, href: "/admin/run-logs" },
   { key: "gateway", labelKey: "gateway", icon: Server, href: "#" },
   { key: "audit", labelKey: "audit", icon: ScrollText, href: "#" },
   { key: "settings", labelKey: "settings", icon: Settings, href: "#" },
-] as const;
+];
 
 export interface AdminSidebarProps {
   active?: string;
@@ -40,6 +58,7 @@ export interface AdminSidebarProps {
  */
 export function AdminSidebar({ active, className }: AdminSidebarProps) {
   const pathname = usePathname() ?? "";
+  const role = useRole();
   const t = useTranslations("sidebar");
 
   return (
@@ -50,7 +69,7 @@ export function AdminSidebar({ active, className }: AdminSidebarProps) {
       )}
       aria-label={t("adminNav")}
     >
-      {NAV_ITEMS.map((item) => {
+      {NAV_ITEMS.filter((item) => !item.roles || item.roles.includes(role)).map((item) => {
         const Icon = item.icon;
         const isActive =
           item.href !== "#"
