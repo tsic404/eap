@@ -13,7 +13,7 @@
   - `JWT_PRIVATE_KEY` / `JWT_PUBLIC_KEY` 是 RS256 密钥对：生成后把 PEM 以双引号内联进 `.env`（多行或 `\n` 转义均可，prod compose 会原样传给容器）；`JWT_PRIVATE_KEY_FILE` / `JWT_PUBLIC_KEY_FILE` 只适用于挂载了密钥文件的部署（如 QA 栈）：
     `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out jwt_private.pem`
     `openssl pkey -in jwt_private.pem -pubout -out jwt_public.pem`
-- [ ] `LOCAL_LOGIN_ENABLED` 保持模板默认关闭，除非部署方显式决定开启本地账号口令登录。生产形态不自动种入本地账号，平台也不提供生产侧「首个本地平台管理员」的引导路径：第 6 步 `app.seed` 种入的初始平台管理员是 SSO 来源、无本地口令，其 `default` 租户没有租户域；成员管理只能由已登录的平台管理员调用，建出的账号固定为 `employee`（租户域为空时建号 422），平台没有角色提升入口。启用本地登录的部署须由部署方在部署阶段自行创建租户域与首个 `platform_admin` 本地账号（租户域内邮箱、口令自定、须改密），在该引导就位前保持关闭。
+- [ ] `LOCAL_LOGIN_ENABLED` 保持模板默认关闭，除非部署方显式决定开启本地账号口令登录。生产形态不自动种入租户或账号（C-119）：未执行部署期引导前，平台内不存在任何租户（含无域租户）与任何来源的平台管理员。启用本地登录时，部署方须按第 7 步显式执行部署期引导，创建租户域与首个本地 `platform_admin`（须改密）；在该引导就位前保持关闭。
 - [ ] `docker compose -f docker-compose.prod.yml config -q` 退出码 0（所有 `${VAR:?}` 必填项已解析）
 - [ ] PostgreSQL 已运行并创建数据库（`CREATE DATABASE eap`，另由 `dify-db-init` 幂等创建 `dify` / `dify_plugin`）
 - [ ] Redis 已运行并可连接（`redis-cli ping` → `PONG`）
@@ -30,8 +30,19 @@
 3. **构建后端镜像**：`cd apps/backend && docker build -t eap-backend .`
 4. **启动服务**：`docker compose -f docker-compose.prod.yml up -d`
 5. **验证健康**：`curl http://localhost/api/health/ready` → 200，且 `checks` 中 `database`/`redis`/`dify` 均为 `ok`（`dify` 为 `ok` 要求 `DIFY_CONSOLE_EMAIL` / `DIFY_CONSOLE_PASSWORD` 可登录控制台，且工作区已有配置凭据的模型供应商）
-6. **创建初始租户与首位平台管理员**：`cd apps/backend && python -m app.seed`（该管理员为 SSO 来源、无本地口令；本版本平台不提供「首个本地平台管理员」引导，若本部署开启本地登录，须由部署方按「部署前检查」自行创建后再开启）
-7. **验证登录**：浏览器访问 `http://localhost/login` → SSO 登录 → 成功跳转 `/user`
+6. **验证零种入基线**：不执行部署期引导时，平台内不存在任何租户与平台管理员（C-119 / AC-T20）；健康读点与本地登录能力读点正常响应。
+7. **执行部署期引导（每个租户一次）**：初始口令经标准输入传入，避免留在 shell history 或出现在 `ps` / `/proc/<pid>/cmdline`：
+
+   ```bash
+   cd apps/backend
+   read -rs EAP_BOOTSTRAP_PW && printf '%s\n' "$EAP_BOOTSTRAP_PW" | \
+     python -m app.production_bootstrap "<租户名称>" "<租户域>" \
+       --admin-email "<租户域内邮箱>" --admin-name "<姓名>" --admin-password-stdin
+   unset EAP_BOOTSTRAP_PW
+   ```
+
+   （也可用环境变量通道 `--admin-password-env <VAR>`，值同样不进入 argv；`--admin-password` 仅作兼容，不推荐。）该动作由部署方在部署阶段显式执行，生产编排不会自动触发（C-119）。省略 `--admin-*` 参数时：平台已有平台管理员 → 跳过（租户与域就绪）；本地登录关闭 → 不完整（租户与域就绪、账号未创建，非零结束）；本地登录开启且平台尚无管理员 → 失败（无任何写入）。重复执行幂等，不重置既有口令；账户创建与审计记录同一次生效，审计不可写时整次运行失败。域必须能被本地登录解析（casefold 与 lower 折叠一致的域）；ß/İ 等折叠不一致的域会以「本地登录无法解析该租户域」失败且不写入。
+8. **验证登录**：浏览器访问 `http://localhost/login` → SSO 登录 → 成功跳转 `/user`（启用本地登录时亦可使用引导创建的平台管理员账号，首次登录须改密）
 
 ## 部署后验证
 

@@ -19,8 +19,9 @@ from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
 
-# Session-scoped lock key, distinct from the seed lock (app/seed.py uses
-# hashtext('eap:seed')); session scope outlives the Alembic subprocess.
+# Session-scoped lock key. Key names are shared with the other serialized
+# boot paths (app/production_bootstrap.py uses eap:production-bootstrap); a
+# session scope outlives the Alembic subprocess.
 _MIGRATE_LOCK_SQL = "SELECT pg_advisory_lock(hashtext('eap:migrate'))"
 _MIGRATE_UNLOCK_SQL = "SELECT pg_advisory_unlock(hashtext('eap:migrate'))"
 
