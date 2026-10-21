@@ -11,10 +11,14 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { ROUTES } from "@/lib/api-routes";
-import { deleteConversation } from "@/lib/conversation-service";
+import { deleteConversation, restoreConversation } from "@/lib/conversation-service";
 import type { Conversation } from "@/lib/conversation-types";
 import { formatDateTime } from "@/lib/formatters";
 import { useConversations } from "@/lib/use-conversations";
+
+// An undo is a deliberate action on a prompt the user must first read, so the
+// affordance outlives the default notification lifetime.
+const UNDO_WINDOW_MS = 10_000;
 
 function ListSkeleton() {
   return (
@@ -56,13 +60,32 @@ export function ConversationListPage() {
     );
   }
 
+  const undoDelete = async (conversation: Conversation) => {
+    try {
+      await restoreConversation(conversation.id);
+      await mutate();
+      toast({ type: "success", title: "会话已恢复" });
+    } catch {
+      // A failed undo means the list may no longer match the server (e.g. the
+      // conversation was already restored elsewhere), so re-read it.
+      await mutate();
+      toast({ type: "error", title: "撤销失败，请重试" });
+    }
+  };
+
   const confirmDelete = async () => {
     if (!pendingDelete) return;
+    const conversation = pendingDelete;
     setDeleting(true);
     try {
-      await deleteConversation(pendingDelete.id);
+      await deleteConversation(conversation.id);
       await mutate();
-      toast({ type: "success", title: "会话已删除" });
+      toast({
+        type: "success",
+        title: "会话已删除",
+        duration: UNDO_WINDOW_MS,
+        action: { label: "撤销", onClick: () => void undoDelete(conversation) },
+      });
     } catch {
       toast({ type: "error", title: "删除失败，请重试" });
     } finally {
@@ -105,7 +128,7 @@ export function ConversationListPage() {
         title="删除会话"
         description={
           pendingDelete
-            ? `确定要删除「${pendingDelete.title ?? "未命名会话"}」吗？删除后不可恢复。`
+            ? `确定要删除「${pendingDelete.title ?? "未命名会话"}」吗？删除后可在提示中撤销。`
             : ""
         }
         confirmLabel="删除"

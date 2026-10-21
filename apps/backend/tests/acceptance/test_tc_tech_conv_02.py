@@ -316,13 +316,6 @@ async def test_confirm_of_a_pending_call_approves_it(api) -> None:
     assert read_back.json()["data"]["status"] == "approved"
 
 
-@pytest.mark.xfail(
-    reason=(
-        "C-104 'a soft-deleted conversation can be restored' is not implemented at "
-        "main@68ad4b5: no restore endpoint"
-    ),
-    strict=False,
-)
 @pytest.mark.asyncio
 async def test_undoing_a_soft_delete_makes_the_conversation_readable_again(api) -> None:
     _tenant, _user, conversation_id, headers = await _owned_conversation(api)
