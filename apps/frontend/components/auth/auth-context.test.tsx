@@ -25,9 +25,10 @@ vi.mock("@/lib/http-client", () => ({
   refreshAccessToken: refreshAccessTokenMock,
 }));
 
-vi.mock("@/lib/auth-service", () => ({
-  loginWithLocalAccount: loginWithLocalAccountMock,
-}));
+vi.mock("@/lib/auth-service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/auth-service")>();
+  return { ...actual, loginWithLocalAccount: loginWithLocalAccountMock };
+});
 
 vi.mock("@/lib/auth-channel", () => ({
   publishAuthSignal: vi.fn(),
@@ -318,5 +319,82 @@ describe("AuthProvider local account login", () => {
     expect(assign).not.toHaveBeenCalled();
     expect(apiGetMock).not.toHaveBeenCalled();
     expect(refreshAccessTokenMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("AuthProvider forced password change", () => {
+  const EMAIL = "erin@acme.com";
+  const PASSWORD = "Local-Account-1";
+
+  function LocalLoginTrigger() {
+    const { loginWithPassword } = useAuth();
+    return (
+      <button
+        type="button"
+        onClick={() => void loginWithPassword(EMAIL, PASSWORD).catch(() => undefined)}
+      >
+        local login
+      </button>
+    );
+  }
+
+  function ErrorProbe() {
+    const { error, isLoading } = useAuth();
+    return <p>{isLoading ? "loading" : (error ?? "none")}</p>;
+  }
+
+  function stubLocation(pathname = "/login") {
+    const assign = vi.fn();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...originalLocation, assign, pathname },
+    });
+    return { assign };
+  }
+
+  beforeEach(() => {
+    refreshAccessTokenMock.mockReset();
+    apiGetMock.mockReset();
+    loginWithLocalAccountMock.mockReset();
+    setAccessToken(null);
+  });
+
+  it("sends a forced-change account to the password page without loading the profile", async () => {
+    const { assign } = stubLocation();
+    refreshAccessTokenMock.mockResolvedValueOnce(null).mockResolvedValue("fresh-token");
+    loginWithLocalAccountMock.mockResolvedValue({ mustChangePassword: true });
+
+    render(
+      <AuthProvider>
+        <LocalLoginTrigger />
+      </AuthProvider>,
+    );
+    await waitFor(() => expect(refreshAccessTokenMock).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "local login" }));
+
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/password"));
+    expect(assign).not.toHaveBeenCalledWith("/user");
+    // The profile endpoint refuses a forced-change account; loading it would
+    // turn the guidance into a load failure screen.
+    expect(apiGetMock).not.toHaveBeenCalled();
+  });
+
+  it("does not surface the forced-change 403 as a profile load error", async () => {
+    setAccessToken("test-token");
+    apiGetMock.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 403, data: { error: { code: "PASSWORD_CHANGE_REQUIRED" } } },
+      message: "Request failed",
+    });
+
+    render(
+      <AuthProvider>
+        <ErrorProbe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => expect(apiGetMock).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText("none")).toBeTruthy());
   });
 });

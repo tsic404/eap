@@ -8,7 +8,7 @@
  */
 
 import { API_ROUTES } from "./api-routes";
-import type { ApiEnvelope } from "./auth-types";
+import { PASSWORD_CHANGE_REQUIRED_CODE, type ApiEnvelope } from "./auth-types";
 import { apiClient } from "./http-client";
 import { extractApiErrorCode } from "./platform-service";
 
@@ -57,4 +57,41 @@ export async function loginWithLocalAccount(
 export function localLoginErrorKey(error: unknown): string {
   const code = extractApiErrorCode(error);
   return (code ? LOGIN_ERROR_KEYS[code] : undefined) ?? GENERIC_ERROR_KEY;
+}
+
+/** Contract bounds for a new password (C-113). */
+export const PASSWORD_MIN_LENGTH = 8;
+export const PASSWORD_MAX_LENGTH = 128;
+
+/** Rejection code (C-113) → copy key under the `password` message namespace. */
+const PASSWORD_CHANGE_ERROR_KEYS: Record<string, string> = {
+  INVALID_CREDENTIALS: "errors.invalidCurrent",
+  VALIDATION_ERROR: "errors.validation",
+};
+
+const PASSWORD_CHANGE_GENERIC_ERROR_KEY = "errors.generic";
+
+/**
+ * Replace the signed-in account's own password (C-113).
+ *
+ * Success clears the forced-change flag and ends every refresh-token family the
+ * account holds; access tokens already issued stay valid until they expire, so
+ * the caller drops its local session and signs in again.
+ */
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  await apiClient.post(API_ROUTES.changePassword, { currentPassword, newPassword });
+}
+
+/** Copy key for a rejected change, so the form can render a readable reason. */
+export function passwordChangeErrorKey(error: unknown): string {
+  const code = extractApiErrorCode(error);
+  return (code ? PASSWORD_CHANGE_ERROR_KEYS[code] : undefined) ?? PASSWORD_CHANGE_GENERIC_ERROR_KEY;
+}
+
+/** Whether a rejection is the forced-change gate (C-113). */
+export function isPasswordChangeRequiredError(error: unknown): boolean {
+  return extractApiErrorCode(error) === PASSWORD_CHANGE_REQUIRED_CODE;
 }

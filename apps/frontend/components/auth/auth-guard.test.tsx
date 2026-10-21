@@ -42,6 +42,24 @@ describe("AuthGuard", () => {
     expect(replaceMock).toHaveBeenCalledWith("/login");
   });
 
+  it("guides a forced-change account to the password page instead of login", () => {
+    replaceMock.mockReset();
+    useAuthMock.mockReturnValue({
+      isLoading: false,
+      isAuthenticated: false,
+      isPasswordChangeRequired: true,
+    });
+    renderWithIntl(
+      <AuthGuard>
+        <div>protected</div>
+      </AuthGuard>,
+    );
+
+    expect(replaceMock).toHaveBeenCalledWith("/password");
+    expect(replaceMock).not.toHaveBeenCalledWith("/login");
+    expect(screen.queryByText("protected")).toBeNull();
+  });
+
   it("renders children when authenticated", () => {
     useAuthMock.mockReturnValue({ isLoading: false, isAuthenticated: true });
     renderWithIntl(

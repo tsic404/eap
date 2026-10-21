@@ -28,3 +28,9 @@ export interface ApiEnvelope<T> {
   data: T;
   message: string;
 }
+
+/**
+ * Rejection code a business request carries while the account must change its
+ * password (C-113). Only the change, refresh and logout paths are exempt.
+ */
+export const PASSWORD_CHANGE_REQUIRED_CODE = "PASSWORD_CHANGE_REQUIRED";

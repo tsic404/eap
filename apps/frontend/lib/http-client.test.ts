@@ -192,3 +192,52 @@ describe("response interceptor", () => {
     expect(toastMock).not.toHaveBeenCalled();
   });
 });
+
+describe("response interceptor forced password change", () => {
+  function forcedChangeError(config: object) {
+    return {
+      config,
+      response: { status: 403, data: { error: { code: "PASSWORD_CHANGE_REQUIRED" } } },
+    };
+  }
+
+  it("guides a must-change account to the password page instead of the permission toast", async () => {
+    toastMock.mockClear();
+    const { assign } = stubLocation("/user");
+    const onRejected = responseUse.mock.calls[0][1];
+    const config = { url: "/me", headers: { set: vi.fn() } };
+
+    await expect(onRejected(forcedChangeError(config))).rejects.toBeTruthy();
+
+    expect(assign).toHaveBeenCalledWith("/password");
+    expect(toastMock).not.toHaveBeenCalled();
+  });
+
+  it("does not navigate away when the password page itself reports the requirement", async () => {
+    toastMock.mockClear();
+    const { assign } = stubLocation("/password");
+    const onRejected = responseUse.mock.calls[0][1];
+    const config = { url: "/me", headers: { set: vi.fn() } };
+
+    await expect(onRejected(forcedChangeError(config))).rejects.toBeTruthy();
+
+    expect(assign).not.toHaveBeenCalled();
+    expect(toastMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshes and replays a 401 from the password change route", async () => {
+    postMock.mockImplementationOnce(async () => ({
+      data: { code: 0, data: { accessToken: "fresh-token", expiresIn: 900 } },
+    }));
+
+    const onRejected = responseUse.mock.calls[0][1];
+    const headersSet = vi.fn();
+    const config = { url: "/auth/password", headers: { set: headersSet } };
+    clientMock.mockResolvedValueOnce({ data: { code: 0, data: {}, message: "" } });
+
+    await onRejected({ config, response: { status: 401 } });
+
+    expect(headersSet).toHaveBeenCalledWith("Authorization", "Bearer fresh-token");
+    expect(clientMock).toHaveBeenCalledWith(config);
+  });
+});

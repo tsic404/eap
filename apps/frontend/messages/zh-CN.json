@@ -69,6 +69,24 @@
       "generic": "登录失败，请稍后重试"
     }
   },
+  "password": {
+    "title": "修改口令",
+    "subtitle": "首次登录或口令被重置后，需要先设置新口令",
+    "current": "当前口令",
+    "next": "新口令",
+    "confirm": "确认新口令",
+    "submit": "修改口令",
+    "success": "口令已修改，请使用新口令重新登录",
+    "errors": {
+      "currentRequired": "请填写当前口令",
+      "length": "新口令需为 8–128 个字符",
+      "unchanged": "新口令不得与当前口令相同",
+      "mismatch": "两次输入的新口令不一致",
+      "invalidCurrent": "当前口令不正确",
+      "validation": "新口令不符合要求：需为 8–128 个字符且与当前口令不同",
+      "generic": "口令修改失败，请稍后重试"
+    }
+  },
   "forbidden": {
     "title": "无管理权限",
     "description": "您没有管理权限。如需访问管理端，请联系平台管理员授予 agent_admin 或更高角色。",
