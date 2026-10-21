@@ -2,7 +2,7 @@
 
 Run from ``apps/backend`` (the module needs the backend root on ``sys.path``):
 
-    uv run python -m tests.acceptance                  # every backend TC-tech-* case
+    uv run python -m tests.acceptance                  # every backend acceptance case
     uv run python -m tests.acceptance TC-tech-kb-01    # one case, by identifier
     uv run python -m tests.acceptance --list           # identifiers available here
 
@@ -23,7 +23,7 @@ from .registry import TECH_TC_IDS, module_path
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m tests.acceptance",
-        description="Execute design acceptance cases (TC-tech-*) by identifier.",
+        description="Execute design acceptance cases (TC-*) by identifier.",
     )
     parser.add_argument("tc_ids", nargs="*", metavar="TC-ID", help="case identifiers")
     parser.add_argument("--list", action="store_true", help="list available identifiers")

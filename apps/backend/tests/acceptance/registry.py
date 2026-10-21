@@ -14,6 +14,7 @@ from pathlib import Path
 ACCEPTANCE_DIR = Path(__file__).resolve().parent
 
 TECH_TC_IDS: tuple[str, ...] = (
+    # The deploy-level case (AC-41 / TC-ops-05) rides this backend suite too.
     "TC-tech-auth-01",
     "TC-tech-auth-02",
     "TC-tech-auth-03",
@@ -38,6 +39,7 @@ TECH_TC_IDS: tuple[str, ...] = (
     "TC-tech-ops-03",
     "TC-tech-ops-04",
     "TC-tech-ops-08",
+    "TC-ops-05",
 )
 
 
