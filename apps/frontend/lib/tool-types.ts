@@ -88,8 +88,8 @@ export interface DebugToolInput {
 
 /** Response of `POST /api/tools/{id}/debug`. */
 export interface DebugToolResult {
-  statusCode: number;
-  responseBody: unknown;
-  latencyMs: number;
-  savedCaseId: string | null;
+  status_code: number;
+  response_body: unknown;
+  latency_ms: number;
+  saved_case_id: string | null;
 }

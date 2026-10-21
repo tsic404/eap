@@ -590,8 +590,8 @@ async def test_debug_tool_returns_200(api) -> None:
 
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["statusCode"] == 200
-    assert body["responseBody"] == {"ok": True}
+    assert body["status_code"] == 200
+    assert body["response_body"] == {"ok": True}
 
 
 @pytest.mark.asyncio

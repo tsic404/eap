@@ -61,7 +61,7 @@ export function DebugPanel({ toolId, disabled = false }: DebugPanelProps) {
         name: saveCase && caseName.trim() !== "" ? caseName.trim() : null,
       });
       setResult(data);
-      if (data.savedCaseId) {
+      if (data.saved_case_id) {
         toast({ type: "success", title: "用例已保存" });
       }
     } catch (runError) {
@@ -73,7 +73,7 @@ export function DebugPanel({ toolId, disabled = false }: DebugPanelProps) {
   };
 
   const statusVariant =
-    result && result.statusCode >= 200 && result.statusCode < 300
+    result && result.status_code >= 200 && result.status_code < 300
       ? "success"
       : "danger";
 
@@ -140,16 +140,16 @@ export function DebugPanel({ toolId, disabled = false }: DebugPanelProps) {
         {result && (
           <div className="flex flex-col gap-2 rounded-md border border-border bg-muted p-3">
             <div className="flex flex-wrap items-center gap-3 text-sm">
-              <Badge variant={statusVariant}>{result.statusCode}</Badge>
+              <Badge variant={statusVariant}>{result.status_code}</Badge>
               <span className="text-muted-foreground">
-                耗时 {result.latencyMs.toFixed(0)} ms
+                耗时 {result.latency_ms.toFixed(0)} ms
               </span>
-              {result.savedCaseId && (
+              {result.saved_case_id && (
                 <span className="text-muted-foreground">已保存用例</span>
               )}
             </div>
             <pre className="overflow-x-auto whitespace-pre-wrap text-sm text-foreground">
-              {formatResponse(result.responseBody)}
+              {formatResponse(result.response_body)}
             </pre>
           </div>
         )}

@@ -167,9 +167,11 @@ async def test_debug_returns_status_body_latency(tool_api: ToolApi) -> None:
 
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["statusCode"] == 200
-    assert body["responseBody"] == {"ok": True}
-    assert body["latencyMs"] >= 0
+    assert body["status_code"] == 200
+    assert body["response_body"] == {"ok": True}
+    assert body["latency_ms"] >= 0
+    # C-11 fixes the tool-domain vocabulary: snake_case on the wire.
+    assert not {"statusCode", "responseBody", "latencyMs", "savedCaseId"} & set(body)
 
 
 @pytest.mark.asyncio
