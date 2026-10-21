@@ -11,7 +11,7 @@ import importlib.util
 import types
 from pathlib import Path
 
-_MODULE_PREFIX = "test_tc_tech_"
+_MODULE_PREFIX = "test_tc_"
 
 
 def _registry() -> types.ModuleType:
@@ -59,7 +59,8 @@ def test_no_unregistered_case_modules() -> None:
     registry = _registry()
     unknown = []
     for path in sorted(registry.ACCEPTANCE_DIR.glob(f"{_MODULE_PREFIX}*.py")):
-        suffix = path.stem[len(_MODULE_PREFIX) :]
-        if f"TC-tech-{suffix.replace('_', '-')}" not in registry.TECH_TC_IDS:
-            unknown.append(path.name)
+        declared = _declared_tc_id(path)
+        registered = declared in registry.TECH_TC_IDS
+        if not registered or registry.module_path(declared) != path:
+            unknown.append(f"{path.name} (declares {declared!r})")
     assert not unknown, f"case modules missing from the registry: {unknown}"
