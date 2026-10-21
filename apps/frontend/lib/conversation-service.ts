@@ -41,6 +41,18 @@ export async function getConversation(conversationId: string): Promise<Conversat
   return response.data.data;
 }
 
+/**
+ * Create a conversation owned by the caller. `agentId` is the only required
+ * field (C-53); the title stays empty until the first turn.
+ */
+export async function createConversation(agentId: string): Promise<Conversation> {
+  const response = await apiClient.post<ApiEnvelope<Conversation>>(
+    API_ROUTES.conversations,
+    { agentId },
+  );
+  return response.data.data;
+}
+
 /** Fetch one page of history (newest first); pass `cursor` for the older page. */
 export async function listMessages(
   conversationId: string,
