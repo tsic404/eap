@@ -129,10 +129,9 @@ async def test_non_ascii_case_variant_hits_existing_tenant_and_admin_logs_in(
 ) -> None:  # type: ignore[no-untyped-def]
     """Ü/ü folds identically on both sides: re-entry hits, and the admin signs in.
 
-    The bootstrap folds like ``app/auth/tenants.py`` (C-23/C-111): a
-    ``str.lower()`` input against SQL ``lower()`` storage. Reusing that
-    resolver for the admin email check keeps C-120 honest — an accepted admin
-    is one the local login path actually reaches.
+    The bootstrap folds the domain with the login paths' own operator (C-122),
+    and reuses the resolver for the admin email check so an accepted admin is
+    one the local login path actually reaches (C-120).
     """
     from harness import LOGIN_PATH, start
 
@@ -161,55 +160,66 @@ async def test_non_ascii_case_variant_hits_existing_tenant_and_admin_logs_in(
 
 
 @pytest.mark.asyncio
-async def test_domains_local_login_cannot_resolve_are_refused(session_factory) -> None:  # type: ignore[no-untyped-def]
-    """ß/İ domains fold differently in local login and storage, so they are refused.
+async def test_ss_domain_reentry_through_its_capital_variant_is_idempotent(
+    session_factory,
+) -> None:  # type: ignore[no-untyped-def]
+    """``STRAẞE.DE`` names the tenant bound as ``straße.de``; nothing is rewritten.
 
-    ``LocalLoginService`` casefolds the whole address before the resolver, while
-    the resolver compares ``str.lower()`` with SQL ``lower()``. PostgreSQL keeps
-    ß and maps İ to a plain i, so these domains can never be resolved by local
-    login. Binding one — even with the capability off — would leave a tenant
-    nobody can sign in for, so the run fails up front with its own judgement
-    item and writes nothing (C-119 / C-121).
+    C-122 folds ``ẞ`` to ``ß``, so the second run hits the existing tenant and
+    C-120 ① skips account creation — the tenant's name and stored domain keep
+    the text the first run gave them (C-119).
     """
-    for domain in ("straße.de", "STRAẞE.DE", "İstanbul.com"):
-        outcome, status = await _run(
-            session_factory, domain=domain, email=f"admin@{domain}", local_login_enabled=False
-        )
-        assert outcome.result == BootstrapResult.FAILED, domain
-        assert status != 0
-        assert "DOMAIN_FOLD_INCONSISTENT" in outcome.reason, outcome.reason
-    assert await _rows(session_factory, Tenant) == []
-    assert await _rows(session_factory, User) == []
+    _, status = await _run(session_factory, domain="straße.de", email="admin@straße.de")
+    assert status == 0
+
+    outcome, status = await _run(
+        session_factory,
+        name="Completely Different",
+        domain="STRAẞE.DE",
+        email="admin@straße.de",
+    )
+    assert outcome.result == BootstrapResult.SKIPPED
+    assert status == 0
+
+    tenants = await _rows(session_factory, Tenant)
+    assert len(tenants) == 1
+    assert tenants[0].name == _NAME
+    assert tenants[0].sso_domain == "straße.de"
+    assert tenants[0].status == "active"
+    users = await _rows(session_factory, User)
+    assert len(users) == 1
 
 
 @pytest.mark.asyncio
-async def test_refused_domain_is_unreachable_through_the_real_login_endpoint(
-    session_factory,
-) -> None:  # type: ignore[no-untyped-def]
-    """The refused ß spelling also fails at ``POST /api/auth/login/local`` (C-111).
+async def test_dotted_capital_i_domain_binds_and_resolves(session_factory) -> None:  # type: ignore[no-untyped-def]
+    """``İstanbul.com`` binds, and its admin signs in under another casing (C-122).
 
-    Pre-existing data is what a refusal cannot prevent; the same address through
-    the real endpoint casefolds to ``strasse.de`` and reaches no tenant, which
-    is exactly why the bootstrap must not bind such a domain.
+    ``İ`` folds to ``i`` plus a combining dot, so ``İSTANBUL.COM`` and
+    ``İstanbul.com`` are one domain — and the stored text keeps the dot pattern
+    the deployment supplied.
     """
-    from harness import LOGIN_PATH, error_code, start
+    from harness import LOGIN_PATH, start
 
-    await seed_tenant(session_factory, domain="straße.de", name="Strassen")
+    outcome, status = await _run(session_factory, domain="İstanbul.com", email="admin@İstanbul.com")
+    assert outcome.result == BootstrapResult.SUCCESS
+    assert status == 0
+    tenants = await _rows(session_factory, Tenant)
+    assert [t.sso_domain for t in tenants] == ["İstanbul.com"]
+
     harness = await start(session_factory)
     try:
-        for email in ("admin@straße.de", "admin@STRAẞE.DE"):
-            login = await harness.http.post(
-                LOGIN_PATH, json={"email": email, "password": _PASSWORD}
-            )
-            assert login.status_code == 403, login.text
-            assert error_code(login) == "TENANT_NOT_FOUND"
+        login = await harness.http.post(
+            LOGIN_PATH, json={"email": "admin@İSTANBUL.COM", "password": _PASSWORD}
+        )
+        assert login.status_code == 200, login.text
+        assert login.json() == {"data": {"mustChangePassword": True}}
     finally:
         await harness.close()
 
 
 @pytest.mark.asyncio
 async def test_ascii_ss_domain_is_usable_and_login_reachable(session_factory) -> None:  # type: ignore[no-untyped-def]
-    """A domain whose folds agree (ASCII 'SS') is bound and its admin can sign in."""
+    """An ASCII ``SS`` domain is bound as given and its admin can sign in (C-122)."""
     from harness import LOGIN_PATH, start
 
     outcome, status = await _run(session_factory, domain="STRASSE.DE", email="admin@STRASSE.DE")

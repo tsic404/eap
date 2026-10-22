@@ -20,6 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import noload
 
 from app.auth.password import verify_password
+from app.auth.tenants import resolve_tenant_by_email_domain
 from app.bootstrap import seed_local_family
 from app.config import Settings
 from app.models.tenant import Tenant
@@ -180,6 +181,23 @@ async def test_bootstrap_does_not_create_when_a_platform_admin_exists(session_fa
     admins = [user for user in users if user.role == "platform_admin"]
     assert [user.id for user in admins] == [existing.id]
     assert not [user for user in users if user.account_source == ACCOUNT_SOURCE_LOCAL]
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_matches_an_existing_tenant_by_fold_not_by_text(session_factory) -> None:  # type: ignore[no-untyped-def]
+    """A domain seeded in another case owns the domain; a second row would be ambiguous."""
+    existing = await seed_tenant(session_factory, domain="ACME.COM", name="Acme")
+
+    await _run_bootstrap(session_factory, enabled=False)
+
+    async with session_factory() as session:
+        tenants = list((await session.execute(select(Tenant).options(noload("*")))).scalars().all())
+    assert [tenant.id for tenant in tenants] == [existing.id]
+    assert tenants[0].sso_domain == "ACME.COM"
+
+    async with session_factory() as session:
+        resolved = await resolve_tenant_by_email_domain(session, _ALICE_EMAIL)
+    assert resolved.id == existing.id
 
 
 @pytest.mark.asyncio

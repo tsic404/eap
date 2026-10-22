@@ -19,6 +19,7 @@ from harness import (
     CHANGE_PASSWORD_PATH,
     LOGIN_PATH,
     REFRESH_PATH,
+    error_code,
     refresh_cookie,
     start,
 )
@@ -48,6 +49,8 @@ _ADMIN_NAME = "Platform Admin"
 _PASSWORD = "initial-bootstrap-pw-01"
 _NEW_PASSWORD = "post-change-pw-02"
 _SHORT_PASSWORD = "seven77"
+_SS_DOMAIN = "straße.de"
+_SS_ADMIN_EMAIL = "admin@straße.de"
 
 
 async def _run(
@@ -117,6 +120,40 @@ async def test_empty_db_bootstrap_creates_tenant_and_first_admin(session_factory
     actions = {audit.action for audit in audits}
     assert actions == {ACTION_TENANT_CREATED, ACTION_ADMIN_CREATED}
     assert all(audit.user_id is None for audit in audits)
+
+
+@pytest.mark.asyncio
+async def test_ss_domain_binds_and_its_capital_variant_logs_in(session_factory) -> None:  # type: ignore[no-untyped-def]
+    """A ``ß`` domain bootstraps, and only its own fold-equal spelling reaches it.
+
+    C-122 maps ``STRAẞE.DE`` onto ``straße.de`` and leaves ``strasse.de`` a
+    different domain: the first spelling signs the seeded admin in, the second
+    answers the same 403 as an unknown domain.
+    """
+    outcome, status = await _run(
+        session_factory,
+        tenant_domain=_SS_DOMAIN,
+        admin_email=_SS_ADMIN_EMAIL,
+    )
+    assert outcome.result == BootstrapResult.SUCCESS
+    assert status == 0
+
+    tenants = await _rows(session_factory, Tenant)
+    assert [t.sso_domain for t in tenants] == [_SS_DOMAIN]
+    users = await _rows(session_factory, User)
+    assert [u.email for u in users] == [_SS_ADMIN_EMAIL]
+
+    harness = await start(session_factory)
+    try:
+        same_domain = await _sign_in(harness.http, email="admin@STRAẞE.DE", password=_PASSWORD)
+        assert same_domain.status_code == 200, same_domain.text
+        assert same_domain.json() == {"data": {"mustChangePassword": True}}
+
+        other_domain = await _sign_in(harness.http, email="admin@strasse.de", password=_PASSWORD)
+        assert other_domain.status_code == 403, other_domain.text
+        assert error_code(other_domain) == "TENANT_NOT_FOUND"
+    finally:
+        await harness.close()
 
 
 @pytest.mark.asyncio

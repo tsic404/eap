@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 import jwt
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import RedirectResponse
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,6 +31,7 @@ from app.auth.state_store import OidcStateStore
 from app.auth.tenants import resolve_tenant_by_email_domain
 from app.config import Settings
 from app.core.exceptions import AuthError
+from app.core.folding import fold
 from app.db import get_session
 from app.models.user import ACCOUNT_SOURCE_SSO, LOCAL_SUBJECT_PREFIX, User
 from app.rate_limit import client_ip
@@ -170,7 +171,7 @@ async def _resolve_user(
             select(User.id)
             .where(
                 User.tenant_id == tenant_id,
-                func.lower(User.email) == email.casefold(),
+                User.email_folded == fold(email),
             )
             .limit(1)
         )
@@ -210,7 +211,7 @@ async def _resolve_user(
                 User.account_source == ACCOUNT_SOURCE_SSO,
             )
         )
-        if stored is None or stored.email.casefold() != email.casefold():
+        if stored is None or stored.email_folded != fold(email):
             raise AuthError(409, "ACCOUNT_EXISTS", "Account already exists") from None
         # A peer callback committed this very identity and address: the repeat
         # submission continues on the account that landed.

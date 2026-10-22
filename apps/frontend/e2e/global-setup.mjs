@@ -44,15 +44,17 @@ const BACKEND_PYTHON =
 // Only these databases may be destroyed without an explicit opt-in.
 const DISPOSABLE_DB_RE = /_(?:e2e|test)$/;
 
+// The folded columns are the C-122 comparison keys the application writes; this
+// seed carries only ASCII fixture values, where SQL ``lower()`` is that fold.
 const SEED_SQL = `
-  INSERT INTO tenants (id, name, slug, sso_domain, sso_provider, quota_limit, quota_used, status)
-  SELECT gen_random_uuid(), 'Acme', 'acme-e2e', 'acme.com', 'oidc', 10000, 0, 'active'
+  INSERT INTO tenants (id, name, slug, sso_domain, sso_domain_folded, sso_provider, quota_limit, quota_used, status)
+  SELECT gen_random_uuid(), 'Acme', 'acme-e2e', 'acme.com', lower('acme.com'), 'oidc', 10000, 0, 'active'
   WHERE NOT EXISTS (SELECT 1 FROM tenants WHERE sso_domain = 'acme.com');
 
   -- alice is the admin identity: the RBAC e2e asserts she reaches /admin.
   -- bob is left unseeded so the backend auto-creates him as employee.
-  INSERT INTO users (id, tenant_id, sso_sub, email, name, role, status)
-  SELECT gen_random_uuid(), t.id, 'user-1', 'alice@acme.com', 'Alice', 'agent_admin', 'active'
+  INSERT INTO users (id, tenant_id, sso_sub, email, email_folded, name, role, status)
+  SELECT gen_random_uuid(), t.id, 'user-1', 'alice@acme.com', lower('alice@acme.com'), 'Alice', 'agent_admin', 'active'
   FROM tenants t
   WHERE t.sso_domain = 'acme.com'
     AND NOT EXISTS (SELECT 1 FROM users u WHERE u.tenant_id = t.id AND u.sso_sub = 'user-1');
@@ -63,8 +65,8 @@ function localAccountSeedSql(passwordHash) {
   return Object.entries(LOCAL_ACCOUNTS)
     .map(
       ([key, account]) => `
-  INSERT INTO users (id, tenant_id, sso_sub, email, name, role, status, account_source, password_hash, must_change_password)
-  SELECT gen_random_uuid(), t.id, 'local:${key}', '${account.email}', '${account.name}',
+  INSERT INTO users (id, tenant_id, sso_sub, email, email_folded, name, role, status, account_source, password_hash, must_change_password)
+  SELECT gen_random_uuid(), t.id, 'local:${key}', '${account.email}', lower('${account.email}'), '${account.name}',
          '${account.role}', 'active', 'local', '${passwordHash}', ${account.mustChangePassword === true}
   FROM tenants t
   WHERE t.sso_domain = 'acme.com'

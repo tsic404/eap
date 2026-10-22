@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from harness import seed_tenant, seed_user
+from harness import error_code, seed_tenant, seed_user
 from sqlalchemy import select
 from sqlalchemy.orm import noload
 
@@ -34,6 +34,7 @@ _DOMAIN = "acme.com"
 _EMAIL = "admin@acme.com"
 _PASSWORD = "initial-bootstrap-pw-11"
 _SHORT_PASSWORD = "seven77"
+_OTHER_PASSWORD = "initial-bootstrap-pw-12"
 
 
 async def _run(
@@ -89,6 +90,64 @@ async def test_two_fold_equal_domains_fail_ambiguously_without_writes(session_fa
     assert sorted(t.sso_domain for t in tenants) == ["ACME.COM", "acme.com"]
     assert await _rows(session_factory, User) == []
     assert await _rows(session_factory, AuditLog) == []
+
+
+@pytest.mark.asyncio
+async def test_fold_inequivalent_domains_coexist_and_each_resolves_its_own(
+    session_factory,
+) -> None:  # type: ignore[no-untyped-def]
+    """``straße.de`` and ``strasse.de`` are two domains: no ambiguity, own logins.
+
+    C-122 keeps ``ß`` and ``ss`` apart, so binding one never counts the other as
+    a second match, and each login spelling reaches only the tenant it folds to.
+    """
+    from harness import LOGIN_PATH, start
+
+    sharp_s = await seed_tenant(session_factory, domain="straße.de", name="Strasse Sharp S")
+    plain = await seed_tenant(session_factory, domain="strasse.de", name="Strasse Plain")
+    await seed_user(session_factory, sharp_s, email="admin@straße.de", password=_PASSWORD)
+    await seed_user(session_factory, plain, email="admin@strasse.de", password=_OTHER_PASSWORD)
+
+    outcome, status = await _run(session_factory, domain="STRAẞE.DE", email="root@straße.de")
+    assert outcome.result == BootstrapResult.SUCCESS
+    assert status == 0
+    tenants = await _rows(session_factory, Tenant)
+    assert len(tenants) == 2
+    root = next(u for u in await _rows(session_factory, User) if u.email == "root@straße.de")
+    assert root.tenant_id == sharp_s.id
+
+    harness = await start(session_factory)
+    try:
+        for email, password in (
+            ("admin@straße.de", _PASSWORD),
+            ("admin@STRAẞE.DE", _PASSWORD),
+            ("admin@strasse.de", _OTHER_PASSWORD),
+            ("admin@STRASSE.DE", _OTHER_PASSWORD),
+        ):
+            login = await harness.http.post(LOGIN_PATH, json={"email": email, "password": password})
+            assert login.status_code == 200, (email, login.text)
+        # Each spelling refuses the other tenant's password: it resolved to one
+        # tenant, and that tenant is the one its own domain folds to.
+        for email, password in (
+            ("admin@straße.de", _OTHER_PASSWORD),
+            ("admin@strasse.de", _PASSWORD),
+        ):
+            login = await harness.http.post(LOGIN_PATH, json={"email": email, "password": password})
+            assert login.status_code == 401, (email, login.text)
+            assert error_code(login) == "INVALID_CREDENTIALS"
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_domain_input_with_at_sign_fails_distinctly(session_factory) -> None:  # type: ignore[no-untyped-def]
+    """C-119: the input is the domain itself, never an address to parse."""
+    outcome, status = await _run(session_factory, domain="admin@acme.de")
+    assert outcome.result == BootstrapResult.FAILED
+    assert status != 0
+    assert "@" in outcome.reason
+    assert "AMBIGUOUS" not in outcome.reason
+    assert await _snapshot(session_factory) == (0, 0, 0)
 
 
 @pytest.mark.asyncio

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import noload
 
@@ -25,6 +25,7 @@ from app.auth.password import hash_password, verify_password
 from app.auth.tenants import resolve_tenant_by_email_domain
 from app.config import Settings
 from app.core.exceptions import AuthError
+from app.core.folding import fold
 from app.errors import AppError
 from app.models.user import User
 from app.rate_limit import LOCAL_LOGIN_PATH, TokenBucket, bucket_key, login_rule
@@ -80,8 +81,9 @@ class LocalLoginService:
         # ④ Tenant matched by email domain, folded like the callback (C-23).
         tenant = await resolve_tenant_by_email_domain(session, address)
 
-        # ⑤ Failure lockout: refuses without verifying the password.
-        identifier = f"{tenant.id}:{address}"
+        # ⑤ Failure lockout: refuses without verifying the password. The counter
+        # key is the folded address (C-122 ③), so case variants share one budget.
+        identifier = f"{tenant.id}:{fold(address)}"
         if await self._attempts.is_locked(identifier):
             raise AuthError(429, "LOGIN_LOCKED", "Too many failed login attempts")
 
@@ -129,8 +131,8 @@ class LocalLoginService:
 
     @staticmethod
     def _require_credentials(email: Any, password: Any) -> tuple[str, str]:
-        """Return the folded address and the password, or the 422 of step ③."""
-        address = email.strip().casefold() if isinstance(email, str) else ""
+        """Return the address as given and the password, or the 422 of step ③."""
+        address = email.strip() if isinstance(email, str) else ""
         secret = password if isinstance(password, str) else ""
         missing = [
             name
@@ -155,17 +157,18 @@ class LocalLoginService:
     ) -> User | None:
         """Load the tenant's account for ``email``; None when it is not exactly one.
 
-        Addresses are one identifier regardless of case: the local part is folded
-        for the lookup and for the failure counter alike, so a differently cased
-        address neither reaches another account nor sidesteps the lockout. Two
-        rows folding onto one address is contradictory data and reads as no
-        account, rather than picking one the caller may not have meant.
+        Addresses are one identifier regardless of case: the whole address is
+        folded (C-122 ③) for the lookup and for the failure counter alike, so a
+        differently cased address neither reaches another account nor sidesteps
+        the lockout. Two rows folding onto one address is contradictory data and
+        reads as no account, rather than picking one the caller may not have
+        meant.
         """
         users = (
             (
                 await session.execute(
                     select(User)
-                    .where(User.tenant_id == tenant_id, func.lower(User.email) == email)
+                    .where(User.tenant_id == tenant_id, User.email_folded == fold(email))
                     .limit(2)
                     # Scalars only: skip the selectin loads (sessions, runs, tasks).
                     .options(noload("*"))
