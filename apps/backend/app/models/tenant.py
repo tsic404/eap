@@ -4,10 +4,18 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import CheckConstraint, DateTime, Integer, String, UniqueConstraint, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Integer,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
+from app.core.folding import fold
 from app.models.base import Base
 
 if TYPE_CHECKING:
@@ -28,6 +36,12 @@ class Tenant(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     sso_domain: Mapped[str | None] = mapped_column(String(255))
+    # Comparison key for ``sso_domain`` (C-122): the stored text stays as the
+    # deployment gave it, this column carries the fold every lookup matches on.
+    # ``C`` keeps the database's equality test on code points whatever the
+    # database or connection collation is, and the width leaves the fold room
+    # to expand (``İ`` becomes two code points).
+    sso_domain_folded: Mapped[str | None] = mapped_column(String(512, collation="C"), index=True)
     sso_provider: Mapped[str] = mapped_column(String(50), default="local", nullable=False)
     sso_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     quota_limit: Mapped[int] = mapped_column(Integer, default=10000, nullable=False)
@@ -64,6 +78,12 @@ class Tenant(Base):
     audit_logs: Mapped[list[AuditLog]] = relationship(
         back_populates="tenant", cascade="all, delete-orphan", lazy="selectin"
     )
+
+    @validates("sso_domain")
+    def _fold_sso_domain(self, _key: str, value: str | None) -> str | None:
+        """Keep the comparison key in step with every write of the stored domain."""
+        self.sso_domain_folded = fold(value) if isinstance(value, str) else None
+        return value
 
     __table_args__ = (
         # One tenant per SSO domain: a second row matching the same email domain

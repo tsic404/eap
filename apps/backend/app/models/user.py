@@ -16,8 +16,9 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
+from app.core.folding import fold
 from app.models.base import Base
 
 if TYPE_CHECKING:
@@ -48,6 +49,11 @@ class User(Base):
     )
     sso_sub: Mapped[str] = mapped_column(String(255), nullable=False)
     email: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Comparison key for ``email`` (C-122 ③): the stored address stays exactly
+    # as given; this column carries the fold lookups and uniqueness match on.
+    # ``C`` keeps that comparison on code points whatever the database or
+    # connection collation is, and the width leaves the fold room to expand.
+    email_folded: Mapped[str] = mapped_column(String(512, collation="C"), nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     department: Mapped[str | None] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(50), default="employee", nullable=False)
@@ -93,17 +99,24 @@ class User(Base):
         back_populates="user", foreign_keys="RunLog.user_id", lazy="selectin"
     )
 
+    @validates("email")
+    def _fold_email(self, _key: str, value: str) -> str:
+        """Keep the comparison key in step with every write of the address."""
+        self.email_folded = fold(value)
+        return value
+
     __table_args__ = (
         UniqueConstraint("tenant_id", "sso_sub", name="uq_users_tenant_sso_sub"),
         UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),
         # One address is one account per tenant whatever its case (C-103/C-114):
         # the service folds the address when it looks for a conflict, so the
-        # database folds it too and two concurrent creates cannot both land.
-        # The case-sensitive key above still backs lookups by the stored text.
+        # database holds the same fold and two concurrent creates cannot both
+        # land. The case-sensitive key above still backs lookups by the stored
+        # text.
         Index(
-            "uq_users_tenant_email_lower",
+            "uq_users_tenant_email_folded",
             "tenant_id",
-            text("lower(email)"),
+            "email_folded",
             unique=True,
         ),
         # Anchor for composite FKs: enables child tables to reference a user

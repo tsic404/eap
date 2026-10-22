@@ -29,13 +29,14 @@ from enum import StrEnum
 from typing import Any, TextIO, cast
 
 import structlog
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.password import format_error, hash_password
 from app.auth.tenants import resolve_tenant_by_email_domain
 from app.config import get_settings
 from app.core.exceptions import AuthError
+from app.core.folding import fold
 from app.db import async_session_factory
 from app.models.audit_log import AuditLog
 from app.models.tenant import Tenant
@@ -202,6 +203,9 @@ def _validate_inputs(tenant_name: object, tenant_domain: object) -> Outcome | No
         return Outcome(BootstrapResult.FAILED, "tenant name must be a non-empty string")
     if not isinstance(tenant_domain, str) or not tenant_domain.strip():
         return Outcome(BootstrapResult.FAILED, "tenant domain must be a non-empty string")
+    if "@" in tenant_domain.strip():
+        # C-119: the input is the domain itself, never an address to parse.
+        return Outcome(BootstrapResult.FAILED, "tenant domain must not contain '@'")
     return None
 
 
@@ -230,12 +234,6 @@ async def _bootstrap_locked(
     admin_password: str,
     local_login_enabled: bool,
 ) -> Outcome:
-    # C-119: the tenant domain is the email domain the login paths resolve.
-    # A domain whose local-login fold differs from the stored fold can never be
-    # reached by that path, so binding it would create a tenant nobody can sign
-    # in to — fail before any write, with its own judgement item.
-    await _ensure_local_login_resolves(session, tenant_domain)
-
     hits = await _matching_tenants(session, tenant_domain)
     if len(hits) > 1:
         # Only pre-existing data outside this action can produce this (C-119).
@@ -303,43 +301,15 @@ async def _bootstrap_locked(
     return Outcome(BootstrapResult.SUCCESS)
 
 
-async def _ensure_local_login_resolves(session: AsyncSession, tenant_domain: str) -> None:
-    """Refuse a domain the local login path can never resolve (C-119/C-121).
-
-    ``LocalLoginService`` casefolds the whole address before
-    ``resolve_tenant_by_email_domain``; the resolver then lowercases the domain
-    and compares it with SQL ``lower(sso_domain)``. Where those folds disagree
-    (ß expands to 'ss' in casefold; İ maps to a plain 'i' in the database) the
-    bound domain is unreachable by local login. The run fails before any write
-    with its own judgement item instead of creating such a tenant.
-    """
-    raw = tenant_domain.strip()
-    login_domain = raw.casefold().rsplit("@", 1)[-1].lower()
-    stored_domain = await session.scalar(text("SELECT lower(:value)"), {"value": raw})
-    if login_domain != stored_domain:
-        raise BootstrapError(
-            "DOMAIN_FOLD_INCONSISTENT: local login cannot resolve this tenant domain"
-        )
-
-
 async def _matching_tenants(session: AsyncSession, tenant_domain: str) -> list[Tenant]:
     """Tenants whose domain folds onto the input; domain-less tenants never match.
 
-    The fold is the login paths' (C-23 / C-111), reproduced from
-    ``app/auth/tenants.py``: ``str.lower()`` on the input and SQL ``lower()`` on
-    the stored value. Python ``casefold()`` folds characters the login path does
-    not (ß → ss), so a casefold on only one side silently diverges from the
-    tenant the login paths would resolve.
+    The fold is the login paths' own (C-122, via ``app/core/folding.py``), so the
+    target this action picks is the tenant both login paths would resolve.
     """
-    domain = tenant_domain.strip().lower()
+    domain = fold(tenant_domain.strip())
     rows = (
-        (
-            await session.execute(
-                select(Tenant)
-                .where(Tenant.sso_domain.is_not(None), func.lower(Tenant.sso_domain) == domain)
-                .limit(2)
-            )
-        )
+        (await session.execute(select(Tenant).where(Tenant.sso_domain_folded == domain).limit(2)))
         .scalars()
         .all()
     )
@@ -363,20 +333,19 @@ async def _create_admin(
     """Create the first local platform admin; any refusal is a failed run (C-114/C-120).
 
     The address must resolve back to this tenant through the local login chain
-    (C-111): the login service casefolds the address and hands it to
-    ``resolve_tenant_by_email_domain``. Reusing that resolver here is the only
-    check that guarantees "accepted by the bootstrap ⇒ can actually sign in";
-    a locally recomputed fold would accept addresses the resolver rejects
-    (ß/İ), creating an administrator that can never log in.
+    (C-111). Reusing that resolver here is the only check that guarantees
+    "accepted by the bootstrap ⇒ can actually sign in": it folds the domain
+    exactly as the login paths do (C-122), so no locally recomputed fold can
+    diverge from them.
     """
     address = email.strip()
     try:
-        resolved = await resolve_tenant_by_email_domain(session, address.casefold())
+        resolved = await resolve_tenant_by_email_domain(session, address)
     except AuthError:
         raise BootstrapError("admin email is outside the tenant domain") from None
     if resolved.id != tenant.id:
         raise BootstrapError("admin email is outside the tenant domain")
-    if await _email_taken(session, tenant, address.casefold()):
+    if await _email_taken(session, tenant, fold(address)):
         raise BootstrapError("admin email is already used by another account")
     admin = User(
         tenant_id=tenant.id,
@@ -399,7 +368,7 @@ async def _email_taken(session: AsyncSession, tenant: Tenant, folded_email: str)
     return (
         await session.scalar(
             select(User.id)
-            .where(User.tenant_id == tenant.id, func.lower(User.email) == folded_email)
+            .where(User.tenant_id == tenant.id, User.email_folded == folded_email)
             .limit(1)
         )
     ) is not None

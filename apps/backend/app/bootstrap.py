@@ -13,11 +13,12 @@ import asyncio
 import uuid
 
 import structlog
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.password import hash_password
 from app.config import Settings, get_settings
+from app.core.folding import fold, fold_email_domain
 from app.db import async_session_factory
 from app.models.tenant import Tenant
 from app.models.user import (
@@ -42,7 +43,12 @@ async def seed_local_family(session: AsyncSession, settings: Settings) -> None:
     # so a second run observes the first run's rows instead of racing them.
     await session.execute(text("SELECT pg_advisory_xact_lock(hashtext('eap:seed:mock-idp'))"))
 
-    tenant = await session.scalar(select(Tenant).where(Tenant.sso_domain == TENANT_DOMAIN))
+    # Match the fold, not the stored text (C-122): a bring-up that wrote the
+    # domain in another case owns the same domain, and a second fold-equal row
+    # would answer every login on it with TENANT_AMBIGUOUS.
+    tenant = await session.scalar(
+        select(Tenant).where(Tenant.sso_domain_folded == fold(TENANT_DOMAIN))
+    )
     if tenant is None:
         tenant = Tenant(
             name="Acme",
@@ -106,9 +112,7 @@ async def _add_local_admin(session: AsyncSession, tenant: Tenant, settings: Sett
     # Local login resolves the tenant by email domain (C-111 ④), so an address
     # outside the seeded tenant's domain would seed an administrator nobody can
     # sign in as — refuse instead, like the other unusable bootstrap inputs.
-    domain = email.rsplit("@", 1)[-1].casefold()
-    tenant_domain = (tenant.sso_domain or "").casefold()
-    if not tenant_domain or domain != tenant_domain:
+    if not tenant.sso_domain_folded or fold_email_domain(email) != tenant.sso_domain_folded:
         raise RuntimeError(
             f"LOCAL_ADMIN_EMAIL must be inside the seeded tenant domain "
             f"{tenant.sso_domain!r}, got {email!r}"
@@ -116,7 +120,7 @@ async def _add_local_admin(session: AsyncSession, tenant: Tenant, settings: Sett
 
     conflict = await session.scalar(
         select(User.id)
-        .where(User.tenant_id == tenant.id, func.lower(User.email) == email.casefold())
+        .where(User.tenant_id == tenant.id, User.email_folded == fold(email))
         .limit(1)
     )
     if conflict is not None:

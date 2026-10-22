@@ -21,6 +21,7 @@ from app.auth.password import hash_password
 from app.auth.password_change import PASSWORD_RESET_REASON, set_local_password
 from app.auth.refresh import RefreshService
 from app.config import Settings
+from app.core.folding import fold, fold_email_domain
 from app.errors import AppError, invalid_field, validation_error
 from app.models.tenant import Tenant
 from app.models.user import ACCOUNT_SOURCE_LOCAL, LOCAL_SUBJECT_PREFIX, User
@@ -94,15 +95,14 @@ class MemberService:
             raise AppError(404, "NOT_FOUND", "Not Found")
 
         email, name, password = self._creation_fields(body)
-        domain = email.rsplit("@", 1)[-1]
-        if tenant.sso_domain is None or domain.casefold() != tenant.sso_domain.casefold():
+        if tenant.sso_domain_folded is None or fold_email_domain(email) != tenant.sso_domain_folded:
             raise validation_error(invalid_field("email", "Email must be inside the tenant domain"))
 
         # One address is one account per tenant whatever its case, and an
         # account of the other source blocks the address just the same (C-114).
         existing = await session.scalar(
             select(User.id)
-            .where(User.tenant_id == tenant.id, func.lower(User.email) == email.casefold())
+            .where(User.tenant_id == tenant.id, User.email_folded == fold(email))
             .limit(1)
         )
         if existing is not None:

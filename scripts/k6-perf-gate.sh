@@ -33,6 +33,8 @@ import uuid
 async def main() -> None:
     import asyncpg
 
+    from app.core.folding import fold
+
     conn = await asyncpg.connect(
         os.environ["DATABASE_URL"].replace("postgresql+asyncpg://", "postgresql://")
     )
@@ -40,17 +42,21 @@ async def main() -> None:
     user_id = uuid.uuid4()
     # Unique slug/agent ids so re-runs on the same DB (local tuning) don't collide.
     suffix = uuid.uuid4().hex[:8]
+    # The folded columns are the comparison keys of C-122; the fixture seeds
+    # them with the application's own operator rather than a SQL approximation.
     await conn.execute(
-        "INSERT INTO tenants (id, name, slug, sso_domain, sso_provider, quota_limit, quota_used, status) "
-        "VALUES ($1, 'Perf', $2, 'perf.local', 'oidc', 10000, 0, 'active')",
+        "INSERT INTO tenants (id, name, slug, sso_domain, sso_domain_folded, sso_provider, quota_limit, quota_used, status) "
+        "VALUES ($1, 'Perf', $2, 'perf.local', $3, 'oidc', 10000, 0, 'active')",
         tenant_id,
         f"perf-{suffix}",
+        fold("perf.local"),
     )
     await conn.execute(
-        "INSERT INTO users (id, tenant_id, sso_sub, email, name, role, status) "
-        "VALUES ($1, $2, 'perf-user', 'perf@perf.local', 'Perf User', 'agent_admin', 'active')",
+        "INSERT INTO users (id, tenant_id, sso_sub, email, email_folded, name, role, status) "
+        "VALUES ($1, $2, 'perf-user', 'perf@perf.local', $3, 'Perf User', 'agent_admin', 'active')",
         user_id,
         tenant_id,
+        fold("perf@perf.local"),
     )
     for i in range(1, 6):
         await conn.execute(
