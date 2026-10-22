@@ -1,5 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 
+import type { Agent } from "@/lib/agent-types";
 import type { Conversation } from "@/lib/conversation-types";
 
 // The browser's same-origin (the reverse proxy, `baseURL`). Derived from the
@@ -51,6 +52,33 @@ export function mockConversation(overrides: Partial<Conversation> = {}): Convers
     agentId: "ag-1",
     agentName: "测试智能体",
     status: "active",
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
+/** A mock agent shaped like a `GET /api/agents` list item. */
+export function mockAgent(overrides: Partial<Agent> = {}): Agent {
+  return {
+    agentId: "ag-1",
+    tenantId: "tenant-1",
+    difyAppId: "app-1",
+    name: "测试智能体",
+    description: null,
+    type: "chat",
+    category: null,
+    icon: null,
+    tags: [],
+    status: "published",
+    modelId: null,
+    modelName: null,
+    modelProvider: null,
+    prompt: null,
+    version: 1,
+    createdBy: null,
+    publishedAt: null,
+    publishedBy: null,
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
     ...overrides,
