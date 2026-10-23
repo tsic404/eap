@@ -410,16 +410,56 @@ async def test_create_maps_dify_name_conflict_to_409() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_propagates_non_conflict_dify_error() -> None:
+async def test_create_maps_non_conflict_dify_error_to_502() -> None:
     tenant = _tenant()
     dify = AsyncMock()
-    dify.create_dataset.side_effect = DifyConsoleError(503, "upstream down")
-    service = _service(dify)
+    dify.create_dataset.side_effect = DifyConsoleError(400, "Default model not found")
+    repo = _FakeRepository()
+    service = _service(dify, repo=repo)
 
-    with pytest.raises(DifyConsoleError):
+    with pytest.raises(AppError) as exc_info:
         await service.create(AsyncMock(), tenant, CreateKnowledgeBaseDto(name="KB"))
 
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.code == "DIFY_ERROR"
+    # Nothing was created upstream, so there is nothing to compensate and no
+    # half-built record may survive the failure.
     dify.delete_dataset.assert_not_awaited()
+    assert repo._kbs == {}
+
+
+@pytest.mark.asyncio
+async def test_create_maps_engine_transport_failure_to_502() -> None:
+    tenant = _tenant()
+    dify = AsyncMock()
+    dify.create_dataset.side_effect = httpx.ConnectError("engine unreachable")
+    service = _service(dify)
+
+    with pytest.raises(AppError) as exc_info:
+        await service.create(AsyncMock(), tenant, CreateKnowledgeBaseDto(name="KB"))
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.code == "DIFY_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_create_maps_api_key_failure_to_502_after_compensating() -> None:
+    tenant = _tenant()
+    dify = AsyncMock()
+    dify.create_dataset.return_value = {"id": "ds-1"}
+    dify.get_dataset_api_keys.side_effect = DifyConsoleError(500, "key endpoint down")
+    repo = _FakeRepository()
+    service = _service(dify, repo=repo)
+
+    with pytest.raises(AppError) as exc_info:
+        await service.create(AsyncMock(), tenant, CreateKnowledgeBaseDto(name="KB"))
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.code == "DIFY_ERROR"
+    # The dataset already exists upstream; the failure must remove it and
+    # leave no local record behind.
+    dify.delete_dataset.assert_awaited_once_with("ds-1")
+    assert repo._kbs == {}
 
 
 @pytest.mark.asyncio
