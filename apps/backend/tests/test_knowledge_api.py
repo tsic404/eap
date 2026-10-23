@@ -266,6 +266,28 @@ def test_create_knowledge_base_duplicate_name_returns_409() -> None:
     dify.create_dataset.assert_not_awaited()
 
 
+def test_create_knowledge_base_maps_upstream_failure_to_502() -> None:
+    tenant = _make_tenant()
+    dify = AsyncMock()
+    dify.create_dataset.side_effect = DifyConsoleError(
+        400, '{"code":"invalid_param","message":"Default model not found"}'
+    )
+    service = _service(dify, repo=_Repo())
+    client, token = _authed_client(service, role="knowledge_admin", tenant=tenant)
+
+    resp = client.post(
+        "/api/knowledge-bases",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "KB"},
+    )
+
+    assert resp.status_code == 502
+    body = resp.json()["error"]
+    assert body["code"] == "DIFY_ERROR"
+    # A failed create leaves no upstream dataset to compensate.
+    dify.delete_dataset.assert_not_awaited()
+
+
 def test_list_knowledge_bases_returns_items_and_total() -> None:
     tenant = _make_tenant()
     service = _service(AsyncMock(), repo=_Repo(_kb(tenant)))

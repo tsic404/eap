@@ -7,6 +7,7 @@ import time
 from datetime import datetime
 from typing import Any, cast
 
+import httpx
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -133,12 +134,14 @@ class KnowledgeService:
                     indexing_technique=_DEFAULT_INDEXING_TECHNIQUE,
                 )
             )
-        except DifyConsoleError as exc:
+        except (DifyConsoleError, httpx.HTTPError) as exc:
             # A concurrent duplicate can slip past the pre-check; Dify answers
             # 409 and it must map to the same conflict, not bubble up as a 500.
-            if exc.status_code == 409:
+            if isinstance(exc, DifyConsoleError) and exc.status_code == 409:
                 raise AppError(409, "KB_NAME_EXISTS", "知识库名称已存在") from exc
-            raise
+            # Everything else is an engine-side failure (C-99): a 502, never
+            # the catch-all 500 that would read as a platform bug.
+            raise AppError(502, "DIFY_ERROR", "Dify request failed") from exc
         dify_dataset_id = dataset["id"]
         try:
             api_key = await self._get_or_create_dataset_api_key()
@@ -152,7 +155,7 @@ class KnowledgeService:
                 type=dto.type,
             )
             await session.commit()
-        except Exception:
+        except Exception as exc:
             # Compensate: a half-created Dify dataset must not leak as an orphan.
             try:
                 await self._dify_console.delete_dataset(dify_dataset_id)
@@ -162,6 +165,8 @@ class KnowledgeService:
                     dify_dataset_id=dify_dataset_id,
                     exc_info=True,
                 )
+            if isinstance(exc, (DifyConsoleError, httpx.HTTPError)):
+                raise AppError(502, "DIFY_ERROR", "Dify request failed") from exc
             raise
         await self._bus.emit(
             KB_CREATED_EVENT,
