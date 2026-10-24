@@ -24,6 +24,7 @@ from app.core.exceptions import AuthError
 from app.db import get_session
 from app.main import create_app
 from app.models.tenant import Tenant
+from app.rate_limit import InMemoryTokenBucket
 from tests.conftest import FakeRedis
 
 _ISSUER = "https://sso.example.com"
@@ -71,6 +72,19 @@ def _settings() -> Settings:
         jwt_private_key=_PRIVATE_PEM,
         jwt_public_key=_PUBLIC_PEM,
     )
+
+
+@pytest.fixture(autouse=True)
+def _private_token_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give every app its own limiter instead of the shared store's counters.
+
+    C-10 meters logins per client IP in a shared store, so the callback-chain
+    cases below — each building its own app — would otherwise draw on one
+    budget: the eleventh login in this file is answered 429. An in-memory
+    bucket per app keeps each case's budget private; the rule table stays the
+    production one.
+    """
+    monkeypatch.setattr("app.main.RedisTokenBucket", lambda _url: InMemoryTokenBucket())
 
 
 def _id_token(*, nonce: str, **overrides: object) -> str:
