@@ -578,6 +578,12 @@ def wait_for_job() -> Callable[..., Any]:
     return _wait
 
 
+def unique_client_ip() -> str:
+    """A fresh synthetic client address, so IP-keyed buckets never mix."""
+    suffix = uuid.uuid4().int
+    return f"10.{(suffix >> 16) & 0xFF}.{(suffix >> 8) & 0xFF}.{suffix & 0xFF}"
+
+
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL", "postgresql+asyncpg://eap:eap_password@localhost:5432/eap"
 )

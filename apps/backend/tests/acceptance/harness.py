@@ -34,6 +34,7 @@ from app.db import get_session
 from app.main import create_app
 from app.models.tenant import Tenant
 from app.models.user import ACCOUNT_SOURCE_LOCAL, ACCOUNT_SOURCE_SSO, User
+from tests.conftest import unique_client_ip
 
 LOGIN_PATH = "/api/auth/login/local"
 CAPABILITY_PATH = "/api/auth/capabilities"
@@ -64,12 +65,6 @@ _PRIVATE_PEM = _KEY.private_bytes(
     serialization.PrivateFormat.PKCS8,
     serialization.NoEncryption(),
 ).decode()
-
-
-def unique_client_ip() -> str:
-    """A fresh loopback-adjacent address per app, so login buckets never mix."""
-    suffix = uuid.uuid4().int
-    return f"10.{(suffix >> 16) & 0xFF}.{(suffix >> 8) & 0xFF}.{suffix & 0xFF}"
 
 
 def access_token(user: User, tenant: Tenant, *, jti: str | None = None) -> str:
