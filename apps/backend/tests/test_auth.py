@@ -24,8 +24,7 @@ from app.core.exceptions import AuthError
 from app.db import get_session
 from app.main import create_app
 from app.models.tenant import Tenant
-from app.rate_limit import InMemoryTokenBucket
-from tests.conftest import FakeRedis
+from tests.conftest import FakeRedis, unique_client_ip
 
 _ISSUER = "https://sso.example.com"
 _CLIENT_ID = "client-123"
@@ -72,19 +71,6 @@ def _settings() -> Settings:
         jwt_private_key=_PRIVATE_PEM,
         jwt_public_key=_PUBLIC_PEM,
     )
-
-
-@pytest.fixture(autouse=True)
-def _private_token_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Give every app its own limiter instead of the shared store's counters.
-
-    C-10 meters logins per client IP in a shared store, so the callback-chain
-    cases below — each building its own app — would otherwise draw on one
-    budget: the eleventh login in this file is answered 429. An in-memory
-    bucket per app keeps each case's budget private; the rule table stays the
-    production one.
-    """
-    monkeypatch.setattr("app.main.RedisTokenBucket", lambda _url: InMemoryTokenBucket())
 
 
 def _id_token(*, nonce: str, **overrides: object) -> str:
@@ -274,7 +260,12 @@ class _FakeIdP:
 
 
 async def _start_callback_flow(
-    idp: _FakeIdP, session_factory, *, redis: FakeRedis | None = None
+    idp: _FakeIdP,
+    session_factory,
+    *,
+    redis: FakeRedis | None = None,
+    tenant_slug: str = "acme",
+    sso_domain: str = "acme.com",
 ) -> tuple[httpx.AsyncClient, httpx.AsyncClient]:
     """Seed a tenant, wire the app to the fake IdP, return (http, mock_http).
 
@@ -282,7 +273,7 @@ async def _start_callback_flow(
     mirroring production where one client serves both.
     """
     async with session_factory() as session:
-        session.add(Tenant(name="Acme", slug="acme", sso_domain="acme.com"))
+        session.add(Tenant(name="Acme", slug=tenant_slug, sso_domain=sso_domain))
         await session.commit()
 
     settings = _settings()
@@ -300,7 +291,11 @@ async def _start_callback_flow(
 
     app.dependency_overrides[get_session] = override_get_session
 
-    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    # Each app stands for its own client: the limiter keys its buckets by
+    # client address, so a fresh one keeps cases from spending one another's.
+    transport = httpx.ASGITransport(
+        app=app, raise_app_exceptions=False, client=(unique_client_ip(), 1234)
+    )
     http = httpx.AsyncClient(transport=transport, base_url="http://test")
     return http, mock_http
 
@@ -742,3 +737,36 @@ async def test_logout_revokes_only_the_presented_access_token(session_factory) -
     finally:
         await http.aclose()
         await mock_http.aclose()
+
+
+@pytest.mark.requires_redis
+@pytest.mark.asyncio
+async def test_login_budget_is_private_to_each_client(session_factory) -> None:  # type: ignore[no-untyped-def]
+    """C-10: one client's spent logins must not refuse another client's first.
+
+    The shared store is what makes this observable: there the login bucket is
+    keyed by client address, so two apps presenting the same address draw on
+    one budget. Each app here presents its own, which is what keeps the
+    callback-chain cases above — thirteen logins in a few seconds — from
+    answering one another with 429.
+    """
+    idp = _FakeIdP()
+    spent, spent_mock = await _start_callback_flow(idp, session_factory)
+    fresh, fresh_mock = await _start_callback_flow(
+        idp, session_factory, tenant_slug="acme-second", sso_domain="second.example.com"
+    )
+    try:
+        for _ in range(10):
+            await _begin_login(spent)
+
+        refused = await spent.get("/api/auth/login", follow_redirects=False)
+        assert refused.status_code == 429, refused.text
+        assert refused.json()["error"]["code"] == "RATE_LIMITED"
+
+        allowed = await fresh.get("/api/auth/login", follow_redirects=False)
+        assert allowed.status_code == 302, allowed.text
+    finally:
+        await spent.aclose()
+        await spent_mock.aclose()
+        await fresh.aclose()
+        await fresh_mock.aclose()
