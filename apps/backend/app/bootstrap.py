@@ -16,7 +16,7 @@ import structlog
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.password import hash_password
+from app.auth.password import format_error, hash_password
 from app.config import Settings, get_settings
 from app.core.folding import fold, fold_email_domain
 from app.db import async_session_factory
@@ -108,6 +108,11 @@ async def _add_local_admin(session: AsyncSession, tenant: Tenant, settings: Sett
             "LOCAL_ADMIN_EMAIL and LOCAL_ADMIN_PASSWORD are required to seed the "
             "first platform administrator"
         )
+    # The same format rule every other set-password path follows (C-113/C-117);
+    # the one-shot bootstrap container must fail rather than seed a weak credential.
+    reason = format_error(settings.local_admin_password)
+    if reason is not None:
+        raise RuntimeError(f"LOCAL_ADMIN_PASSWORD is unusable: {reason}")
 
     # Local login resolves the tenant by email domain (C-111 ④), so an address
     # outside the seeded tenant's domain would seed an administrator nobody can
