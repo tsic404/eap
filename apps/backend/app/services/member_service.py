@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import noload
 
 from app.api_body import required_text
-from app.auth.password import hash_password
+from app.auth.password import format_error, hash_password, verify_password
 from app.auth.password_change import PASSWORD_RESET_REASON, set_local_password
 from app.auth.refresh import RefreshService
 from app.config import Settings
@@ -108,6 +108,12 @@ class MemberService:
         if existing is not None:
             raise AppError(409, "ACCOUNT_EXISTS", "Account already exists")
 
+        # The initial password follows C-113's format rule, judged last so a
+        # combined hit answers for the address (C-114).
+        reason = format_error(password)
+        if reason is not None:
+            raise validation_error(invalid_field("password", reason))
+
         user = User(
             tenant_id=tenant.id,
             sso_sub=f"{LOCAL_SUBJECT_PREFIX}{uuid.uuid4()}",
@@ -168,6 +174,15 @@ class MemberService:
             raise AppError(404, "NOT_FOUND", "Not Found")
 
         password = required_text(body, "password")["password"]
+
+        # Both C-113 rules apply to a reset: the length rule and the demand that
+        # the new password differ from the one it replaces (C-115). Neither is
+        # stored, so a refusal leaves the credential and its tokens untouched.
+        reason = format_error(password)
+        if reason is not None:
+            raise validation_error(invalid_field("password", reason))
+        if member.password_hash and verify_password(password, member.password_hash):
+            raise validation_error(invalid_field("password", "Password is unchanged"))
 
         await set_local_password(
             session,

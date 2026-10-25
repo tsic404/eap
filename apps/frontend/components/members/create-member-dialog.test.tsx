@@ -110,6 +110,26 @@ describe("CreateMemberDialog", () => {
     expect(await screen.findByText("邮箱须使用本租户域名")).toBeTruthy();
   });
 
+  it("echoes a rejected initial password at the password field", async () => {
+    mocks.createMember.mockRejectedValue(
+      axiosError(422, "VALIDATION_ERROR", [
+        {
+          type: "value_error",
+          loc: ["body", "password"],
+          msg: "Password must be between 8 and 128 characters",
+        },
+      ]),
+    );
+    renderDialog();
+
+    fillForm({ password: "1234567" });
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+
+    expect(await screen.findByText("口令须为 8–128 个字符")).toBeTruthy();
+    expect(screen.getByLabelText("初始口令").getAttribute("aria-invalid")).toBe("true");
+    expect(screen.queryByText("操作失败，请稍后重试")).toBeNull();
+  });
+
   it("reports a rejected role as a readable permission failure", async () => {
     mocks.createMember.mockRejectedValue(axiosError(403, "FORBIDDEN"));
     renderDialog();

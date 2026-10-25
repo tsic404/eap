@@ -8,8 +8,10 @@ import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from "@/lib/auth-service";
 import {
   isMemberForbiddenError,
+  isMemberPasswordValidationError,
   isUnavailableError,
   resetMemberPassword,
 } from "@/lib/member-service";
@@ -64,6 +66,18 @@ export function ResetPasswordDialog({ member, onClose, onReset }: ResetPasswordD
         setFormError(t("errors.unavailable"));
       } else if (isMemberForbiddenError(error)) {
         setFormError(t("errors.forbidden"));
+      } else if (isMemberPasswordValidationError(error)) {
+        // Both reset rules share one detail shape; the typed value separates
+        // the length rule from the unchanged rule without reading prose.
+        const length = [...password].length;
+        setFieldError(
+          length < PASSWORD_MIN_LENGTH || length > PASSWORD_MAX_LENGTH
+            ? t("errors.passwordLength", {
+                min: PASSWORD_MIN_LENGTH,
+                max: PASSWORD_MAX_LENGTH,
+              })
+            : t("errors.passwordUnchanged"),
+        );
       } else {
         setFormError(t("errors.generic"));
       }

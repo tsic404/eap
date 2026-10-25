@@ -32,13 +32,31 @@ const MEMBER = {
   mustChangePassword: false,
 };
 
-function axiosError(status: number, code: string): unknown {
+function axiosError(status: number, code: string, details?: unknown): unknown {
   return {
     isAxiosError: true,
-    response: { status, data: { error: { code, message: "failed" } } },
+    response: { status, data: { error: { code, message: "failed", details } } },
     message: "Request failed",
   };
 }
+
+const PASSWORD_REJECTIONS = [
+  {
+    password: "1234567",
+    copy: "口令须为 8–128 个字符",
+    msg: "Password must be between 8 and 128 characters",
+  },
+  {
+    password: "a".repeat(129),
+    copy: "口令须为 8–128 个字符",
+    msg: "Password must be between 8 and 128 characters",
+  },
+  {
+    password: "New-Pass-1",
+    copy: "新口令不得与当前口令相同",
+    msg: "Password is unchanged",
+  },
+];
 
 describe("ResetPasswordDialog", () => {
   beforeEach(() => {
@@ -74,6 +92,35 @@ describe("ResetPasswordDialog", () => {
     expect(await screen.findByText("请输入新口令")).toBeTruthy();
     expect(mocks.resetMemberPassword).not.toHaveBeenCalled();
   });
+
+  it.each(PASSWORD_REJECTIONS)(
+    "echoes a rejected new password at the field: $copy",
+    async ({ password, copy, msg }) => {
+      mocks.resetMemberPassword.mockRejectedValue(
+        axiosError(422, "VALIDATION_ERROR", [
+          { type: "value_error", loc: ["body", "password"], msg },
+        ]),
+      );
+      renderWithIntl(
+        <ResetPasswordDialog
+          member={MEMBER}
+          onClose={mocks.onClose}
+          onReset={mocks.onReset}
+        />,
+      );
+
+      fireEvent.change(screen.getByLabelText("新口令"), {
+        target: { value: password },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "重置" }));
+
+      expect(await screen.findByText(copy)).toBeTruthy();
+      expect(screen.getByLabelText("新口令").getAttribute("aria-invalid")).toBe(
+        "true",
+      );
+      expect(screen.queryByText("操作失败，请稍后重试")).toBeNull();
+    },
+  );
 
   it("reports a 404 as unavailable instead of naming a cause the response does not carry", async () => {
     mocks.resetMemberPassword.mockRejectedValue(axiosError(404, "NOT_FOUND"));
