@@ -178,6 +178,8 @@
       "requiredName": "请输入姓名",
       "requiredPassword": "请输入口令",
       "requiredNewPassword": "请输入新口令",
+      "passwordLength": "口令须为 {min}–{max} 个字符",
+      "passwordUnchanged": "新口令不得与当前口令相同",
       "lastAdmin": "不能停用最后一个平台管理员",
       "selfDisable": "不能停用当前登录的账号",
       "forbidden": "无权限执行此操作",

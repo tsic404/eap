@@ -8,11 +8,13 @@ import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from "@/lib/auth-service";
 import {
   createMember,
   isAccountExistsError,
   isMemberEmailValidationError,
   isMemberForbiddenError,
+  isMemberPasswordValidationError,
   isUnavailableError,
 } from "@/lib/member-service";
 import type { Member } from "@/lib/member-types";
@@ -83,6 +85,13 @@ export function CreateMemberDialog({ open, onClose, onCreated }: CreateMemberDia
         setEmailError(t("errors.accountExists"));
       } else if (isMemberEmailValidationError(error)) {
         setEmailError(t("errors.emailDomain"));
+      } else if (isMemberPasswordValidationError(error)) {
+        setPasswordError(
+          t("errors.passwordLength", {
+            min: PASSWORD_MIN_LENGTH,
+            max: PASSWORD_MAX_LENGTH,
+          }),
+        );
       } else if (isUnavailableError(error)) {
         setFormError(t("errors.unavailable"));
       } else if (isMemberForbiddenError(error)) {

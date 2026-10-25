@@ -89,6 +89,16 @@ export function isMemberEmailValidationError(error: unknown): boolean {
   );
 }
 
+/** The password field failed a C-113 format rule (422). */
+export function isMemberPasswordValidationError(error: unknown): boolean {
+  if (!axios.isAxiosError(error) || error.response?.status !== 422) return false;
+  const body = error.response.data as MemberErrorBody | undefined;
+  return (body?.error?.details ?? []).some(
+    (detail) =>
+      Array.isArray(detail.loc) && detail.loc[detail.loc.length - 1] === "password",
+  );
+}
+
 /**
  * The operation reads as absent (404 `NOT_FOUND`): the capability is off
  * (C-110), the reset target is not a local account, or the member is gone. The
