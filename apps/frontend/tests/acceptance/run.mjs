@@ -4,7 +4,7 @@
  *
  * Run from `apps/frontend` (or through `pnpm acceptance` / `make acceptance-ui`):
  *
- *   node tests/acceptance/run.mjs                  # every frontend TC-tech-* case
+ *   node tests/acceptance/run.mjs                  # every frontend acceptance case
  *   node tests/acceptance/run.mjs TC-tech-ui-01    # one case, by identifier
  *   node tests/acceptance/run.mjs --list           # identifiers available here
  */

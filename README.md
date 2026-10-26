@@ -130,16 +130,16 @@ uv run python -m tests.acceptance --list           # 列出可用标识
 
 验收用例与集成测试共用同一套夹具（Testcontainers PostgreSQL/Redis + Dify mock），同样需要 Docker；CI 的 `pytest -m "not perf"` 会连带执行整套用例（也可 `uv run pytest tests/acceptance`）。
 
-前端用例 `TC-tech-ui-01` 位于 `apps/frontend/tests/acceptance/`，模块名与标识一一对应，执行入口等价：
+前端用例（`TC-tech-ui-01`、`TC-kb-06`）位于 `apps/frontend/tests/acceptance/`，模块名与标识一一对应，执行入口等价：
 
 ```bash
 cd apps/frontend
-pnpm acceptance                  # 全部前端 TC-tech-* 用例
-pnpm acceptance TC-tech-ui-01    # 单条按标识执行
+pnpm acceptance                  # 全部前端用例
+pnpm acceptance TC-kb-06         # 单条按标识执行
 pnpm acceptance --list           # 列出可用标识
 ```
 
-根目录另有 `make acceptance-ui`（单条：`make acceptance-ui TC=TC-tech-ui-01`）。`TC-tech-ops-02` 末条「浏览器请求实际落在同源相对路径」由 `apps/frontend/e2e/same-origin.spec.ts` 在真实浏览器中取证，随 `pnpm test:e2e` 执行。
+根目录另有 `make acceptance-ui`（单条：`make acceptance-ui TC=TC-kb-06`）。`TC-tech-ops-02` 末条「浏览器请求实际落在同源相对路径」由 `apps/frontend/e2e/same-origin.spec.ts` 在真实浏览器中取证，随 `pnpm test:e2e` 执行。
 
 ## QA 环境（SSO 端到端）
 
