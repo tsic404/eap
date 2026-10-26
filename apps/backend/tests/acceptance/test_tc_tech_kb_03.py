@@ -823,7 +823,17 @@ async def test_recall_defaults_the_result_count_to_five_upstream(api) -> None:
     )
 
     assert resp.status_code == 200
-    assert bodies == [{"query": "defaults", "retrieval_model": {"top_k": 5}}]
+    assert bodies == [
+        {
+            "query": "defaults",
+            "retrieval_model": {
+                "search_method": "semantic_search",
+                "reranking_enable": False,
+                "top_k": 5,
+                "score_threshold_enabled": False,
+            },
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -842,7 +852,17 @@ async def test_recall_passes_the_result_count_cap_through_to_upstream(api) -> No
     )
 
     assert resp.status_code == 200
-    assert bodies == [{"query": "capped", "retrieval_model": {"top_k": 10}}]
+    assert bodies == [
+        {
+            "query": "capped",
+            "retrieval_model": {
+                "search_method": "semantic_search",
+                "reranking_enable": False,
+                "top_k": 10,
+                "score_threshold_enabled": False,
+            },
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -862,7 +882,16 @@ async def test_recall_passes_the_score_threshold_through_to_upstream(api) -> Non
 
     assert resp.status_code == 200
     assert bodies == [
-        {"query": "filtered", "retrieval_model": {"top_k": 7, "score_threshold": 0.5}}
+        {
+            "query": "filtered",
+            "retrieval_model": {
+                "search_method": "semantic_search",
+                "reranking_enable": False,
+                "top_k": 7,
+                "score_threshold_enabled": True,
+                "score_threshold": 0.5,
+            },
+        }
     ]
 
 
@@ -882,7 +911,44 @@ async def test_recall_omits_an_absent_score_threshold_upstream(api) -> None:
     )
 
     assert resp.status_code == 200
-    assert bodies == [{"query": "unfiltered", "retrieval_model": {"top_k": 3}}]
+    assert bodies == [
+        {
+            "query": "unfiltered",
+            "retrieval_model": {
+                "search_method": "semantic_search",
+                "reranking_enable": False,
+                "top_k": 3,
+                "score_threshold_enabled": False,
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_recall_sends_the_retrieval_keys_the_upstream_schema_requires(api) -> None:
+    """Dify 1.17 refuses a retrieve payload missing any of these three keys.
+
+    A stub that only replays records cannot catch that refusal, which is how a
+    recall endpoint that was always 502 passed its own suite.
+    """
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    bodies: list[dict[str, Any]] = []
+    _use_stub_retriever(api, _retrieve_handler([_record(0.5, "hit")], bodies=bodies))
+
+    for payload, has_threshold in (({}, False), ({"score_threshold": 0.5}, True)):
+        resp = await api.client.post(
+            f"{_KB_URL}/kb-1/retrieval-test",
+            headers=headers,
+            json={"query": "schema", "retrieval_model": payload},
+        )
+
+        assert resp.status_code == 200
+        model = bodies[-1]["retrieval_model"]
+        assert model["search_method"] == "semantic_search"
+        assert model["reranking_enable"] is False
+        assert model["score_threshold_enabled"] is has_threshold
 
 
 @pytest.mark.asyncio
@@ -922,7 +988,17 @@ async def test_recall_accepts_a_query_at_the_length_bound(api) -> None:
     )
 
     assert resp.status_code == 200
-    assert bodies == [{"query": "x" * 250, "retrieval_model": {"top_k": 5}}]
+    assert bodies == [
+        {
+            "query": "x" * 250,
+            "retrieval_model": {
+                "search_method": "semantic_search",
+                "reranking_enable": False,
+                "top_k": 5,
+                "score_threshold_enabled": False,
+            },
+        }
+    ]
 
 
 @pytest.mark.asyncio

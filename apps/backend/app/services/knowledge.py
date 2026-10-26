@@ -475,15 +475,24 @@ class KnowledgeService:
             # Dataset-scoped bearer: a per-KB key, never the global app key.
             retriever = DifyClientService(self._settings.dify_api_base_url, kb.dify_api_key)
         body: dict[str, Any] = {"query": dto.query}
-        # C-43: the result-count cap is the upstream retrieve call's count cap,
-        # so the 5 default travels upstream even when the client omits the
-        # parameters; an absent score threshold is left out rather than sent as
-        # null, keeping upstream's own "no threshold" behaviour.
+        score_threshold = (
+            None if dto.retrieval_model is None else dto.retrieval_model.score_threshold
+        )
+        # C-43: the result-count cap is the upstream retrieve call's count cap, so
+        # the 5 default travels upstream even when the client omits the parameters.
+        # Dify 1.17 requires the three shape keys on every retrieve payload; the KB
+        # is high_quality-indexed and no rerank provider is configured, so plain
+        # semantic search is the shape that matches it.
         model: dict[str, Any] = {
-            "top_k": 5 if dto.retrieval_model is None else dto.retrieval_model.top_k
+            "search_method": "semantic_search",
+            "reranking_enable": False,
+            "top_k": 5 if dto.retrieval_model is None else dto.retrieval_model.top_k,
+            "score_threshold_enabled": score_threshold is not None,
         }
-        if dto.retrieval_model is not None and dto.retrieval_model.score_threshold is not None:
-            model["score_threshold"] = dto.retrieval_model.score_threshold
+        # An absent threshold is left out rather than sent as null, and the flag
+        # above tells upstream to skip filtering, keeping its no-threshold behaviour.
+        if score_threshold is not None:
+            model["score_threshold"] = score_threshold
         body["retrieval_model"] = model
         try:
             started = time.perf_counter()
