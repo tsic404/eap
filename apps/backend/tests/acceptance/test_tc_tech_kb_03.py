@@ -907,8 +907,8 @@ async def test_recall_rejects_a_result_count_outside_the_one_to_ten_range(api) -
 
 
 @pytest.mark.asyncio
-async def test_recall_accepts_a_query_of_any_length_up_to_one_thousand(api) -> None:
-    """C-43: the query length bound is 1-1000, and 1000 characters is accepted."""
+async def test_recall_accepts_a_query_at_the_length_bound(api) -> None:
+    """C-43: the query length bound is 1-250, and 250 characters is accepted."""
     tenant, user = await api.seed(role="knowledge_admin")
     await api.seed_kb(tenant, kb_id="kb-1")
     headers = api.auth(user, tenant)
@@ -918,16 +918,16 @@ async def test_recall_accepts_a_query_of_any_length_up_to_one_thousand(api) -> N
     resp = await api.client.post(
         f"{_KB_URL}/kb-1/retrieval-test",
         headers=headers,
-        json={"query": "x" * 1000},
+        json={"query": "x" * 250},
     )
 
     assert resp.status_code == 200
-    assert bodies == [{"query": "x" * 1000, "retrieval_model": {"top_k": 5}}]
+    assert bodies == [{"query": "x" * 250, "retrieval_model": {"top_k": 5}}]
 
 
 @pytest.mark.asyncio
-async def test_recall_rejects_a_query_longer_than_one_thousand_characters(api) -> None:
-    """C-43: a query past 1000 characters is refused with 422."""
+async def test_recall_rejects_a_query_past_the_length_bound(api) -> None:
+    """C-43: a query past 250 characters is refused with 422 before any upstream call."""
     tenant, user = await api.seed(role="knowledge_admin")
     await api.seed_kb(tenant, kb_id="kb-1")
     headers = api.auth(user, tenant)
@@ -937,7 +937,7 @@ async def test_recall_rejects_a_query_longer_than_one_thousand_characters(api) -
     resp = await api.client.post(
         f"{_KB_URL}/kb-1/retrieval-test",
         headers=headers,
-        json={"query": "x" * 1001},
+        json={"query": "x" * 251},
     )
 
     assert resp.status_code == 422
