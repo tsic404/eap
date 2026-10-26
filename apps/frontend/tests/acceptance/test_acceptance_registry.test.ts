@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import { ACCEPTANCE_DIR, TECH_TC_IDS, modulePath } from "./registry.mjs";
 
-const MODULE_PATTERN = /^test_tc_tech_[a-z0-9_]+\.test\.tsx$/;
+const MODULE_PATTERN = /^test_tc_[a-z0-9_]+\.test\.tsx$/;
 const RUNNER = path.join(ACCEPTANCE_DIR, "run.mjs");
 
 describe("frontend acceptance registry", () => {

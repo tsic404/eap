@@ -1,27 +1,29 @@
-# 前端验收用例（TC-tech-*）
+# 前端验收用例（TC-*）
 
-设计仓 `docs/03-acceptance.md` 的每条前端技术用例在实现仓有唯一可执行形态：模块名对应用例标识（`TC-tech-ui-01` → `test_tc_tech_ui_01.test.tsx`），模块内 `TC_ID` 与标识一致，断言对应该用例的可观察判据。
+设计仓 `docs/03-acceptance.md` 的每条前端用例在实现仓有唯一可执行形态：模块名对应用例标识（`TC-tech-ui-01` → `test_tc_tech_ui_01.test.tsx`，`TC-kb-06` → `test_tc_kb_06.test.tsx`），模块内 `TC_ID` 与标识一致，断言对应该用例的可观察判据。
 
 | 标识 | AC | 模块 |
 |---|---|---|
 | `TC-tech-ui-01` | AC-T12 | `test_tc_tech_ui_01.test.tsx` |
+| `TC-kb-06` | AC-20 | `test_tc_kb_06.test.tsx` |
 
 ## 按标识执行
 
 ```bash
 cd apps/frontend
-pnpm acceptance                  # 全部前端 TC-tech-* 用例
-pnpm acceptance TC-tech-ui-01    # 单条按标识执行
+pnpm acceptance                  # 全部前端 TC-* 用例
+pnpm acceptance TC-kb-06         # 单条按标识执行
 pnpm acceptance --list           # 列出可用标识
 ```
 
-根目录等价入口：`make acceptance-ui`（单条：`make acceptance-ui TC=TC-tech-ui-01`）。
+根目录等价入口：`make acceptance-ui`（单条：`make acceptance-ui TC=TC-kb-06`）。
 
 ## 取证边界
 
 - `TC-tech-ui-01`：槽位取值在运行时从 `app/globals.css` 读取并复算（未取整，C-84）。class 清单与行内 `style` 扫描基于 TypeScript AST，建模跨元素继承（元素的语义前景对最近祖先的语义背景；条件分支保持为互斥备选），覆盖语义色 pair 的声明完整性。行内色值须写成 `var(--color-<槽位>[, <取值>])`：`<取值>` 是该槽位当前取值的副本，必须逐字相等（防止令牌改名后副本静默漂移），单独出现的颜色字面量即判未声明。**本套件不取证渲染后的计算样式或像素值**；带色 SVG 属性（`stroke` / `fill`）与动态拼接的行内色值不在静态模型内；e2e 的 axe 扫描是独立信号，不承担 pair 声明仲裁。字号由 Tailwind 默认刻度断言（`text-xs` = 0.75rem），非布局后实测。
+- `TC-kb-06`：召回测试界面用例。表单驱动真实 `retrievalTest` 服务，仅桩掉共享 axios 实例，断言界面发出的 `top_k`（5→10）、结果卡片的渲染顺序与无关查询的空状态。上游排序属 `TC-tech-kb-03` 的证据，分数配色与 12px 文本对比度属 `TC-tech-ui-01`，均不在此重复判定；jsdom 不取渲染后的计算样式或像素值。浏览器侧证据在 `e2e/journeys/tc-kb-06-retrieval.spec.ts`（同样的判据在真实 Chromium 中重放，含滑块键盘调节），随 e2e 套件执行（单跑：`pnpm test:e2e e2e/journeys/tc-kb-06-retrieval.spec.ts`）。
 - `TC-tech-ops-02` 末条「浏览器请求实际落在同源相对路径」的浏览器侧证据在 `e2e/same-origin.spec.ts`，随 e2e 套件执行（单跑：`pnpm test:e2e e2e/same-origin.spec.ts`）；后端模块已注明该取证边界。
-- `TC-conv-03`（AC-24）的删除撤销判据是界面用例、不在本套件（本套件按标识承载前端技术用例），其浏览器侧证据在 `e2e/journeys/conversation-delete-undo.spec.ts`，随 e2e 套件执行（单跑：`pnpm test:e2e e2e/journeys/conversation-delete-undo.spec.ts`）。
+- `TC-conv-03`（AC-24）的删除撤销判据是界面用例、不在本套件（本套件按标识承载前端用例），其浏览器侧证据在 `e2e/journeys/conversation-delete-undo.spec.ts`，随 e2e 套件执行（单跑：`pnpm test:e2e e2e/journeys/conversation-delete-undo.spec.ts`）。
 
 ## 已知实现缺口
 
