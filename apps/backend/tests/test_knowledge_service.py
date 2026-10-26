@@ -1250,7 +1250,15 @@ async def test_retrieval_test_returns_citations_score_and_latency() -> None:
     )
 
     assert captured["url"] == "http://dify.test/v1/datasets/ds-1/retrieve"
-    assert captured["body"] == {"query": "what is eap?", "retrieval_model": {"top_k": 5}}
+    assert captured["body"] == {
+        "query": "what is eap?",
+        "retrieval_model": {
+            "search_method": "semantic_search",
+            "reranking_enable": False,
+            "top_k": 5,
+            "score_threshold_enabled": False,
+        },
+    }
     assert [c.content for c in result.citations] == ["chunk one", "chunk two"]
     assert result.citations[0].score == 0.98
     assert result.citations[0].source_name == "report.pdf"
@@ -1286,7 +1294,13 @@ async def test_retrieval_test_passes_the_retrieval_model_through_to_upstream() -
 
     assert captured["body"] == {
         "query": "q",
-        "retrieval_model": {"top_k": 10, "score_threshold": 0.5},
+        "retrieval_model": {
+            "search_method": "semantic_search",
+            "reranking_enable": False,
+            "top_k": 10,
+            "score_threshold_enabled": True,
+            "score_threshold": 0.5,
+        },
     }
     assert result.citations == []
     await retriever.aclose()
@@ -1313,7 +1327,15 @@ async def test_retrieval_test_omits_an_absent_score_threshold_upstream() -> None
     )
 
     # Defaulting to top_k 5 is observable: the count cap travels upstream.
-    assert captured["body"] == {"query": "q", "retrieval_model": {"top_k": 5}}
+    assert captured["body"] == {
+        "query": "q",
+        "retrieval_model": {
+            "search_method": "semantic_search",
+            "reranking_enable": False,
+            "top_k": 5,
+            "score_threshold_enabled": False,
+        },
+    }
     assert result.citations == []
     await retriever.aclose()
 
