@@ -80,7 +80,7 @@ class RetrieveTestModelDto(BaseModel):
 class RetrieveTestDto(BaseModel):
     """Request body for ``POST /api/knowledge-bases/:id/retrieval-test``."""
 
-    query: str = Field(min_length=1, max_length=1000)
+    query: str = Field(min_length=1, max_length=250)
     retrieval_model: RetrieveTestModelDto | None = None
 
 
