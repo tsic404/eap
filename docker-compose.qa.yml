@@ -84,6 +84,11 @@ services:
     environment:
       APP_ENV: development
       LOCAL_LOGIN_ENABLED: "true"
+      # One browser drives the whole suite from one address, and the local-login
+      # journeys spend six requests on the identifier lockout alone. The HTTP
+      # harness raises this bucket for its own run (the CI stack does the same);
+      # the QA variant's default stays at the contract value.
+      RATE_LIMIT_LOGIN_PER_MINUTE: "${RATE_LIMIT_LOGIN_PER_MINUTE:-10}"
       DATABASE_URL: postgresql+asyncpg://eap:eap_password@postgres:5432/eap_e2e
       REDIS_URL: redis://redis:6379/0
       OIDC_ISSUER: http://localhost:${QA_IDP_PORT:-4000}

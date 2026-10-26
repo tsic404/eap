@@ -1,4 +1,4 @@
-.PHONY: setup-env qa-up qa-down qa-keys acceptance acceptance-ui
+.PHONY: setup-env qa-up qa-down qa-keys acceptance acceptance-ui e2e
 
 # 后端验收用例（设计 docs/03-acceptance.md 的 TC-tech-* 标识）。
 # 全部用例：make acceptance；单条：make acceptance TC=TC-tech-kb-01
@@ -31,3 +31,12 @@ qa-up: qa-keys
 
 qa-down:
 	docker compose -f $(QA_COMPOSE) down
+
+# 容器内 e2e：宿主只需 docker（无需 pnpm、可执行浏览器或后端 venv）。
+# 默认跑 e2e/journeys/tc-auth-08-local-login.spec.ts；可换其它只依赖 QA 栈种子
+# 的自足 journey：
+#   make e2e E2E_SPEC=e2e/journeys/tc-auth-09-...spec.ts
+# 完整套件仍走 pnpm --filter @eap/frontend test:e2e（需要宿主工具链与 global-setup）。
+# 报告：artifacts/playwright/report/index.html
+e2e:
+	@./scripts/e2e.sh
