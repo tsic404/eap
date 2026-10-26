@@ -69,6 +69,21 @@ _INSTALLED_BUT_UNCONFIGURED_PROVIDERS = {
         }
     ]
 }
+# Enabled hosted provider whose current quota is no longer valid: Dify answers
+# QUOTA_EXCEEDED, so `enabled` alone must not count as usable.
+_EXHAUSTED_QUOTA_PROVIDERS = {
+    "data": [
+        {
+            "provider": "langgenius/openai/openai",
+            "custom_configuration": {"status": "no-configure", "custom_models": []},
+            "system_configuration": {
+                "enabled": True,
+                "current_quota_type": "trial",
+                "quota_configurations": [{"quota_type": "trial", "is_valid": False}],
+            },
+        }
+    ]
+}
 
 
 class _ConsoleStub:
@@ -148,24 +163,10 @@ def test_health_ready_accepts_enabled_hosted_provider(monkeypatch: pytest.Monkey
 def test_health_ready_rejects_hosted_provider_with_exhausted_quota(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Dify answers QUOTA_EXCEEDED for a hosted provider whose current quota is
-    # invalid, so `enabled` alone must not satisfy the probe.
     _stub_dependency_pings(monkeypatch)
-    payload = {
-        "data": [
-            {
-                "provider": "langgenius/openai/openai",
-                "custom_configuration": {"status": "no-configure", "custom_models": []},
-                "system_configuration": {
-                    "enabled": True,
-                    "current_quota_type": "trial",
-                    "quota_configurations": [{"quota_type": "trial", "is_valid": False}],
-                },
-            }
-        ]
-    }
+    console = _ConsoleStub(payload=_EXHAUSTED_QUOTA_PROVIDERS)
 
-    resp = _ready_client(_ConsoleStub(payload=payload)).get("/api/health/ready")
+    resp = _ready_client(console).get("/api/health/ready")
 
     assert resp.status_code == 503
     assert resp.json()["checks"]["dify"] == "error"
