@@ -8,8 +8,8 @@ from datetime import datetime
 from typing import Any, cast
 
 import httpx
-from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.datastructures import UploadFile
 
 from app.config import Settings
 from app.core.exceptions import DifyApiError
@@ -28,7 +28,7 @@ from app.events.knowledge import (
     KB_CREATED_EVENT,
     KB_DELETED_EVENT,
 )
-from app.files import MAX_FILE_SIZE_BYTES, validate_document_file
+from app.files import FILE_TOO_LARGE_MESSAGE, MAX_FILE_SIZE_BYTES, validate_document_file
 from app.logging_conf import get_logger
 from app.models.knowledge import KnowledgeBaseRegistry, KnowledgeDocument
 from app.models.tenant import Tenant
@@ -262,7 +262,7 @@ class KnowledgeService:
         # is buffered into memory; ``validate_document_file`` re-checks the
         # actual byte count as the authoritative guard.
         if upload.size is not None and upload.size > MAX_FILE_SIZE_BYTES:
-            raise AppError(422, "FILE_TOO_LARGE", "File exceeds the 15 MB limit")
+            raise AppError(422, "FILE_TOO_LARGE", FILE_TOO_LARGE_MESSAGE)
         content = await upload.read()
         validate_document_file(filename, content)
 

@@ -17,6 +17,15 @@ from app.errors import AppError
 # second limit, so the two can never drift.
 MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024
 
+FILE_TOO_LARGE_MESSAGE = "File exceeds the 15 MB limit"
+
+# Multipart framing around the file part is a few hundred bytes. The allowance
+# plus one byte keeps the first rejected size reachable, so the size gate — not
+# the parser — decides what is over the limit; any body above this budget is
+# over the limit by construction. See ``app.uploads``.
+MULTIPART_ENVELOPE_ALLOWANCE_BYTES = 64 * 1024
+MAX_UPLOAD_REQUEST_BYTES = MAX_FILE_SIZE_BYTES + 1 + MULTIPART_ENVELOPE_ALLOWANCE_BYTES
+
 _ALLOWED_EXTENSIONS = frozenset({"pdf", "docx", "xlsx", "txt", "md", "csv", "json", "html"})
 
 # DOCX/XLSX are ZIP archives: the ``PK\x03\x04`` local-file-header signature
@@ -44,7 +53,7 @@ def validate_document_file(filename: str, content: bytes) -> None:
     if len(content) == 0:
         raise AppError(422, "EMPTY_FILE", "File is empty")
     if len(content) > MAX_FILE_SIZE_BYTES:
-        raise AppError(422, "FILE_TOO_LARGE", "File exceeds the 15 MB limit")
+        raise AppError(422, "FILE_TOO_LARGE", FILE_TOO_LARGE_MESSAGE)
 
     ext = _extension(filename)
     if ext not in _ALLOWED_EXTENSIONS:

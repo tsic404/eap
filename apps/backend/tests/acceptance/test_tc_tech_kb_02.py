@@ -10,9 +10,11 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
+from app import uploads
 from app.events.bus import bus
 from app.events.knowledge import DOCUMENT_UPLOADED_EVENT
 
@@ -20,6 +22,7 @@ TC_ID = "TC-tech-kb-02"
 
 _MB = 1024 * 1024
 _FIFTEEN_MIB = 15 * _MB
+_TWENTY_MIB = 20 * _MB
 _KB_URL = "/api/knowledge-bases"
 
 _BOUNDARY = "Tckb02Boundary"
@@ -220,6 +223,69 @@ async def test_size_limit_is_judged_from_received_bytes_without_a_content_length
     assert accepted.status_code == 201
     assert rejected.status_code == 422
     assert rejected.json()["error"]["code"] == "FILE_TOO_LARGE"
+
+
+@pytest.mark.asyncio
+async def test_declared_length_past_the_body_budget_is_refused_before_parsing(
+    api, monkeypatch
+) -> None:
+    """An announced size past the budget never reaches the multipart parser.
+
+    The budget is the in-flight memory bound, so this path must answer from the
+    declared length alone; deleting that pre-check makes the parser run.
+    """
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    parse = AsyncMock()
+    monkeypatch.setattr(uploads.MultiPartParser, "parse", parse)
+
+    resp = await _upload(api, headers, "kb-1", "huge.txt", b"A" * _TWENTY_MIB, "text/plain")
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "FILE_TOO_LARGE"
+    assert not parse.called
+    api.console.upload_file.assert_not_awaited()
+    detail = await api.client.get(f"{_KB_URL}/kb-1", headers=headers)
+    assert detail.json()["data"]["doc_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_streamed_body_past_the_budget_stops_before_the_body_is_sent(api) -> None:
+    """With no declared length, the counted bytes stop the upload mid-body.
+
+    The payload is 20 MiB, so a passing case proves fewer bytes were actually
+    sent and read; deleting the counted-byte check lets the whole body through.
+    """
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    body = _multipart_body("huge.txt", b"A" * _TWENTY_MIB, content_type="text/plain")
+    sent = 0
+
+    async def _counted() -> AsyncIterator[bytes]:
+        nonlocal sent
+        for start in range(0, len(body), _MB):
+            chunk = body[start : start + _MB]
+            sent += len(chunk)
+            yield chunk
+
+    request = api.client.build_request(
+        "POST",
+        f"{_KB_URL}/kb-1/documents",
+        headers={**headers, "content-type": f"multipart/form-data; boundary={_BOUNDARY}"},
+        content=_counted(),
+    )
+
+    resp = await api.client.send(request)
+
+    assert "content-length" not in request.headers
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "FILE_TOO_LARGE"
+    assert sent < _TWENTY_MIB
+    api.console.upload_file.assert_not_awaited()
+    detail = await api.client.get(f"{_KB_URL}/kb-1", headers=headers)
+    assert detail.json()["data"]["doc_count"] == 0
 
 
 @pytest.mark.asyncio

@@ -11,14 +11,16 @@ from __future__ import annotations
 
 from typing import Annotated, cast
 
-from fastapi import APIRouter, Depends, File, Request, UploadFile
+from fastapi import APIRouter, Depends, Request
+from starlette.datastructures import UploadFile
 
 from app.dependencies import get_active_tenant, get_current_user
 from app.dify_console import DifyConsoleClient, DifyConsoleError
 from app.errors import AppError
-from app.files import MAX_FILE_SIZE_BYTES, validate_document_file
+from app.files import FILE_TOO_LARGE_MESSAGE, MAX_FILE_SIZE_BYTES, validate_document_file
 from app.models.user import User
 from app.schemas.conversation import UploadedFileDto
+from app.uploads import OPENAPI_FILE_UPLOAD_BODY, document_upload
 
 router = APIRouter(
     prefix="/api/files",
@@ -29,6 +31,10 @@ router = APIRouter(
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
+# Declared last in the handler signature so the body is only parsed once the
+# caller has passed the tenant and identity gates.
+UploadedDocument = Annotated[UploadFile, Depends(document_upload)]
+
 
 def get_dify_console(request: Request) -> DifyConsoleClient:
     """Resolve the app-scoped Dify console client (wired in ``create_app`` lifespan)."""
@@ -38,11 +44,16 @@ def get_dify_console(request: Request) -> DifyConsoleClient:
 DifyConsole = Annotated[DifyConsoleClient, Depends(get_dify_console)]
 
 
-@router.post("/upload", response_model=UploadedFileDto, status_code=201)
+@router.post(
+    "/upload",
+    response_model=UploadedFileDto,
+    status_code=201,
+    openapi_extra=OPENAPI_FILE_UPLOAD_BODY,
+)
 async def upload_file(
     dify_console: DifyConsole,
     _: CurrentUser,
-    file: Annotated[UploadFile, File(...)],
+    file: UploadedDocument,
 ) -> UploadedFileDto:
     """Upload a document for chat attachment, returning its Dify upload-file id."""
     filename = file.filename or ""
@@ -50,7 +61,7 @@ async def upload_file(
     # buffered into memory; ``validate_document_file`` re-checks the actual
     # byte count as the authoritative guard.
     if file.size is not None and file.size > MAX_FILE_SIZE_BYTES:
-        raise AppError(422, "FILE_TOO_LARGE", "File exceeds the 15 MB limit")
+        raise AppError(422, "FILE_TOO_LARGE", FILE_TOO_LARGE_MESSAGE)
     content = await file.read()
     validate_document_file(filename, content)
 
