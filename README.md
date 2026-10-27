@@ -130,7 +130,7 @@ uv run python -m tests.acceptance --list           # 列出可用标识
 
 验收用例与集成测试共用同一套夹具（Testcontainers PostgreSQL/Redis + Dify mock），同样需要 Docker；CI 的 `pytest -m "not perf"` 会连带执行整套用例（也可 `uv run pytest tests/acceptance`）。
 
-前端用例（`TC-tech-ui-01`、`TC-kb-06`）位于 `apps/frontend/tests/acceptance/`，模块名与标识一一对应，执行入口等价：
+前端用例（`TC-tech-ui-01`、`TC-kb-01`、`TC-kb-06`、`TC-sec-02`）位于 `apps/frontend/tests/acceptance/`，模块名与标识一一对应，成员清单以 `apps/frontend/tests/acceptance/registry.mjs` 为准，执行入口等价：
 
 ```bash
 cd apps/frontend
