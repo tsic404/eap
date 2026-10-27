@@ -92,6 +92,7 @@ class DifyConversationAdapter:
         files: list[dict[str, Any]] | None = None,
         *,
         truncation_notice: bool = False,
+        auto_generate_name: bool | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Yield platform SSE events for one Dify conversation turn.
 
@@ -99,9 +100,15 @@ class DifyConversationAdapter:
         platform's camelCase envelope. ``truncation_notice`` is surfaced on the
         closing ``message_end`` metadata so the client can show the token-limit
         banner without counting messages locally (§31.2.3).
+        ``auto_generate_name`` defaults to naming the first turn's conversation
+        and is disabled by the stateless debug path, which never reopens it.
         """
         self._truncation_notice = truncation_notice
         dify_user = f"{tenant_id}:{user_id}"
+        # Naming is a first-turn concern of a conversation that will be reopened;
+        # a stateless caller (the debug path) opts out explicitly.
+        if auto_generate_name is None:
+            auto_generate_name = not conv_id
         memories = await self._memory.recall(user_id, tenant_id, query) or []
 
         inputs: dict[str, Any] = {
@@ -120,7 +127,7 @@ class DifyConversationAdapter:
             "response_mode": "streaming",
             "conversation_id": conv_id or "",
             "inputs": inputs,
-            "auto_generate_name": not conv_id,
+            "auto_generate_name": auto_generate_name,
         }
         if files:
             body["files"] = [

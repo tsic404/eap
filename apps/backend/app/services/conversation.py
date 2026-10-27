@@ -131,6 +131,18 @@ class _EventPublisher:
         await self._bus.emit(event_name, **payload)
 
 
+class _NoMemoryRecall:
+    """Recall nothing for a debug turn.
+
+    Memory recall is keyed to the end user of a conversation; a debug message is
+    sent by an admin inspecting the agent, so injecting their personal memories
+    would change the agent's prompt in a way no real caller would see.
+    """
+
+    async def recall(self, user_id: str, tenant_id: str, query: str) -> list[dict[str, Any]]:
+        return []
+
+
 class _ToolApprovalGateway:
     """Bridge a Dify tool call to the platform's approval gate.
 
@@ -371,6 +383,63 @@ class ConversationService:
                     conversation.dify_conversation_id = dify_conv_id
                     await session.commit()
                 yield sse_frame(event["event"], data)
+        finally:
+            await client.aclose()
+
+    # ── agent debug turn ──
+
+    async def prepare_debug(
+        self, session: AsyncSession, tenant_id: uuid.UUID, agent_id: str
+    ) -> AgentRegistry:
+        """Resolve the agent a debug turn targets, before any stream header.
+
+        Debugging is how an admin exercises an agent that is not published yet,
+        so the lifecycle status is deliberately not filtered; the tenant is.
+        """
+        agent = await session.get(AgentRegistry, (tenant_id, agent_id))
+        if agent is None or agent.archived_at is not None:
+            raise AppError(404, "AGENT_NOT_FOUND", "Agent not found")
+        if not agent.dify_api_key:
+            raise AppError(409, "AGENT_API_KEY_MISSING", "Agent has no API key")
+        return agent
+
+    async def stream_debug(
+        self, agent: AgentRegistry, user: User, query: str
+    ) -> AsyncIterator[str]:
+        """Stream one stateless debug turn for an admin, yielding SSE frames.
+
+        Every debug message starts a fresh upstream conversation: the platform
+        stores no transcript for it, so there is no history to continue. The
+        adapter still normalises the upstream events and publishes the completed
+        turn, which is what persists the run log (and its trace id).
+        """
+        # ``prepare_debug`` guarantees the key is present.
+        client = DifyClientService(self._settings.dify_api_base_url, cast(str, agent.dify_api_key))
+        adapter = DifyConversationAdapter(
+            client,
+            _NoMemoryRecall(),
+            _EventPublisher(
+                self._bus,
+                agent_id=agent.agent_id,
+                agent_name=agent.name,
+                user_name=user.name,
+                input_text=query,
+                model_name=agent.model_name,
+            ),
+            # Debug runs a gated tool directly: the admin is inspecting what the
+            # tool returns, so an approval task would only block the turn.
+            None,
+        )
+        try:
+            async for event in adapter.stream_messages(
+                "",
+                query,
+                str(user.id),
+                str(user.tenant_id),
+                None,
+                auto_generate_name=False,
+            ):
+                yield sse_frame(event["event"], event.get("data") or {})
         finally:
             await client.aclose()
 
