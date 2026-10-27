@@ -194,6 +194,53 @@ pnpm --filter @eap/frontend test:e2e
 | `E2E_REDIS_PORT` | `6380` | 自管理 Redis 容器的宿主端口 |
 | `E2E_PSQL_DSN` / `E2E_DATABASE_URL` | `…/eap_e2e` | 一次性库 DSN |
 
+### 容器内 e2e 运行器（宿主只需 Docker）
+
+宿主没有 pnpm、没有可执行的 Playwright 浏览器、也没有后端 venv 时，用容器把浏览器用例跑在
+QA 栈上：
+
+```bash
+make e2e                                              # 默认 e2e/journeys/tc-auth-08-local-login.spec.ts
+make e2e E2E_SPEC=e2e/journeys/tc-auth-09-....spec.ts  # 换一条自足 journey
+```
+
+**覆盖范围**：runner 只接**自足 spec**——只依赖 QA 栈的租户 / 本地账号种子与普通 Playwright
+的 journey。完整套件仍走 `playwright.config.mjs`（自起 4 个 webServer 并重放 DB / Redis 准备）；
+依赖该 global setup 的用例（如 `sso.spec.ts`、`admin-rbac.spec.ts`）或依赖应用专属包的用例
+（`a11y.spec.ts` 需要 `@axe-core/playwright`）不在本入口范围内。
+
+`scripts/e2e.sh` 一条命令完成：
+
+1. `scripts/gen-jwt-keys.sh deploy/qa/keys` 生成（或复用）QA 密钥；
+2. `docker compose -f docker-compose.qa.yml up -d --build` 起 QA 栈，等到每个带 healthcheck
+   的常驻服务（postgres / redis / mock-idp / backend / frontend）都是 `healthy`、一次性
+   bootstrap 容器退出码 0、入口 `/api/health` 返回 200，才放行用例；
+3. 清掉上一轮遗留的登录状态（只删 Redis 的 `login:*` 与 `ratelimit:login:*`，会话等其它键不动）——
+   QA 栈的 Redis 是长期存活的，不清理会让上一轮的锁定 / 限流桶漏进本轮；
+4. 在 backend 容器里用应用自己的口令模块种入本地账号（`deploy/e2e/seed_accounts.py`，幂等，
+   对应 `e2e/helpers/accounts.cjs`）；
+5. 从 `pnpm-lock.yaml` 取 `@playwright/test` 版本作为 build arg，用 `deploy/e2e/Dockerfile`
+   （`node:22-bookworm-slim` + `npm ci` 按 `deploy/e2e/package-lock.json` + `playwright install
+   --with-deps chromium`）构建 runner 镜像；版本与 `deploy/e2e/package.json` 不一致时构建失败；
+6. 在 runner 容器里用 `playwright.stack.config.mjs` 对**已起的栈**跑指定 spec；该配置不启动
+   webServer（`playwright.config.mjs` 的自起栈入口保持原样）。
+
+产物：`artifacts/playwright/report/index.html`（HTML 报告）与
+`artifacts/playwright/test-results/`（截图 / 轨迹）。
+
+已知前提与环境变量：
+
+- 宿主需 Linux + Docker（runner 用 `--network host` 让浏览器从 `http://localhost:8090` 同源
+  访问，与 CI 一致）；其它平台用 `E2E_DOCKER_NETWORK` 指定可解析入口的网络。
+- `E2E_BASE_URL` 覆盖入口地址（默认 `http://localhost:${QA_PROXY_PORT:-8090}`），不写死。
+- `E2E_SPEC` 选择自足用例，`E2E_ARTIFACTS` 改产物目录，`E2E_STACK_TIMEOUT` 调整栈启动等待上限。
+- `E2E_LOGIN_RATE_LIMIT`（默认 `300`）只在本轮运行期间抬高登录节流（整套用例由同一地址驱动，
+  锁定用例本身就要 6 次登录请求）；**起栈成功之后**的任何退出（含失败 / 中断）都会把 backend
+  重建回启动前的值，默认即契约值的 10 次/分，并在退出前校验。起栈阶段失败时仅当此前已有
+  backend 才恢复，冷启动失败不另建孤立 backend。
+- 脚本把临时目录（`TMPDIR`）放在 `E2E_ARTIFACTS/.tmp` 下，避免小 `/tmp` 或配额受限的宿主在
+  镜像构建成功后写不出 compose 元数据；`E2E_TMPDIR` 可整体覆盖。
+
 ## 数据库迁移与部署
 
 schema 变更通过 Alembic 管理（`apps/backend/alembic/`）。迁移脚本的部署注意事项——含 NOT VALID → VALIDATE 两阶段外键的窗口期说明——见 [`deploy/migrations.md`](deploy/migrations.md)。
