@@ -31,17 +31,22 @@ test("forbidden page matches the baseline", async ({ page }) => {
   await expect(page).toHaveScreenshot("forbidden.png", SCREENSHOT_OPTIONS);
 });
 
+// Both empty-state cases pin the guidance card, not the whole page: the card
+// is under 1% of the viewport, so a page-wide budget would pass a revert to the
+// pre-guidance placeholder, while the region locator fails outright.
 test("empty user workspace matches the baseline", async ({ page }) => {
   await loginViaSso(page);
-  await expect(page.getByText("暂无推荐")).toBeVisible();
-  await expect(page).toHaveScreenshot("user-empty.png", SCREENSHOT_OPTIONS);
+  const guidance = page.getByRole("region", { name: "您的管理员尚未发布智能体" });
+  await expect(guidance).toBeVisible();
+  await expect(guidance).toHaveScreenshot("user-empty.png", SCREENSHOT_OPTIONS);
 });
 
 test("empty agent marketplace matches the baseline", async ({ page }) => {
   await loginViaSso(page);
   await page.goto("/user/agents");
-  await expect(page.getByText("暂无已发布的智能体")).toBeVisible();
-  await expect(page).toHaveScreenshot("agents-empty.png", SCREENSHOT_OPTIONS);
+  const guidance = page.getByRole("region", { name: "您的管理员尚未发布智能体" });
+  await expect(guidance).toBeVisible();
+  await expect(guidance).toHaveScreenshot("agents-empty.png", SCREENSHOT_OPTIONS);
 });
 
 test("empty conversation list matches the baseline", async ({ page }) => {

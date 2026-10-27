@@ -11,7 +11,8 @@ test("first login shows the empty-state user workspace", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "用户工作区" })).toBeVisible();
   await expect(page.getByText("alice@acme.com")).toBeVisible();
 
-  // Recommended agents and recent conversations are both empty.
-  await expect(page.getByText("暂无推荐")).toBeVisible();
+  // No agent is published in the seeded tenant: the recommendation section
+  // states that fact, while the conversation section keeps its own empty state.
+  await expect(page.getByText("您的管理员尚未发布智能体")).toBeVisible();
   await expect(page.getByText("暂无会话")).toBeVisible();
 });

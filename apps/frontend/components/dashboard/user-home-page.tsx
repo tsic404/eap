@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ListTodo } from "lucide-react";
 
 import { AgentCard } from "@/components/agents/agent-card";
+import { UnpublishedAgentsEmptyState } from "@/components/agents/unpublished-agents-empty-state";
 import { UserProfile } from "@/components/auth/user-profile";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -70,11 +71,17 @@ export function UserHomePage() {
       <section className="flex flex-col gap-3">
         <h2 className="text-base font-semibold text-foreground">推荐智能体</h2>
         {home.recommendedAgents.length === 0 ? (
-          <EmptyState title="暂无推荐" description="发布智能体后将在此展示推荐" />
+          <UnpublishedAgentsEmptyState />
         ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div
+            role="list"
+            aria-label="推荐智能体列表"
+            className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
+          >
             {home.recommendedAgents.map((agent) => (
-              <AgentCard key={agent.agentId} agent={agent} />
+              <div key={agent.agentId} role="listitem">
+                <AgentCard agent={agent} />
+              </div>
             ))}
           </div>
         )}

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Bot, Search } from "lucide-react";
 
 import { AgentCard } from "@/components/agents/agent-card";
+import { UnpublishedAgentsEmptyState } from "@/components/agents/unpublished-agents-empty-state";
 import { useRole } from "@/components/auth/role-context";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
@@ -138,11 +139,7 @@ export function AgentMarketplace() {
 
       {filtered.length === 0 ? (
         agents.length === 0 ? (
-          <EmptyState
-            icon={<Bot className="h-6 w-6" />}
-            title="暂无已发布的智能体"
-            description="智能体发布后会展现在这里，请联系管理员创建并发布"
-          />
+          <UnpublishedAgentsEmptyState />
         ) : (
           <EmptyState
             icon={<Search className="h-6 w-6" />}
@@ -151,13 +148,18 @@ export function AgentMarketplace() {
           />
         )
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div
+          role="list"
+          aria-label="智能体广场列表"
+          className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
+        >
           {filtered.map((agent) => (
-            <AgentCard
-              key={agent.agentId}
-              agent={agent}
-              onClick={canOpenDetail ? () => openAgent(agent.agentId) : undefined}
-            />
+            <div key={agent.agentId} role="listitem">
+              <AgentCard
+                agent={agent}
+                onClick={canOpenDetail ? () => openAgent(agent.agentId) : undefined}
+              />
+            </div>
           ))}
         </div>
       )}
