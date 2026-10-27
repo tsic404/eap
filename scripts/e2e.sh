@@ -17,7 +17,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-COMPOSE=(docker compose -f docker-compose.qa.yml)
+COMPOSE=(docker compose --env-file deploy/qa/qa.env -f docker-compose.qa.yml)
 IMAGE="${E2E_IMAGE:-eap-e2e:local}"
 SPEC="${E2E_SPEC:-e2e/journeys/tc-auth-08-local-login.spec.ts}"
 PROXY_PORT="${QA_PROXY_PORT:-8090}"
@@ -30,9 +30,12 @@ STACK_TIMEOUT="${E2E_STACK_TIMEOUT:-1800}"
 RESTORE_LOGIN_RATE="${RATE_LIMIT_LOGIN_PER_MINUTE:-10}"
 export RATE_LIMIT_LOGIN_PER_MINUTE="${E2E_LOGIN_RATE_LIMIT:-300}"
 
-# Resident services that declare a healthcheck in the QA variant. The reverse
-# proxy has none; its readiness is the entry probe below.
-RESIDENT_SERVICES=(postgres redis mock-idp backend frontend)
+# Resident services of the local-family shape (C-88), minus none: every one of
+# them declares a healthcheck, the reverse proxy included.
+RESIDENT_SERVICES=(
+  postgres redis weaviate mock-idp
+  dify-api dify-worker plugin-daemon backend frontend reverse-proxy
+)
 
 # Keep scratch files beside the artifacts instead of the host's /tmp: docker
 # compose materialises build metadata in TMPDIR, and constrained hosts (small
@@ -59,7 +62,10 @@ restore_login_throttle() {
     if [[ "${STACK_UP_COMPLETE}" == "1" || -n "${PRE_BACKEND_ID}" ]]; then
       echo "e2e: restoring the QA login throttle to ${RESTORE_LOGIN_RATE}/min ..."
       export RATE_LIMIT_LOGIN_PER_MINUTE="${RESTORE_LOGIN_RATE}"
-      if "${COMPOSE[@]}" up -d --no-deps --wait --wait-timeout 180 backend >/dev/null 2>&1; then
+      # The recreate waits for healthy now, and the backend's own health gate
+      # allows a 300s start window; a shorter timeout would fail a finished run
+      # on a loaded host.
+      if "${COMPOSE[@]}" up -d --no-deps --wait --wait-timeout 360 backend >/dev/null 2>&1; then
         local backend_id value
         backend_id="$("${COMPOSE[@]}" ps -q backend 2>/dev/null || true)"
         value="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "${backend_id}" 2>/dev/null \
@@ -88,6 +94,7 @@ trap 'exit 143' TERM
 # every resident service with a healthcheck reports healthy, the one-shot
 # bootstrap exits 0, and the entry point answers through the reverse proxy.
 ./scripts/gen-jwt-keys.sh deploy/qa/keys >/dev/null
+./scripts/gen-qa-secrets.sh >/dev/null
 # A partial bring-up may already carry the raised value, so the restore window
 # opens before `up`; whether restoring a failed bring-up is worthwhile depends
 # on a backend having existed beforehand (see the trap).

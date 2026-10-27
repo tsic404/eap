@@ -24,6 +24,15 @@ const HOP_BY_HOP = new Set([
 ]);
 
 const server = createServer((req, res) => {
+  // Liveness for the compose healthcheck: the entry counts as a resident
+  // service, and proxying the probe through an upstream would make the entry's
+  // health depend on the very services it fronts.
+  if ((req.url ?? "/") === "/healthz") {
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end("ok");
+    return;
+  }
+
   const upstream = (req.url ?? "/").startsWith("/api/") ? BACKEND : FRONTEND;
   const target = new URL(req.url ?? "/", upstream);
 

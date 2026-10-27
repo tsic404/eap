@@ -278,23 +278,40 @@ def test_production_shape_gives_no_required_key_an_inline_default() -> None:
     assert _inline_defaults(_PROD_COMPOSE).isdisjoint(_PROD_REQUIRED_KEYS)
 
 
+# The stub family a non-local shape must never carry: the fixed fixture service
+# names, plus the whole `MOCK_` configuration prefix, so a new stub key (the
+# model stub's `MOCK_MODEL_*`) cannot slip past a single literal.
+_STUB_SERVICE_NAMES = ("mock-idp", "mock-model")
+_STUB_CONFIG_PREFIX = "MOCK_"
+
+
 def test_non_local_shape_carries_no_stub_service_or_stub_config(tmp_path) -> None:
     env_file = _template_copy(tmp_path)
     non_local = _non_local_orchestrations()
     assert non_local, "the production shape must exist as an orchestration"
 
-    # Control: the local family does carry the stub, so the scan below has teeth.
-    assert "mock-idp" in _LOCAL_COMPOSE.read_text(encoding="utf-8")
+    # Control: the QA variant carries both stub families (identity and model),
+    # so the scan below has teeth for service names and for the config prefix.
+    qa_text = _QA_COMPOSE.read_text(encoding="utf-8")
+    for marker in (
+        *_STUB_SERVICE_NAMES,
+        f"{_STUB_CONFIG_PREFIX}IDP",
+        f"{_STUB_CONFIG_PREFIX}MODEL_",
+    ):
+        assert marker in qa_text, marker
 
     for compose in non_local:
         text = compose.read_text(encoding="utf-8")
-        assert "mock-idp" not in text, compose.name
-        assert "MOCK_IDP" not in text, compose.name
+        for name in _STUB_SERVICE_NAMES:
+            assert name not in text, (compose.name, name)
+        assert _STUB_CONFIG_PREFIX not in text, compose.name
 
         resolved = _resolved(compose, env_file)
-        assert not [name for name in resolved["services"] if "mock" in name], compose.name
-        assert "mock-idp" not in json.dumps(resolved), compose.name
-        assert "MOCK_IDP" not in json.dumps(resolved), compose.name
+        assert not [name for name in resolved["services"] if "mock" in name.lower()], compose.name
+        dumped = json.dumps(resolved)
+        for name in _STUB_SERVICE_NAMES:
+            assert name not in dumped, (compose.name, name)
+        assert _STUB_CONFIG_PREFIX not in dumped, compose.name
 
 
 def test_non_local_shape_never_points_its_token_keys_at_a_repo_directory(tmp_path) -> None:

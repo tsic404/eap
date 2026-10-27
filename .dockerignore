@@ -6,4 +6,8 @@ node_modules/
 **/.venv/
 **/.git/
 .env
+# Generated stack secrets and keys (deploy/qa/qa.env, deploy/qa/keys/*.pem). The
+# root build context serves the frontend image only, which needs none of it; the
+# e2e runner image builds from deploy/e2e with that directory as its own context.
+deploy/
 *.log

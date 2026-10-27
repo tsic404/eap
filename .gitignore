@@ -52,3 +52,5 @@ pgdata/
 # Generated JWT keypairs (see scripts/gen-jwt-keys.sh)
 deploy/qa/keys/
 deploy/keys/
+# Generated QA stack secrets (see scripts/gen-qa-secrets.sh)
+deploy/qa/qa.env

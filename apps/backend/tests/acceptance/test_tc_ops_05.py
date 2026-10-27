@@ -16,6 +16,7 @@ detail, including per-dependency flagging and the time caps, is TC-tech-ops-01).
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -24,6 +25,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
 import pytest
 
 TC_ID = "TC-ops-05"
@@ -48,16 +50,21 @@ _RESIDENT_SERVICES = (
     "weaviate",
 )
 _ONE_SHOT_SERVICES = ("db-seed", "dify-db-init", "init_permissions")
-# The QA variant is a slimmer local-family shape: six resident services, one
-# one-shot seed container.
+# The QA variant is the same local-family shape as the main stack (C-88): the
+# same ten resident services, with the reverse proxy standing in for nginx.
 _QA_RESIDENT_SERVICES = (
+    "backend",
+    "dify-api",
+    "dify-worker",
+    "frontend",
+    "mock-idp",
+    "plugin-daemon",
     "postgres",
     "redis",
-    "mock-idp",
-    "backend",
-    "frontend",
     "reverse-proxy",
+    "weaviate",
 )
+_QA_ONE_SHOT_SERVICES = ("db-seed", "dify-db-init", "init_permissions")
 _BACKEND_CONTAINER_PORT = 3001
 
 # C-93 fixes the size of the production required set; TC-tech-ops-02 pins the
@@ -149,7 +156,7 @@ def test_local_stack_resident_service_stays_long_lived(service: str) -> None:
 
 
 def test_qa_stack_resident_services_stay_long_lived() -> None:
-    """The QA variant keeps the same resident restart policy on its six services."""
+    """The QA variant keeps the local-family resident restart policy."""
     text = _COMPOSE_QA.read_text(encoding="utf-8")
     for service in _QA_RESIDENT_SERVICES:
         match = re.search(
@@ -171,6 +178,14 @@ def test_local_stack_resident_container_count_stays_ten() -> None:
     assert len(services) == 13
 
 
+def test_qa_stack_resident_container_count_stays_ten() -> None:
+    """The QA variant carries the same ten resident and three one-shot services
+    as the local main stack (C-88): the engine is part of its readiness baseline."""
+    services = _compose_json(_COMPOSE_QA, _ENV_TEMPLATE)["services"]
+    assert set(services) == set(_QA_RESIDENT_SERVICES) | set(_QA_ONE_SHOT_SERVICES)
+    assert len(services) == 13
+
+
 @pytest.mark.parametrize("service", _RESIDENT_SERVICES)
 def test_local_stack_resident_service_declares_a_healthcheck(service: str) -> None:
     """Every resident service must keep a healthcheck, or compose can never
@@ -182,10 +197,27 @@ def test_local_stack_resident_service_declares_a_healthcheck(service: str) -> No
     )
 
 
+@pytest.mark.parametrize("service", _QA_RESIDENT_SERVICES)
+def test_qa_stack_resident_service_declares_a_healthcheck(service: str) -> None:
+    """The QA variant's residents must stay observable as healthy too."""
+    resolved = _compose_json(_COMPOSE_QA, _ENV_TEMPLATE)["services"]
+    assert "healthcheck" in resolved[service], (
+        service,
+        "resident service must declare a healthcheck",
+    )
+
+
 def test_local_stack_one_shot_containers_exit_without_restart() -> None:
     """The three one-shot containers must run once and exit, not be supervised."""
     resolved = _compose_json(_COMPOSE_LOCAL, _ENV_TEMPLATE)["services"]
     for service in _ONE_SHOT_SERVICES:
+        assert resolved[service].get("restart") == "no", service
+
+
+def test_qa_stack_one_shot_containers_exit_without_restart() -> None:
+    """The QA variant's bootstraps stay one-shot: their exit codes are readiness."""
+    resolved = _compose_json(_COMPOSE_QA, _ENV_TEMPLATE)["services"]
+    for service in _QA_ONE_SHOT_SERVICES:
         assert resolved[service].get("restart") == "no", service
 
 
@@ -296,3 +328,157 @@ def test_production_shape_rejects_an_empty_env_file() -> None:
     )
     assert result.returncode != 0
     assert result.stderr
+
+
+# ── ④ QA bring-up bootstrap scripts ─────────────────────────────────────────
+
+_QA_SECRETS_SCRIPT = _REPO_ROOT / "scripts" / "gen-qa-secrets.sh"
+_QA_DIFY_BOOTSTRAP = _REPO_ROOT / "deploy" / "qa" / "dify_bootstrap.py"
+_ENV_ASSIGNMENT = re.compile(r"^[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)$")
+
+
+def _run_qa_secrets(output: Path) -> subprocess.CompletedProcess[str]:
+    """Run the QA secret generator into ``output``, as `make qa-secrets` does."""
+    return subprocess.run(
+        [str(_QA_SECRETS_SCRIPT), str(output)],
+        cwd=_REPO_ROOT,
+        env=_compose_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _qa_secrets_env(tmp_path: Path) -> Path:
+    output = tmp_path / "qa.env"
+    result = _run_qa_secrets(output)
+    assert result.returncode == 0, result.stderr
+    return output
+
+
+def _env_assignments(path: Path) -> dict[str, str]:
+    entries: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = _ENV_ASSIGNMENT.match(line)
+        if match:
+            entries[match.group(1)] = match.group(2)
+    return entries
+
+
+def _qa_compose_config(env_file: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["docker", "compose", "--env-file", str(env_file), "-f", str(_COMPOSE_QA), "config", "-q"],
+        cwd=_REPO_ROOT,
+        env=_compose_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_qa_secret_generator_satisfies_every_required_qa_key(tmp_path: Path) -> None:
+    """The generated file is the QA stack's only value source, so it must make
+    the orchestration resolve on its own — one key short fails the bring-up at
+    configuration time. The file stays owner-only: it holds the live secrets."""
+    env_file = _qa_secrets_env(tmp_path)
+
+    assert (env_file.stat().st_mode & 0o777) == 0o600
+    values = _env_assignments(env_file)
+    for key in _required_keys(_COMPOSE_QA):
+        assert values.get(key), key
+    result = _qa_compose_config(env_file)
+    assert result.returncode == 0, result.stderr
+
+
+def test_qa_secret_generator_is_idempotent(tmp_path: Path) -> None:
+    """A restart reuses the generated values: re-running must not rotate the
+    engine session key or the console password out from under existing volumes."""
+    env_file = _qa_secrets_env(tmp_path)
+    first = _env_assignments(env_file)
+
+    result = _run_qa_secrets(env_file)
+
+    assert result.returncode == 0, result.stderr
+    assert _env_assignments(env_file) == first
+
+
+def test_qa_compose_rejects_a_secret_file_missing_a_required_key(tmp_path: Path) -> None:
+    """`--env-file` replaces `.env`, so a dropped key cannot be rescued from a
+    checkout-level file: the stack must fail by name instead of starting with a
+    placeholder."""
+    env_file = _qa_secrets_env(tmp_path)
+    kept = [
+        line
+        for line in env_file.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("QA_MODEL_API_KEY=")
+    ]
+    env_file.write_text("\n".join(kept) + "\n", encoding="utf-8")
+
+    result = _qa_compose_config(env_file)
+
+    assert result.returncode != 0
+    assert "QA_MODEL_API_KEY" in result.stderr
+
+
+class _EngineConsole:
+    """The console calls ``ensure_model`` makes, answering per step."""
+
+    def __init__(
+        self, *, provider: str, model: str, enable_status: int, default_status: int
+    ) -> None:
+        self._provider = provider
+        self._model = model
+        self._enable_status = enable_status
+        self._default_status = default_status
+
+    def request(self, method: str, path: str, **_kwargs: object) -> httpx.Response:
+        if path.endswith("/models/enable"):
+            return httpx.Response(self._enable_status, text="enable rejected")
+        if path.endswith("/default-model"):
+            return httpx.Response(self._default_status, text="default rejected")
+        if path.endswith("/model-providers"):
+            return httpx.Response(200, json={"data": [{"provider": self._provider}]})
+        if path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"model": self._model}]})
+        raise AssertionError(f"unexpected console call: {method} {path}")
+
+
+def _load_dify_bootstrap() -> Any:
+    spec = importlib.util.spec_from_file_location("qa_dify_bootstrap", _QA_DIFY_BOOTSTRAP)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize(
+    ("enable_status", "default_status", "expected"),
+    [
+        pytest.param(200, 200, "", id="both-accepted"),
+        pytest.param(500, 200, "enabling model", id="enable-rejected"),
+        pytest.param(200, 500, "default model", id="default-rejected"),
+    ],
+)
+def test_qa_engine_bootstrap_exits_non_zero_when_a_model_step_is_rejected(
+    enable_status: int, default_status: int, expected: str
+) -> None:
+    """The one-shot's exit code is part of the readiness baseline (C-88), so a
+    rejected enable / default-model step must fail the bootstrap. Both are
+    configuration later requests depend on: finishing 0 would publish a stack
+    that only fails at the first knowledge-base or app call."""
+    module = _load_dify_bootstrap()
+    console = _EngineConsole(
+        provider=str(module.MODEL_PROVIDER),
+        model=str(module.MODEL_NAME),
+        enable_status=enable_status,
+        default_status=default_status,
+    )
+
+    if not expected:
+        module.ensure_model(console)
+        return
+
+    with pytest.raises(SystemExit) as caught:
+        module.ensure_model(console)
+    assert caught.value.code not in (None, 0)
+    assert expected in str(caught.value.code)

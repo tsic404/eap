@@ -3,8 +3,8 @@
 Invoked inside the running backend container, where the application's own
 password module and database settings are importable:
 
-    docker compose -f docker-compose.qa.yml exec -T backend \
-        python - < deploy/e2e/seed_accounts.py
+    docker compose --env-file deploy/qa/qa.env -f docker-compose.qa.yml \
+        exec -T backend python - < deploy/e2e/seed_accounts.py
 
 The rows mirror ``apps/frontend/e2e/helpers/accounts.cjs``; should the two
 drift, the journeys fail to sign in rather than passing on stale fixtures.
