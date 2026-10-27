@@ -514,8 +514,15 @@ class KnowledgeService:
             )
             for record in result.get("records", [])
         ]
-        # Dify does not promise an order; the contract ranks citations by score.
-        citations.sort(key=lambda citation: citation.score, reverse=True)
+        # Dify does not promise an order; C-43 ranks by score, then source name
+        # and excerpt (code points, an absent field comparing as "").
+        citations.sort(
+            key=lambda citation: (
+                -citation.score,
+                citation.source_name or "",
+                citation.content,
+            )
+        )
         score = max((c.score for c in citations), default=0.0)
         return RetrieveTestResultDto(
             query=dto.query,

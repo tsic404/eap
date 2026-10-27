@@ -1369,6 +1369,43 @@ async def test_retrieval_test_sorts_citations_by_descending_score() -> None:
 
 
 @pytest.mark.asyncio
+async def test_retrieval_test_breaks_score_ties_by_source_name_then_excerpt() -> None:
+    """C-43: ties rank by source name, then excerpt, code-point ascending."""
+    tenant = _tenant()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Equal scores in an arbitrary upstream order: the tie key alone decides.
+        return httpx.Response(
+            200,
+            json={
+                "records": [
+                    {"segment": {"content": "beta", "document": {"name": "b.md"}}, "score": 0.7},
+                    {"segment": {"content": "Zulu", "document": {"name": "b.md"}}, "score": 0.7},
+                    {"segment": {"content": "alpha", "document": {"name": "a.md"}}, "score": 0.7},
+                    # No document name at all: the contract compares it as "".
+                    {"segment": {"content": "orphan"}, "score": 0.7},
+                    {"segment": {"content": "top", "document": {"name": "z.md"}}, "score": 0.9},
+                ]
+            },
+        )
+
+    retriever = DifyClientService("http://dify.test", "key", transport=httpx.MockTransport(handler))
+    service = _service(AsyncMock(), repo=_FakeRepository((_kb(tenant),)), retriever=retriever)
+
+    result = await service.retrieval_test(AsyncMock(), tenant, "kb-1", RetrieveTestDto(query="q"))
+
+    assert [(c.source_name, c.content) for c in result.citations] == [
+        ("z.md", "top"),
+        (None, "orphan"),
+        ("a.md", "alpha"),
+        ("b.md", "Zulu"),
+        ("b.md", "beta"),
+    ]
+    assert result.score == 0.9
+    await retriever.aclose()
+
+
+@pytest.mark.asyncio
 async def test_retrieval_test_maps_upstream_failure_to_502_dify_error() -> None:
     tenant = _tenant()
 
