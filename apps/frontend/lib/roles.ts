@@ -43,3 +43,31 @@ export function canAccessAdmin(role: UserRole): boolean {
 export function canManageMembers(role: UserRole): boolean {
   return role === "platform_admin";
 }
+
+/**
+ * Whether a role may create and manage agents. Knowledge administrators and
+ * auditors reach the agent pages read-only (C-15), so they get no create entry.
+ */
+export function canManageAgents(role: UserRole): boolean {
+  return role === "platform_admin" || role === "agent_admin";
+}
+
+/**
+ * Whether a role may create and manage knowledge bases. Mirrors the backend's
+ * knowledge_admin-and-above ladder, so an auditor reaches the listing read-only.
+ */
+export function canManageKnowledge(role: UserRole): boolean {
+  return (
+    role === "platform_admin" ||
+    role === "agent_admin" ||
+    role === "knowledge_admin"
+  );
+}
+
+/**
+ * Whether a role may register and manage tools. Mirrors the backend gate:
+ * platform and agent administrators only, every other admin role is read-only.
+ */
+export function canManageTools(role: UserRole): boolean {
+  return role === "platform_admin" || role === "agent_admin";
+}

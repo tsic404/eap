@@ -7,7 +7,7 @@ TC :=
 acceptance:
 	cd apps/backend && uv run python -m tests.acceptance $(TC)
 
-# 前端验收用例（TC-tech-ui-01、TC-kb-06；浏览器侧证据在 pnpm test:e2e）。
+# 前端验收用例（TC-tech-ui-01、TC-kb-06、TC-sec-02；浏览器侧证据在 pnpm test:e2e）。
 # 全部前端用例：make acceptance-ui；单条：make acceptance-ui TC=TC-kb-06
 acceptance-ui:
 	cd apps/frontend && pnpm acceptance $(TC)

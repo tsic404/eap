@@ -9,9 +9,9 @@ import { fileURLToPath } from "node:url";
 
 export const ACCEPTANCE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
-// The recall-test journey (AC-20) is a browser-side case and rides this suite
-// alongside the technical cases, mirroring the backend registry's practice.
-export const TECH_TC_IDS = ["TC-tech-ui-01", "TC-kb-06"];
+// Frontend acceptance cases ride this suite alongside the browser-side
+// journeys, mirroring the backend registry's practice.
+export const TECH_TC_IDS = ["TC-tech-ui-01", "TC-kb-06", "TC-sec-02"];
 
 export function modulePath(tcId) {
   return path.join(

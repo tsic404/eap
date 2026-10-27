@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus } from "lucide-react";
+import { BookOpen, Plus } from "lucide-react";
 
+import { useRole } from "@/components/auth/role-context";
 import { KBCard } from "@/components/knowledge/kb-card";
 import { KB_NAME_EXISTS_MESSAGE } from "@/components/knowledge/kb-labels";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,7 @@ import {
   isKbNameExistsError,
 } from "@/lib/knowledge-service";
 import { extractApiErrorMessage } from "@/lib/platform-service";
+import { canManageKnowledge } from "@/lib/roles";
 import { useKnowledgeBases } from "@/lib/use-knowledge";
 
 function SkeletonGrid() {
@@ -34,6 +36,8 @@ function SkeletonGrid() {
 /** Admin knowledge-base listing with a create dialog. */
 export function KnowledgeListPage() {
   const router = useRouter();
+  const role = useRole();
+  const canCreate = canManageKnowledge(role);
   const { toast } = useToast();
   const { data, error, isLoading, mutate } = useKnowledgeBases();
 
@@ -119,28 +123,39 @@ export function KnowledgeListPage() {
           <h1 className="text-2xl font-bold text-foreground">知识库</h1>
           <p className="text-sm text-muted-foreground">管理与测试知识库召回</p>
         </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="h-4 w-4" />
-          新建知识库
-        </Button>
+        {canCreate && (
+          <Button onClick={() => setCreateOpen(true)}>
+            <Plus className="h-4 w-4" />
+            新建知识库
+          </Button>
+        )}
       </div>
 
       {items.length === 0 ? (
         <EmptyState
-          title="暂无知识库"
-          description="创建第一个知识库以开始"
+          variant="card"
+          icon={<BookOpen className="h-6 w-6" />}
+          title="创建第一个知识库"
+          description="知识库存放待检索的文档；创建后上传文档，即可预览分块并执行召回测试。"
           action={
-            <Button onClick={() => setCreateOpen(true)}>新建知识库</Button>
+            canCreate ? (
+              <Button onClick={() => setCreateOpen(true)}>新建知识库</Button>
+            ) : undefined
           }
         />
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div
+          role="list"
+          aria-label="知识库列表"
+          className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
+        >
           {items.map((kb) => (
-            <KBCard
-              key={kb.kb_id}
-              knowledgeBase={kb}
-              onClick={() => router.push(ROUTES.adminKnowledgeDetail(kb.kb_id))}
-            />
+            <div key={kb.kb_id} role="listitem">
+              <KBCard
+                knowledgeBase={kb}
+                onClick={() => router.push(ROUTES.adminKnowledgeDetail(kb.kb_id))}
+              />
+            </div>
           ))}
         </div>
       )}

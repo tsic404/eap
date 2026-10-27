@@ -1,6 +1,8 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { RoleProvider } from "@/components/auth/role-context";
+
 import { renderWithIntl } from "../test-utils";
 
 const { toastMock, mutateMock, createKnowledgeBaseMock } = vi.hoisted(() => ({
@@ -45,7 +47,11 @@ function axiosError(status: number, data?: unknown): unknown {
 }
 
 async function submitCreateForm() {
-  renderWithIntl(<KnowledgeListPage />);
+  renderWithIntl(
+    <RoleProvider role="platform_admin">
+      <KnowledgeListPage />
+    </RoleProvider>,
+  );
   fireEvent.click(screen.getAllByRole("button", { name: "新建知识库" })[0]);
   const dialog = await screen.findByRole("dialog");
   fireEvent.change(screen.getByLabelText("名称"), {
