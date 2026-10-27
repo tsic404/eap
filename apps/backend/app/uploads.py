@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from typing import Annotated, Any
 
@@ -101,17 +101,18 @@ class UploadSlots:
         self._users: dict[Any, _UserSlot] = {}
 
     @asynccontextmanager
-    async def hold(self, user_id: Any) -> AsyncIterator[None]:
+    async def hold(self, user_id: Any) -> AsyncIterator[_Lease]:
         try:
             async with asyncio.timeout(self._wait_s):
                 await self._acquire(user_id)
         except TimeoutError as exc:
             # _acquire rolls back whatever it took before the deadline hit.
             raise AppError(429, "RATE_LIMITED", _BUSY_MESSAGE) from exc
+        lease = _Lease(self, user_id)
         try:
-            yield
+            yield lease
         finally:
-            self._release(user_id)
+            lease.release()
 
     async def _acquire(self, user_id: Any) -> None:
         slot = self._users.get(user_id)
@@ -143,6 +144,21 @@ class UploadSlots:
             del self._users[user_id]
 
 
+class _Lease:
+    """One held slot; whoever ends the request first releases it exactly once."""
+
+    def __init__(self, slots: UploadSlots, user_id: Any) -> None:
+        self._slots = slots
+        self._user_id = user_id
+        self._is_released = False
+
+    def release(self) -> None:
+        if self._is_released:
+            return
+        self._is_released = True
+        self._slots._release(self._user_id)
+
+
 def create_upload_slots() -> UploadSlots:
     """Create the in-flight limit for uploads; one instance per app."""
     return UploadSlots()
@@ -156,18 +172,47 @@ async def document_upload(
     The identity gate resolves before this dependency, so an unauthenticated or
     unauthorised caller is answered before its body is read. The declared length
     is checked first, then the bytes actually received, so a missing content
-    length cannot lift the budget. The part is released with the request.
+    length cannot lift the budget. The part is released with the request, and a
+    client that goes away ends the slot at once: the framework does not cancel
+    the request on a lost connection, so waiting for the handler would keep the
+    slot until the upstream call returns.
     """
     slots: UploadSlots = request.app.state.upload_slots
-    async with slots.hold(user.id):
+    async with slots.hold(user.id) as lease:
         form = await _read_form(request)
         try:
             file = form.get(_UPLOAD_FIELD)
             if not isinstance(file, UploadFile):
                 raise validation_error(missing_field(_UPLOAD_FIELD))
-            yield file
+            watcher = asyncio.create_task(_release_on_disconnect(request, lease))
+            try:
+                yield file
+            finally:
+                watcher.cancel()
+                with suppress(asyncio.CancelledError):
+                    await watcher
         finally:
             await form.close()
+
+
+async def _release_on_disconnect(request: Request, lease: _Lease) -> None:
+    """Release the slot when the client goes away.
+
+    A lost connection never cancels the request task; it arrives only on the
+    receive channel. The body is already parsed when this starts, so the watcher
+    owns the remaining receives. The upstream call keeps running; only the
+    client-visible upload ends here.
+    """
+    while True:
+        try:
+            message = await request.receive()
+        except Exception:
+            # A failed receive cannot report a disconnect, and only receive
+            # errors are swallowed: a release that fails must stay visible.
+            return
+        if message["type"] == "http.disconnect":
+            lease.release()
+            return
 
 
 async def _read_form(request: Request) -> FormData:
