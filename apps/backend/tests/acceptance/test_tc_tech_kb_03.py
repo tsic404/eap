@@ -773,6 +773,93 @@ async def test_recall_citations_are_ordered_by_descending_score(api) -> None:
 
 
 @pytest.mark.asyncio
+async def test_recall_ties_are_ordered_by_source_name_then_excerpt(api) -> None:
+    """C-43: equal scores rank by source name, then excerpt, code-point ascending."""
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    # Same score, three sources, upstream order scrambled: the tie key decides.
+    _use_stub_retriever(
+        api,
+        _retrieve_handler(
+            [
+                _record(0.8, "gamma", name="c.md"),
+                _record(0.8, "alpha", name="a.md"),
+                _record(0.8, "beta", name="b.md"),
+                _record(0.9, "top", name="z.md"),
+            ]
+        ),
+    )
+
+    resp = await api.client.post(
+        f"{_KB_URL}/kb-1/retrieval-test", headers=headers, json={"query": "tied"}
+    )
+
+    assert resp.status_code == 200
+    citations = resp.json()["data"]["citations"]
+    assert [(citation["source_name"], citation["content"]) for citation in citations] == [
+        ("z.md", "top"),
+        ("a.md", "alpha"),
+        ("b.md", "beta"),
+        ("c.md", "gamma"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_recall_ties_within_one_source_order_by_excerpt_code_points(api) -> None:
+    """C-43: the excerpt tie-break is code-point, not case-folded or locale order."""
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    _use_stub_retriever(
+        api,
+        _retrieve_handler(
+            [
+                _record(0.6, "beta", name="a.md"),
+                _record(0.6, "Zulu", name="a.md"),
+                _record(0.6, "alpha", name="a.md"),
+            ]
+        ),
+    )
+
+    resp = await api.client.post(
+        f"{_KB_URL}/kb-1/retrieval-test", headers=headers, json={"query": "tied"}
+    )
+
+    assert resp.status_code == 200
+    contents = [citation["content"] for citation in resp.json()["data"]["citations"]]
+    assert contents == ["Zulu", "alpha", "beta"]
+
+
+@pytest.mark.asyncio
+async def test_recall_tie_order_is_stable_across_upstream_return_orders(api) -> None:
+    """An unnamed source compares as "", and the tie order does not drift."""
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+    headers = api.auth(user, tenant)
+    records = [
+        _record(0.5, "second", name="a.md"),
+        {"score": 0.5, "segment": {"content": "first"}},
+    ]
+    observed: list[list[tuple[str | None, str]]] = []
+    for upstream_order in (records, list(reversed(records))):
+        _use_stub_retriever(api, _retrieve_handler(upstream_order))
+        resp = await api.client.post(
+            f"{_KB_URL}/kb-1/retrieval-test", headers=headers, json={"query": "tied"}
+        )
+        assert resp.status_code == 200
+        observed.append(
+            [
+                (citation["source_name"], citation["content"])
+                for citation in resp.json()["data"]["citations"]
+            ]
+        )
+
+    assert observed[0] == [(None, "first"), ("a.md", "second")]
+    assert observed[1] == observed[0]
+
+
+@pytest.mark.asyncio
 async def test_recall_score_is_the_highest_hit_score(api) -> None:
     tenant, user = await api.seed(role="knowledge_admin")
     await api.seed_kb(tenant, kb_id="kb-1")

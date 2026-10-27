@@ -155,6 +155,41 @@ describe("TC-kb-06 recall test results", () => {
     });
   });
 
+  it("renders equal-score cards in the order the response carries them", async () => {
+    const citations: RetrievalCitation[] = [
+      {
+        content: "甲片段",
+        score: 0.8,
+        source_name: "a.md",
+        kb_name: "行政知识库",
+      },
+      {
+        content: "乙片段",
+        score: 0.8,
+        source_name: "b.md",
+        kb_name: "行政知识库",
+      },
+    ];
+    postMock.mockResolvedValue({
+      data: {
+        code: 0,
+        data: { query: "同分", citations, score: 0.8, latency_ms: 9 },
+        message: "",
+      },
+    });
+    renderForm();
+
+    await runQuery("同分", 1);
+    const badges = await screen.findAllByText(/^分数 /);
+    expect(badges.map((badge) => badge.textContent)).toEqual([
+      "分数 0.800",
+      "分数 0.800",
+    ]);
+    expect(
+      screen.getAllByText(/\.md$/).map((source) => source.textContent),
+    ).toEqual(["a.md", "b.md"]);
+  });
+
   it("replaces previous hits with the empty state for an unrelated query", async () => {
     respondWith((_url, payload) =>
       payload.query === "量子纠缠"
