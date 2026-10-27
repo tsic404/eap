@@ -19,6 +19,7 @@ from app.dify_console import (
     DifyConsoleClient,
     DifyConsoleError,
     ModelConfig,
+    ModelSelection,
     UpdateAppParams,
 )
 
@@ -185,7 +186,7 @@ async def test_create_app_returns_app_id() -> None:
 
 
 @pytest.mark.asyncio
-async def test_configure_model_sends_provider_and_prompt() -> None:
+async def test_configure_model_sends_the_nested_model_object() -> None:
     captured: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -198,13 +199,24 @@ async def test_configure_model_sends_provider_and_prompt() -> None:
     client, _ = _make_client(handler)
     await client.configure_model(
         "app-123",
-        ModelConfig(provider="openai", model="gpt-4o", configs={"prompt_template": "hello"}),
+        ModelConfig(
+            model=ModelSelection(provider="langgenius/openai/openai", name="gpt-4o"),
+            pre_prompt="hello",
+        ),
     )
 
     assert captured["path"] == "/console/api/apps/app-123/model-config"
-    assert captured["body"]["provider"] == "openai"
-    assert captured["body"]["model"] == "gpt-4o"
-    assert captured["body"]["configs"] == {"prompt_template": "hello"}
+    # The engine validates this exact shape: a flat provider/model pair is
+    # answered with "model must be of object type" (C-31); C-125 carries the
+    # system prompt in ``pre_prompt`` and leaves the opening statement unset.
+    assert captured["body"] == {
+        "model": {
+            "provider": "langgenius/openai/openai",
+            "name": "gpt-4o",
+            "completion_params": {},
+        },
+        "pre_prompt": "hello",
+    }
 
 
 @pytest.mark.asyncio

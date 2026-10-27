@@ -13,7 +13,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.config import Settings
 from app.db import get_session
-from app.dify_console import DifyConsoleClient
+from app.dify_console import DifyConsoleClient, DifyConsoleError
 from app.errors import AppError
 from app.events.agent import AGENT_DELETED, AGENT_OFFLINE, AGENT_PUBLISHED
 from app.events.bus import EventBus
@@ -32,6 +32,12 @@ def _console_mock(*, app_id: str = "dify-app-1", api_token: str = "app-secret-1"
     console.configure_model.return_value = {"result": "success"}
     console.create_api_key.return_value = {"id": "key-1", "token": api_token}
     console.delete_app.return_value = None
+    console.get_model_providers.return_value = {
+        "data": [
+            {"provider": "openai"},
+            {"provider": "langgenius/azure_openai/azure_openai"},
+        ]
+    }
     return console
 
 
@@ -108,6 +114,7 @@ async def test_register_creates_draft_agent_with_dify_app(session_factory) -> No
                 modelId="model-1",
                 modelName="GPT-4o",
                 modelProvider="openai",
+                prompt="You are helpful",
             ),
             tenant_id=tenant.id,
             actor_id=user.id,
@@ -119,8 +126,93 @@ async def test_register_creates_draft_agent_with_dify_app(session_factory) -> No
         assert agent.dify_api_key == "app-secret-1"
         console.create_app.assert_awaited_once()
         console.configure_model.assert_awaited_once()
+        # The agent DTO's provider/id pair is what the engine's model object carries.
+        configured = console.configure_model.await_args.args[1]
+        assert configured.model.provider == "openai"
+        assert configured.model.name == "model-1"
+        # C-125: the prompt is the system prompt; the greeting stays unset.
+        assert configured.pre_prompt == "You are helpful"
+        assert configured.opening_statement is None
         console.create_api_key.assert_awaited_once()
         console.delete_app.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_register_resolves_a_short_provider_key_to_the_installed_id(session_factory) -> None:  # type: ignore[no-untyped-def]
+    console = _console_mock()
+    async with session_factory() as session:
+        tenant, user = await _seed_tenant_user(session)
+        service = AgentService(session, console)
+
+        await service.register(
+            CreateAgentDto(
+                agentId="azure-bot",
+                name="Azure Bot",
+                modelId="gpt-4o",
+                modelProvider="azure",
+            ),
+            tenant_id=tenant.id,
+            actor_id=user.id,
+        )
+
+        # C-126: the create form suggests ``azure``; the engine's own expansion
+        # would turn that into ``langgenius/azure/azure`` and reject it.
+        configured = console.configure_model.await_args.args[1]
+        assert configured.model.provider == "langgenius/azure_openai/azure_openai"
+
+
+@pytest.mark.asyncio
+async def test_register_rejects_an_uninstalled_provider_before_creating_the_app(  # type: ignore[no-untyped-def]
+    session_factory,
+) -> None:
+    console = _console_mock()
+    console.get_model_providers.return_value = {"data": [{"provider": "openai"}]}
+    async with session_factory() as session:
+        tenant, user = await _seed_tenant_user(session)
+        service = AgentService(session, console)
+
+        with pytest.raises(AppError) as exc:
+            await service.register(
+                CreateAgentDto(
+                    agentId="ghost-bot",
+                    name="Ghost Bot",
+                    modelId="gpt-4o",
+                    modelProvider="azure",
+                ),
+                tenant_id=tenant.id,
+                actor_id=user.id,
+            )
+
+        # C-126: rejection is a request error with no engine write and no row.
+        assert (exc.value.status_code, exc.value.code) == (400, "INVALID_MODEL_PROVIDER")
+        console.create_app.assert_not_awaited()
+        console.delete_app.assert_not_awaited()
+        assert await AgentRepository(session).find_by_id(tenant.id, "ghost-bot") is None
+
+
+@pytest.mark.asyncio
+async def test_register_maps_a_provider_listing_failure_to_502(session_factory) -> None:  # type: ignore[no-untyped-def]
+    console = _console_mock()
+    console.get_model_providers.side_effect = DifyConsoleError(503, "engine unavailable")
+    async with session_factory() as session:
+        tenant, user = await _seed_tenant_user(session)
+        service = AgentService(session, console)
+
+        with pytest.raises(AppError) as exc:
+            await service.register(
+                CreateAgentDto(
+                    agentId="down-bot",
+                    name="Down Bot",
+                    modelId="gpt-4o",
+                    modelProvider="openai",
+                ),
+                tenant_id=tenant.id,
+                actor_id=user.id,
+            )
+
+        # C-126: an unavailable provider listing is an upstream failure.
+        assert (exc.value.status_code, exc.value.code) == (502, "DIFY_ERROR")
+        console.create_app.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -145,6 +237,33 @@ async def test_register_compensates_dify_app_on_db_failure(session_factory) -> N
         assert exc.value.status_code == 400
         assert exc.value.code == "INVALID_BINDING"
         console.delete_app.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_register_compensates_dify_app_when_model_config_fails(session_factory) -> None:  # type: ignore[no-untyped-def]
+    console = _console_mock()
+    console.configure_model.side_effect = DifyConsoleError(400, "model must be of object type")
+    async with session_factory() as session:
+        tenant, user = await _seed_tenant_user(session)
+        service = AgentService(session, console)
+
+        with pytest.raises(AppError) as exc:
+            await service.register(
+                CreateAgentDto(
+                    agentId="model-bot",
+                    name="Model Bot",
+                    modelId="gpt-4o",
+                    modelProvider="openai",
+                ),
+                tenant_id=tenant.id,
+                actor_id=user.id,
+            )
+
+        # C-31: a rejected model configuration rolls back and removes the app.
+        assert (exc.value.status_code, exc.value.code) == (502, "DIFY_ERROR")
+        console.create_api_key.assert_not_awaited()
+        console.delete_app.assert_awaited_once_with("dify-app-1")
+        assert await AgentRepository(session).find_by_id(tenant.id, "model-bot") is None
 
 
 @pytest.mark.asyncio

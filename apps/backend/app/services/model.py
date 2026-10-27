@@ -93,6 +93,34 @@ def _normalize_providers(raw: Any) -> list[ModelProviderDto]:
     return providers
 
 
+def match_provider_identifier(installed: list[str], requested: str) -> str | None:
+    """Resolve a provider key from the create form onto an installed identifier.
+
+    Dify expands a single-segment key to ``langgenius/<key>/<key>``, which misses
+    providers whose plugin and provider names differ (``azure`` is installed as
+    ``langgenius/azure_openai/azure_openai``). Exact identifier first, then any
+    exact segment, then a unique segment prefix; an ambiguous match resolves to
+    nothing so the caller can reject it instead of guessing.
+    """
+    wanted = requested.strip()
+    if not wanted or not installed:
+        return None
+    if wanted in installed:
+        return wanted
+    parts = {provider: provider.split("/") for provider in installed}
+    exact = [provider for provider, segments in parts.items() if wanted in segments]
+    if len(exact) == 1:
+        return exact[0]
+    if exact:
+        return None
+    prefixed = [
+        provider
+        for provider, segments in parts.items()
+        if any(segment.startswith(wanted) for segment in segments)
+    ]
+    return prefixed[0] if len(prefixed) == 1 else None
+
+
 class ModelService:
     """Read-only proxy over ``DifyConsoleClient`` model-provider endpoints."""
 
@@ -110,3 +138,15 @@ class ModelService:
     async def get_models(self, provider: str) -> Any:
         """Proxy Dify's per-provider model list (backs future detail views)."""
         return await self._console.get_models(provider)
+
+    async def resolve_provider_identifier(self, requested: str) -> str:
+        """Resolve a create-form provider key onto an installed identifier (C-126).
+
+        A provider the workspace does not have is answered here, before the
+        engine creates anything, so the request fails as a client error.
+        """
+        providers = [entry.provider for entry in await self.list_providers()]
+        resolved = match_provider_identifier(providers, requested)
+        if resolved is None:
+            raise AppError(400, "INVALID_MODEL_PROVIDER", "Model provider is not installed")
+        return resolved
