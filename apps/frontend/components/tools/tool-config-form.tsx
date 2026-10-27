@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useId } from "react";
 import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
@@ -13,6 +13,7 @@ import { useToast } from "@/components/ui/toast";
 import { ROUTES } from "@/lib/api-routes";
 import { extractApiErrorMessage } from "@/lib/platform-service";
 import { createTool, updateTool } from "@/lib/tool-service";
+import { cn } from "@/lib/utils";
 import {
   AUTH_TYPES,
   HTTP_METHODS,
@@ -20,7 +21,7 @@ import {
   RISK_LEVELS,
   TOOL_TYPES,
 } from "@/lib/tool-types";
-import type { ToolDetail } from "@/lib/tool-types";
+import type { RiskLevel, ToolDetail } from "@/lib/tool-types";
 
 import {
   AUTH_TYPE_LABEL,
@@ -75,6 +76,20 @@ const DEFAULT_VALUES: ToolFormValues = {
 const SELECT_CLASS =
   "h-10 rounded-md border border-border bg-background px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
 
+const CHOICE_CARD_CLASS =
+  "flex cursor-pointer items-center justify-center rounded-lg border px-3 py-3 text-center text-sm transition-colors focus-within:ring-2 focus-within:ring-ring";
+const CHOICE_CARD_SELECTED =
+  "border-primary bg-primary-subtle font-medium text-primary";
+const CHOICE_CARD_IDLE =
+  "border-border bg-background text-foreground hover:border-primary";
+
+/** Risk slider bands read left to right as low → medium → high. */
+const RISK_BAND_CLASS: Record<RiskLevel, string> = {
+  low: "bg-success",
+  medium: "bg-warning",
+  high: "bg-danger",
+};
+
 function oneOf<T extends readonly string[]>(
   value: string,
   options: T,
@@ -118,6 +133,30 @@ function Field({
   );
 }
 
+/** Labelled radiogroup: card options render as native radios for one choice. */
+function ChoiceField({
+  label,
+  error,
+  children,
+}: {
+  label: string;
+  error?: string;
+  children: React.ReactNode;
+}) {
+  const labelId = useId();
+  return (
+    <div className="flex flex-col gap-2">
+      <span id={labelId} className="text-sm font-medium text-foreground">
+        {label}
+      </span>
+      <div role="radiogroup" aria-labelledby={labelId}>
+        {children}
+      </div>
+      {error && <p className="text-sm text-danger">{error}</p>}
+    </div>
+  );
+}
+
 export interface ToolConfigFormProps {
   /** Present → edit mode; absent → create mode. */
   tool?: ToolDetail;
@@ -134,11 +173,18 @@ export function ToolConfigForm({ tool, onSaved }: ToolConfigFormProps) {
     register,
     handleSubmit,
     reset,
+    setValue,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<ToolFormValues>({
     resolver: zodResolver(toolSchema),
     defaultValues: tool ? toFormValues(tool) : DEFAULT_VALUES,
   });
+
+  const selectedType = watch("type");
+  const selectedPermissionMode = watch("permission_mode");
+  const riskLevel = watch("risk_level");
+  const riskIndex = RISK_LEVELS.indexOf(riskLevel);
 
   useEffect(() => {
     reset(tool ? toFormValues(tool) : DEFAULT_VALUES);
@@ -209,16 +255,38 @@ export function ToolConfigForm({ tool, onSaved }: ToolConfigFormProps) {
             />
           </Field>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="类型" error={errors.type?.message}>
-              <select className={SELECT_CLASS} {...register("type")}>
-                {TOOL_TYPES.map((value) => (
-                  <option key={value} value={value}>
-                    {TOOL_TYPE_LABEL[value]}
-                  </option>
-                ))}
-              </select>
-            </Field>
+          <ChoiceField label="类型" error={errors.type?.message}>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+              {TOOL_TYPES.map((value) => (
+                <label
+                  key={value}
+                  className={cn(
+                    CHOICE_CARD_CLASS,
+                    selectedType === value
+                      ? CHOICE_CARD_SELECTED
+                      : CHOICE_CARD_IDLE,
+                  )}
+                >
+                  <input
+                    type="radio"
+                    value={value}
+                    className="sr-only"
+                    {...register("type")}
+                  />
+                  {TOOL_TYPE_LABEL[value]}
+                </label>
+              ))}
+            </div>
+          </ChoiceField>
+
+          <Input
+            label="端点（Endpoint）"
+            placeholder="https://api.example.com/v1/weather"
+            error={errors.endpoint?.message}
+            {...register("endpoint")}
+          />
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <Field label="HTTP 方法" error={errors.method?.message}>
               <select className={SELECT_CLASS} {...register("method")}>
                 {HTTP_METHODS.map((value) => (
@@ -228,16 +296,6 @@ export function ToolConfigForm({ tool, onSaved }: ToolConfigFormProps) {
                 ))}
               </select>
             </Field>
-          </div>
-
-          <Input
-            label="端点（Endpoint）"
-            placeholder="https://api.example.com/v1/weather"
-            error={errors.endpoint?.message}
-            {...register("endpoint")}
-          />
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label="鉴权方式" error={errors.auth_type?.message}>
               <select className={SELECT_CLASS} {...register("auth_type")}>
                 {AUTH_TYPES.map((value) => (
@@ -255,29 +313,76 @@ export function ToolConfigForm({ tool, onSaved }: ToolConfigFormProps) {
             />
           </div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="风险等级" error={errors.risk_level?.message}>
-              <select className={SELECT_CLASS} {...register("risk_level")}>
-                {RISK_LEVELS.map((value) => (
-                  <option key={value} value={value}>
-                    {RISK_LEVEL_LABEL[value]}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field
-              label="权限模式"
-              error={errors.permission_mode?.message}
-            >
-              <select className={SELECT_CLASS} {...register("permission_mode")}>
-                {PERMISSION_MODES.map((value) => (
-                  <option key={value} value={value}>
-                    {PERMISSION_MODE_LABEL[value]}
-                  </option>
-                ))}
-              </select>
-            </Field>
+          <div className="flex flex-col gap-2">
+            <span className="text-sm font-medium text-foreground">风险等级</span>
+            <input
+              type="range"
+              min={0}
+              max={RISK_LEVELS.length - 1}
+              step={1}
+              value={riskIndex}
+              aria-label="风险等级"
+              aria-valuetext={RISK_LEVEL_LABEL[riskLevel]}
+              onChange={(event) =>
+                setValue("risk_level", RISK_LEVELS[Number(event.target.value)], {
+                  shouldValidate: true,
+                  shouldDirty: true,
+                })
+              }
+              className="w-full accent-primary"
+            />
+            <div className="grid grid-cols-3 gap-1" aria-hidden="true">
+              {RISK_LEVELS.map((value) => (
+                <span
+                  key={value}
+                  data-risk-stop={value}
+                  className={cn("h-1.5 rounded-full", RISK_BAND_CLASS[value])}
+                />
+              ))}
+            </div>
+            <div className="flex justify-between text-xs text-muted-foreground">
+              {RISK_LEVELS.map((value) => (
+                <span
+                  key={value}
+                  className={
+                    value === riskLevel ? "font-medium text-foreground" : undefined
+                  }
+                >
+                  {RISK_LEVEL_LABEL[value]}
+                </span>
+              ))}
+            </div>
+            {errors.risk_level?.message && (
+              <p className="text-sm text-danger">{errors.risk_level.message}</p>
+            )}
           </div>
+
+          <ChoiceField
+            label="权限模式"
+            error={errors.permission_mode?.message}
+          >
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              {PERMISSION_MODES.map((value) => (
+                <label
+                  key={value}
+                  className={cn(
+                    CHOICE_CARD_CLASS,
+                    selectedPermissionMode === value
+                      ? CHOICE_CARD_SELECTED
+                      : CHOICE_CARD_IDLE,
+                  )}
+                >
+                  <input
+                    type="radio"
+                    value={value}
+                    className="sr-only"
+                    {...register("permission_mode")}
+                  />
+                  {PERMISSION_MODE_LABEL[value]}
+                </label>
+              ))}
+            </div>
+          </ChoiceField>
 
           <div className="flex justify-end">
             <Button type="submit" loading={isSubmitting}>
