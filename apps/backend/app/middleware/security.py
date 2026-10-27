@@ -26,6 +26,7 @@ from app.rate_limit import (
     build_rules,
     client_ip,
     matches_path,
+    matches_pattern,
 )
 
 log = structlog.get_logger(__name__)
@@ -183,8 +184,13 @@ class RateLimitMiddleware:
         client_ip_value = client_ip(scope, self.trusted_proxy_count)
         state = scope.setdefault("state", {})
         user_id = state.get("user_id")
+        method = str(scope.get("method", ""))
         for rule in self._rules:
-            if rule.path_prefixes and not matches_path(path, rule.path_prefixes):
+            if rule.methods and method not in rule.methods:
+                continue
+            if (rule.path_prefixes or rule.path_patterns) and not (
+                matches_path(path, rule.path_prefixes) or matches_pattern(path, rule.path_patterns)
+            ):
                 continue
             if matches_path(path, rule.self_limited_paths):
                 continue
