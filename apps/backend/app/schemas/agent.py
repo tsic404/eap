@@ -112,6 +112,8 @@ class AgentDetailDto(AgentDto):
     boundKnowledge: list[KnowledgeBindingDto]
     boundTools: list[ToolBindingDto]
     recentLogs: list[RunLogDto]
+    # Tenant-wide live conversations with this agent; 0 for non-admin callers (C-35).
+    conversationCount: int
 
 
 def agent_to_dto(agent: AgentRegistry) -> AgentDto:
@@ -148,10 +150,13 @@ def _is_binding_visible(agent_tenant_id: uuid.UUID, resource_tenant_id: uuid.UUI
     return resource_tenant_id is None or resource_tenant_id == agent_tenant_id
 
 
-def agent_to_detail_dto(agent: AgentRegistry, recent_logs: list[RunLog]) -> AgentDetailDto:
-    """Serialize an agent with its bound knowledge/tools and recent run logs."""
+def agent_to_detail_dto(
+    agent: AgentRegistry, recent_logs: list[RunLog], conversation_count: int
+) -> AgentDetailDto:
+    """Serialize an agent with its bound knowledge/tools, run logs and sessions."""
     return AgentDetailDto(
         **agent_to_dto(agent).model_dump(),
+        conversationCount=conversation_count,
         boundKnowledge=[
             KnowledgeBindingDto(kbId=binding.kb_id, name=binding.knowledge.name)
             for binding in agent.knowledge_bindings

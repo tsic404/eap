@@ -91,7 +91,12 @@ async def get_agent(
         raise AppError(404, "NOT_FOUND", "Agent not found")
 
     recent_logs = await repo.find_recent_logs(tenant.id, agent_id)
-    return agent_to_detail_dto(agent, recent_logs)
+    # The delete confirmation is admin-only; other callers never see tenant-wide
+    # conversation volume (C-35 / C-53).
+    conversation_count = (
+        await repo.count_conversations(tenant.id, agent_id) if user.role in _ADMIN_ROLES else 0
+    )
+    return agent_to_detail_dto(agent, recent_logs, conversation_count)
 
 
 @router.post("", status_code=201)

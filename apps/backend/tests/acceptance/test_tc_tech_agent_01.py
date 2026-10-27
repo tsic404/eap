@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import httpx
@@ -31,6 +32,7 @@ from app.db import get_session
 from app.dify_console import DifyConsoleClient, DifyConsoleError
 from app.main import create_app
 from app.models.agent import AgentKnowledgeBinding, AgentRegistry, AgentToolBinding
+from app.models.conversation import Conversation
 from app.models.knowledge import KnowledgeBaseRegistry
 from app.models.tenant import Tenant
 from app.models.tool import ToolRegistry
@@ -70,7 +72,9 @@ _CONTRACTED_AGENT_FIELDS = frozenset(
         "updatedAt",
     }
 )
-_CONTRACTED_DETAIL_FIELDS = frozenset({"boundKnowledge", "boundTools", "recentLogs"})
+_CONTRACTED_DETAIL_FIELDS = frozenset(
+    {"boundKnowledge", "boundTools", "recentLogs", "conversationCount"}
+)
 
 
 def _payload(agent_id: str = "sales-bot", **overrides: object) -> dict[str, object]:
@@ -971,6 +975,76 @@ async def test_delete_returns_204_even_when_upstream_cleanup_fails(api) -> None:
     api.console.delete_app.assert_awaited_once_with("dify-app-1")
     detail = await api.client.get("/api/agents/gone-bot", headers=headers)
     assert detail.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_detail_reports_live_conversations_for_the_delete_confirmation(api) -> None:
+    """C-35: admins see the agent's live conversation count, scoped to the agent."""
+    tenant, admin = await api.seed(role="agent_admin")
+    headers = api.auth(admin, tenant)
+    await api.seed_agent(tenant, agent_id="bot-1")
+    await api.seed_agent(tenant, agent_id="other-bot")
+    await api.seed_agent(tenant, agent_id="empty-bot")
+    member = await api.seed_user(tenant)
+    async with api.db.session() as session:
+        session.add_all(
+            [
+                Conversation(tenant_id=tenant.id, user_id=member.id, agent_id="bot-1"),
+                Conversation(tenant_id=tenant.id, user_id=admin.id, agent_id="bot-1"),
+                Conversation(
+                    tenant_id=tenant.id,
+                    user_id=member.id,
+                    agent_id="bot-1",
+                    deleted_at=datetime.now(UTC),
+                ),
+                Conversation(tenant_id=tenant.id, user_id=member.id, agent_id="other-bot"),
+            ]
+        )
+        await session.commit()
+
+    assert (await _detail(api, headers, "bot-1"))["conversationCount"] == 2
+    assert (await _detail(api, headers, "empty-bot"))["conversationCount"] == 0
+
+
+@pytest.mark.asyncio
+async def test_detail_hides_the_conversation_count_from_non_admins(api) -> None:
+    """C-35/C-53: an employee never sees tenant-wide conversation volume."""
+    tenant, _admin = await api.seed(role="agent_admin")
+    employee = await api.seed_user(tenant)
+    await api.seed_agent(tenant, agent_id="bot-1")
+    async with api.db.session() as session:
+        session.add(Conversation(tenant_id=tenant.id, user_id=employee.id, agent_id="bot-1"))
+        await session.commit()
+
+    detail = await _detail(api, api.auth(employee, tenant), "bot-1")
+
+    assert detail["conversationCount"] == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_keeps_the_agents_history_conversations(api) -> None:
+    """C-105: deleting an agent leaves its conversations readable for their owners."""
+    tenant, admin = await api.seed(role="agent_admin")
+    headers = api.auth(admin, tenant)
+    assert (await _create(api, headers, _payload("gone-bot"))).status_code == 201
+    async with api.db.session() as session:
+        session.add(
+            Conversation(
+                tenant_id=tenant.id,
+                user_id=admin.id,
+                agent_id="gone-bot",
+                agent_name="Sales Bot",
+            )
+        )
+        await session.commit()
+
+    assert (await api.client.delete("/api/agents/gone-bot", headers=headers)).status_code == 204
+
+    listed = await api.client.get("/api/conversations", headers=headers)
+    assert listed.status_code == 200
+    assert [(item["agentId"], item["agentName"]) for item in listed.json()["data"]["items"]] == [
+        ("gone-bot", "Sales Bot")
+    ]
 
 
 @pytest.mark.asyncio
