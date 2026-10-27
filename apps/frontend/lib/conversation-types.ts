@@ -121,9 +121,3 @@ export interface ChatStreamState {
   /** Every assistant message id already rendered, used to dedup replays. */
   renderedIds: string[];
 }
-
-/** Structured rate-limit error decoded from a non-SSE (JSON) 429 response. */
-export interface RateLimitInfo {
-  code: string | null;
-  message: string | null;
-}

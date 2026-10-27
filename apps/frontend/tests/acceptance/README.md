@@ -7,6 +7,7 @@
 | `TC-tech-ui-01` | AC-T12 | `test_tc_tech_ui_01.test.tsx` |
 | `TC-kb-01` | AC-15 | `test_tc_kb_01.test.tsx` |
 | `TC-kb-06` | AC-20 | `test_tc_kb_06.test.tsx` |
+| `TC-agent-04` | AC-11 | `test_tc_agent_04.test.tsx` |
 | `TC-sec-02` | AC-43 | `test_tc_sec_02.test.tsx` |
 | `TC-tool-05` | AC-34 | `test_tc_tool_05.test.tsx` |
 | `TC-auth-02` | AC-02 | `test_tc_auth_02.test.tsx` |
@@ -30,6 +31,7 @@ pnpm acceptance --list           # 列出可用标识
 - `TC-kb-01`：创建知识库界面用例。表单与列表驱动真实 SWR 数据层与服务层，仅桩掉共享 axios 实例，断言成功提示、新卡片六要素（名称、描述、类型、文档数、分块数、状态徽章）与重名就地提示；浏览器侧证据在 `e2e/journeys/tc-kb-01-create.spec.ts`（同样的判据在真实 Chromium 中重放），随 e2e 套件执行（单跑：`pnpm test:e2e e2e/journeys/tc-kb-01-create.spec.ts`）。
 - `TC-kb-06`：召回测试界面用例。表单驱动真实 `retrievalTest` 服务，仅桩掉共享 axios 实例，断言界面发出的 `top_k`（5→10）、结果卡片的渲染顺序与无关查询的空状态。上游排序属 `TC-tech-kb-03` 的证据，分数配色与 12px 文本对比度属 `TC-tech-ui-01`，均不在此重复判定；jsdom 不取渲染后的计算样式或像素值。浏览器侧证据在 `e2e/journeys/tc-kb-06-retrieval.spec.ts`（同样的判据在真实 Chromium 中重放，含滑块键盘调节），随 e2e 套件执行（单跑：`pnpm test:e2e e2e/journeys/tc-kb-06-retrieval.spec.ts`）。
 - `TC-auth-02`：会话恢复。刷新通道的网络边界（`fetch`）与共享 axios 实例的适配器被桩成可判定的应答，断言的是各应答之后页面落在哪里（工作区内容留存 / 落到登录页）与刷新被调用的次数是否有界；jsdom 不执行导航，「进入工作区」读自页面发起的路由跳转。浏览器侧证据在 `e2e/journeys/tc-auth-02-session-resume.spec.ts`（真实 Chromium 中重放：引导期硬导航不常驻「正在完成登录…」、刷新不出现 409、已登录访问登录页直接进工作区），单跑：`pnpm test:e2e e2e/journeys/tc-auth-02-session-resume.spec.ts`。
+- `TC-agent-04`：智能体详情页调试页签。模块驱动真实面板与流读取逻辑，仅桩掉 `fetch`，断言三页签切换（`aria-selected`）、用户气泡先于回答出现、回答以递增前缀逐字渲染、结束事件后轨迹标识可复制（剪贴板写入其取值），以及准备阶段失败的就地提示；上游模型不在桩内。浏览器侧证据在 `e2e/journeys/tc-agent-04-agent-debug.spec.ts`，须在配置 Dify workspace provider（`DIFY_*`）的完整栈上执行（`docker compose up -d --build` 后 `make e2e E2E_SPEC=e2e/journeys/tc-agent-04-agent-debug.spec.ts`），且租户内须存在被测的 `bot-1` 智能体。只有「无 Dify workspace provider」（`/api/health/ready` 的 `dify` 非 `ok`）可以让该用例自报 skip；`bot-1` 是否存在由页面自身的鉴权请求证明，缺失即判失败，不会静默跳过。前置成立时断言全量执行。
 - `TC-sec-02`：空态引导。三个管理端列表的列表读取被桩成空页，断言呈现带可操作入口的引导卡片、且不渲染具名列表（`list` 角色）占位；同一模块再以非空数据确认该具名列表确实出现，使空态断言具备判别力。只读角色（审计员、知识库管理员）在同一引导卡片上没有创建入口，头部也没有新建按钮；智能体卡片是可用键盘进入的详情链接。员工端广场文案不在本用例。浏览器侧证据在 `e2e/journeys/tc-sec-02-empty-guidance.spec.ts`（真实 Chromium 中重放，含空态、键盘进入详情、`/admin/agents` 的 200 与角色门禁），单跑：`pnpm test:e2e e2e/journeys/tc-sec-02-empty-guidance.spec.ts`。
 - `TC-tech-ops-02` 末条「浏览器请求实际落在同源相对路径」的浏览器侧证据在 `e2e/same-origin.spec.ts`，随 e2e 套件执行（单跑：`pnpm test:e2e e2e/same-origin.spec.ts`）；后端模块已注明该取证边界。
 - `TC-conv-03`（AC-24）的删除撤销判据是界面用例、不在本套件（本套件按标识承载前端用例），其浏览器侧证据在 `e2e/journeys/conversation-delete-undo.spec.ts`，随 e2e 套件执行（单跑：`pnpm test:e2e e2e/journeys/conversation-delete-undo.spec.ts`）。

@@ -25,6 +25,7 @@ import app.events.run_log as run_log_events
 import app.services.conversation as conversation_module
 from app.core.exceptions import DifyApiError
 from app.models.agent import AgentRegistry
+from app.models.user_memory import UserMemory
 
 _DEBUG_PATH = "/api/agents/{agent_id}/debug"
 
@@ -213,6 +214,29 @@ async def test_a_failed_upstream_ends_with_one_error_frame_and_no_end_event(api,
 async def test_debug_turn_starts_a_fresh_stateless_upstream_conversation(api, upstream) -> None:
     tenant, admin = await api.seed(role="agent_admin")
     await api.seed_agent(tenant, agent_id="stateless-bot")
+    # Both memory types the adapter can inject, held by the caller: with these
+    # in place an implemented recall would fill the inputs, so the empty
+    # assertions below can actually fail.
+    async with api.db.session() as session:
+        session.add_all(
+            [
+                UserMemory(
+                    tenant_id=tenant.id,
+                    user_id=admin.id,
+                    type="preference",
+                    content="偏好简短回答",
+                    importance=1.0,
+                ),
+                UserMemory(
+                    tenant_id=tenant.id,
+                    user_id=admin.id,
+                    type="fact",
+                    content="负责平台运维",
+                    importance=1.0,
+                ),
+            ]
+        )
+        await session.commit()
     stub = upstream(_Upstream(_turn(_trace_id())))
 
     await _debug(api, api.auth(admin, tenant), "stateless-bot", query="hi")

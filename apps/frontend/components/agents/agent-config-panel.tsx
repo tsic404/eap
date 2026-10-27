@@ -7,12 +7,12 @@ import { Tabs } from "@/components/ui/tabs";
 import type { AgentDetail, RunLog } from "@/lib/agent-types";
 import { formatDateTime } from "@/lib/formatters";
 
+import { AgentDebugPanel } from "./agent-debug-panel";
 import {
   AGENT_STATUS_LABEL,
   AGENT_STATUS_VARIANT,
   AGENT_TYPE_LABEL,
 } from "./agent-labels";
-import { MiniChatWindow } from "./mini-chat-window";
 
 function DetailItem({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -143,7 +143,7 @@ export function AgentConfigPanel({ agent }: { agent: AgentDetail }) {
     <Tabs
       items={[
         { value: "config", label: "配置", content: <ConfigTab agent={agent} /> },
-        { value: "debug", label: "调试", content: <MiniChatWindow logs={agent.recentLogs} /> },
+        { value: "debug", label: "调试", content: <AgentDebugPanel agent={agent} /> },
         { value: "logs", label: "日志", content: <LogsTab logs={agent.recentLogs} /> },
       ]}
     />
