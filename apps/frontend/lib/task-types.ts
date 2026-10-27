@@ -83,6 +83,49 @@ export interface TaskList {
   next_cursor: string | null;
 }
 
+/** Fixed `result.reason` the timeout scan writes when it cancels a task (C-75). */
+export const TASK_TIMEOUT_REASON = "超时取消";
+
+/**
+ * What a resolved task exposes to the employee, read off `status` plus the
+ * `result`/`error_message` fields the task API already exposes (C-72, C-74,
+ * C-75). `null` means the task has produced nothing to show yet.
+ */
+export type TaskOutcome =
+  | { kind: "executed"; statusCode: number; body: unknown; latencyMs: number | null }
+  | { kind: "rejected"; reason: string | null }
+  | { kind: "expired" }
+  | { kind: "failed"; message: string | null };
+
+/** Resolve the employee-visible outcome of `task`, or null while in flight. */
+export function resolveTaskOutcome(task: Task): TaskOutcome | null {
+  const result = task.result ?? {};
+  switch (task.status) {
+    case "completed": {
+      const statusCode = result.status_code;
+      if (typeof statusCode !== "number") return null;
+      return {
+        kind: "executed",
+        statusCode,
+        body: result.body,
+        latencyMs:
+          typeof result.latency_ms === "number" ? result.latency_ms : null,
+      };
+    }
+    case "rejected":
+      return {
+        kind: "rejected",
+        reason: typeof result.reason === "string" ? result.reason : null,
+      };
+    case "cancelled":
+      return result.reason === TASK_TIMEOUT_REASON ? { kind: "expired" } : null;
+    case "failed":
+      return { kind: "failed", message: task.error_message };
+    default:
+      return null;
+  }
+}
+
 /** Query parameters accepted by `GET /api/tasks` (§32.7.2). */
 export interface TaskListParams {
   status?: string;

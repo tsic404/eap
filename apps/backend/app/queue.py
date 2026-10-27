@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from redis import Redis
-from rq import Queue
+from rq import Queue, Retry
 
 from app.config import get_settings
 
@@ -26,6 +26,11 @@ KNOWLEDGE_INDEX_QUEUE = "knowledge-index-status"
 MEMORY_EXTRACTION_QUEUE = "memory-extraction"
 
 PROCESS_TASK_JOB = "app.workers.process_task.process_task"
+
+# Requeues per dispatch when a worker dies mid-job or the job raises. Each
+# execution is idempotent (execution claim + status guards), so a repeat is
+# safe; the budget bounds how long a crash loop can postpone a terminal state.
+_JOB_MAX_RETRIES = 3
 
 # Task ``type`` -> RQ queue name (architecture §32.7.3). Unknown types fall back
 # to the audit-log queue so a mis-typed task still lands somewhere observable.
@@ -98,6 +103,10 @@ def enqueue_process_task(
 ) -> None:
     """Enqueue ``process_task`` for an approved/retried task.
 
+    The retry budget is what makes RQ requeue a job whose worker died before it
+    finished (maintenance closes abandoned started entries): without it RQ
+    fails the job instead, and the task would sit in 已批准/执行中 forever.
+
     ``payload`` is passed as one positional argument (never ``**payload``) so a
     task payload key can never collide with RQ's reserved ``job_id``/``args``
     kwargs. ``job_id`` is the outbox event id for observability only — RQ does
@@ -112,4 +121,5 @@ def enqueue_process_task(
         outbox_id,
         payload,
         job_id=outbox_id,
+        retry=Retry(max=_JOB_MAX_RETRIES),
     )

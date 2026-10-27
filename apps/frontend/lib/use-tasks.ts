@@ -10,6 +10,8 @@ const TASKS_KEY_PREFIX = "tasks";
 const TASK_PAGE_SIZE = 20;
 const PENDING_COUNT_LIMIT = 100;
 const PENDING_POLL_INTERVAL_MS = 10_000;
+/** Task-center list cadence: new approvals and state transitions surface here. */
+const TASK_LIST_POLL_INTERVAL_MS = 10_000;
 
 function tasksKey(params: TaskListParams): string {
   return `${TASKS_KEY_PREFIX}:${JSON.stringify(params)}`;
@@ -35,6 +37,7 @@ export function useTasks(params?: Omit<TaskListParams, "cursor">) {
       return tasksKey(pageParams);
     },
     (key) => listTasks({ ...decodeTasksKey(key), limit: TASK_PAGE_SIZE }),
+    { refreshInterval: TASK_LIST_POLL_INTERVAL_MS },
   );
 }
 
