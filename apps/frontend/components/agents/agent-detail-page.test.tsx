@@ -20,7 +20,7 @@ const { publishMock, mutateMock, agentStub } = vi.hoisted(() => ({
     category: null,
     icon: null,
     tags: [],
-    status: "offline",
+    status: "draft",
     modelId: null,
     modelName: null,
     modelProvider: null,
@@ -83,9 +83,44 @@ async function publishViaDialog() {
 beforeEach(() => {
   publishMock.mockReset();
   mutateMock.mockReset();
+  agentStub.status = "draft";
+});
+
+describe("AgentDetailPage lifecycle entries", () => {
+  it("offers 发布 while the agent is a draft", () => {
+    renderPage();
+
+    expect(screen.getByRole("button", { name: "发布" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "下线" })).toBeNull();
+  });
+
+  it("offers 发布 while the agent is testing", () => {
+    agentStub.status = "testing";
+    renderPage();
+
+    expect(screen.getByRole("button", { name: "发布" })).toBeTruthy();
+  });
+
+  it("offers 下线 and no 发布 once published", () => {
+    agentStub.status = "published";
+    renderPage();
+
+    expect(screen.getByRole("button", { name: "下线" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "发布" })).toBeNull();
+  });
+
+  it("offers no publish entry at all once offline", () => {
+    agentStub.status = "offline";
+    renderPage();
+
+    expect(screen.queryByRole("button", { name: "发布" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "下线" })).toBeNull();
+    expect(screen.getByRole("button", { name: "删除" })).toBeTruthy();
+  });
 });
 
 describe("AgentDetailPage publish failures", () => {
+  // 页面停留在刷新前的「草稿」，另一管理员已下线该智能体——发布入口仍在，后端以 409 拒绝。
   it("shows the offline message instead of the version-conflict dialog for 409 INVALID_STATE", async () => {
     publishMock.mockRejectedValueOnce(
       axiosError(409, "INVALID_STATE", "Agent in status 'offline' cannot be published"),
