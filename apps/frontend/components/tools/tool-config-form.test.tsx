@@ -72,6 +72,26 @@ function checkedRadios(groupName: string): string[] {
     .map((radio) => (radio as HTMLInputElement).value);
 }
 
+/** 选中态渲染在卡片 label 上，隐藏的 radio 只能证明取值，不能证明可见选中。 */
+const SELECTED_CARD_CLASS_TOKENS = [
+  "border-primary",
+  "bg-primary-subtle",
+  "text-primary",
+];
+
+function cardForOption(optionName: string): HTMLElement {
+  const card = screen.getByRole("radio", { name: optionName }).closest("label");
+  if (!(card instanceof HTMLElement)) {
+    throw new Error(`${optionName} 选项未渲染为卡片`);
+  }
+  return card;
+}
+
+function selectedCardTokens(card: HTMLElement): string[] {
+  const cardTokens = card.className.split(/\s+/);
+  return SELECTED_CARD_CLASS_TOKENS.filter((token) => cardTokens.includes(token));
+}
+
 beforeEach(() => {
   mocks.createTool.mockReset();
   mocks.updateTool.mockReset();
@@ -91,10 +111,21 @@ describe("ToolConfigForm", () => {
     ).toEqual(["HTTP", "数据库", "RPA", "Webhook", "MCP"]);
 
     expect(checkedRadios("类型")).toEqual(["http"]);
+    expect(selectedCardTokens(cardForOption("HTTP"))).toEqual(
+      SELECTED_CARD_CLASS_TOKENS,
+    );
+    expect(selectedCardTokens(cardForOption("数据库"))).toEqual([]);
 
     fireEvent.click(within(group).getByRole("radio", { name: "数据库" }));
 
     expect(checkedRadios("类型")).toEqual(["database"]);
+    expect(selectedCardTokens(cardForOption("数据库"))).toEqual(
+      SELECTED_CARD_CLASS_TOKENS,
+    );
+    expect(selectedCardTokens(cardForOption("HTTP"))).toEqual([]);
+    expect(cardForOption("数据库").className).not.toBe(
+      cardForOption("HTTP").className,
+    );
   });
 
   it("moves the risk level across the three colour-coded slider stops", () => {
@@ -140,10 +171,21 @@ describe("ToolConfigForm", () => {
     expect(options).toHaveLength(3);
 
     expect(checkedRadios("权限模式")).toEqual(["auto"]);
+    expect(selectedCardTokens(cardForOption("自动执行"))).toEqual(
+      SELECTED_CARD_CLASS_TOKENS,
+    );
+    expect(selectedCardTokens(cardForOption("需确认"))).toEqual([]);
 
     fireEvent.click(within(group).getByRole("radio", { name: "需确认" }));
 
     expect(checkedRadios("权限模式")).toEqual(["confirm"]);
+    expect(selectedCardTokens(cardForOption("需确认"))).toEqual(
+      SELECTED_CARD_CLASS_TOKENS,
+    );
+    expect(selectedCardTokens(cardForOption("自动执行"))).toEqual([]);
+    expect(cardForOption("需确认").className).not.toBe(
+      cardForOption("自动执行").className,
+    );
   });
 
   it("submits the chosen type, risk and permission and confirms the save", async () => {
