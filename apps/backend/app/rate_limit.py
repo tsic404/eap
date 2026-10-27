@@ -167,12 +167,19 @@ class RedisTokenBucket:
 
 @dataclass(frozen=True)
 class RateLimitRule:
-    """A single limit: a token-bucket capacity/refill applied to a path prefix."""
+    """A single limit: a token-bucket capacity/refill applied to a path domain."""
 
     name: str
     capacity: int
     refill_per_second: float
     path_prefixes: tuple[str, ...] = ()
+    # Route-shaped paths a prefix cannot name, e.g. an endpoint with a resource
+    # id in the middle; a ``*`` segment stands for exactly one segment.
+    path_patterns: tuple[str, ...] = ()
+    # Methods the rule applies to; empty means every method. An endpoint that
+    # shares its path with a read route needs this, since only the write is a
+    # counted event.
+    methods: tuple[str, ...] = ()
     # ``True`` keys the bucket by authenticated user id (falling back to the
     # client IP); ``False`` always keys by client IP.
     per_user: bool = False
@@ -191,6 +198,12 @@ _LOGIN_PREFIXES = ("/api/auth/login",)
 LOCAL_LOGIN_PATH = "/api/auth/login/local"
 _CONVERSATION_PREFIXES = ("/api/conversations", "/api/chat-messages")
 _UPLOAD_PREFIXES = ("/api/uploads", "/api/files")
+# The knowledge-base document upload is the second upload endpoint sharing the
+# C-10 bucket. Its path carries the knowledge-base id, so no prefix names it;
+# the same path serves the document listing, which is not an upload and must
+# not spend the bucket.
+_UPLOAD_PATTERNS = ("/api/knowledge-bases/*/documents",)
+_UPLOAD_METHODS = ("POST",)
 
 
 def build_rules(settings: Settings) -> list[RateLimitRule]:
@@ -225,6 +238,8 @@ def build_rules(settings: Settings) -> list[RateLimitRule]:
             capacity=settings.rate_limit_upload_per_minute,
             refill_per_second=settings.rate_limit_upload_per_minute / 60.0,
             path_prefixes=_UPLOAD_PREFIXES,
+            path_patterns=_UPLOAD_PATTERNS,
+            methods=_UPLOAD_METHODS,
             per_user=True,
         ),
     ]
@@ -234,6 +249,29 @@ def build_rules(settings: Settings) -> list[RateLimitRule]:
 def matches_path(path: str, prefixes: tuple[str, ...]) -> bool:
     """Whether ``path`` equals a prefix or lives under one (``prefix/…``)."""
     return any(path == prefix or path.startswith(prefix + "/") for prefix in prefixes)
+
+
+def matches_pattern(path: str, patterns: tuple[str, ...]) -> bool:
+    """Whether ``path`` matches a route pattern in full.
+
+    A pattern names its literal segments and may use ``*`` for exactly one
+    non-empty segment, so ``/api/things/*/parts`` matches that resource's parts
+    route and neither its sibling routes nor a different segment count.
+    """
+    parts = path.split("/")
+    for pattern in patterns:
+        expected = pattern.split("/")
+        if len(expected) != len(parts):
+            continue
+        if all(_segment_matches(want, got) for want, got in zip(expected, parts, strict=True)):
+            return True
+    return False
+
+
+def _segment_matches(expected: str, actual: str) -> bool:
+    if expected == "*":
+        return actual != ""
+    return expected == actual
 
 
 def login_rule(settings: Settings) -> RateLimitRule | None:

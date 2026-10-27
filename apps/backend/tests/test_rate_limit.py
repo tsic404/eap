@@ -13,12 +13,16 @@ from redis.exceptions import RedisError
 from app.config import Settings
 from app.middleware.security import RateLimitMiddleware
 from app.rate_limit import (
+    _UPLOAD_METHODS,
+    _UPLOAD_PATTERNS,
+    _UPLOAD_PREFIXES,
     InMemoryTokenBucket,
     RateLimitRule,
     RedisTokenBucket,
     bucket_key,
     build_rules,
     matches_path,
+    matches_pattern,
 )
 
 
@@ -47,6 +51,26 @@ def test_build_rules_matches_issue_spec() -> None:
     upload = by_name["upload"]
     assert upload.capacity == 10
     assert upload.per_user
+    # C-10 / C-78 make the two upload endpoints one budget, so the wiring is
+    # pinned too: what the rule covers and which requests spend it.
+    assert upload.path_prefixes == _UPLOAD_PREFIXES
+    assert upload.path_patterns == _UPLOAD_PATTERNS
+    assert upload.methods == _UPLOAD_METHODS
+
+
+def test_upload_rule_covers_both_upload_endpoints() -> None:
+    """The bucket reaches chat attachments and knowledge-base documents.
+
+    Asserted against the routes' real paths rather than the module constants,
+    so a constant that stops naming the document route cannot keep both sides
+    of the comparison in step.
+    """
+    upload = next(rule for rule in build_rules(Settings(_env_file=None)) if rule.name == "upload")
+
+    assert matches_path("/api/files/upload", upload.path_prefixes)
+    assert matches_pattern("/api/knowledge-bases/kb-1/documents", upload.path_patterns)
+    assert "POST" in upload.methods
+    assert "GET" not in upload.methods
 
 
 def test_matches_path_prefixes() -> None:
@@ -55,6 +79,16 @@ def test_matches_path_prefixes() -> None:
     assert matches_path("/api/conversations/abc", prefixes)
     assert not matches_path("/api/conversation", prefixes)
     assert not matches_path("/api/conversationships", prefixes)
+
+
+def test_matches_pattern_takes_exactly_one_segment_for_a_wildcard() -> None:
+    patterns = ("/api/knowledge-bases/*/documents",)
+    assert matches_pattern("/api/knowledge-bases/kb-1/documents", patterns)
+    # The per-document routes sit one segment deeper and are not the upload.
+    assert not matches_pattern("/api/knowledge-bases/kb-1/documents/doc-1", patterns)
+    # A wildcard stands for one non-empty segment, never zero.
+    assert not matches_pattern("/api/knowledge-bases//documents", patterns)
+    assert not matches_pattern("/api/knowledge-bases/kb-1/document", patterns)
 
 
 def test_bucket_key_uses_user_for_per_user_rules() -> None:

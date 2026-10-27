@@ -35,6 +35,7 @@ TECH_TC_IDS: tuple[str, ...] = (
     "TC-tech-conv-01",
     "TC-tech-conv-02",
     "TC-tech-conv-03",
+    "TC-tech-upload-03",
     "TC-tech-tools-01",
     "TC-tech-tools-02",
     "TC-tech-ops-01",
