@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Agent } from "@/lib/agent-types";
@@ -10,21 +12,26 @@ const MAX_VISIBLE_TAGS = 4;
 
 export interface AgentCardProps {
   agent: Agent;
+  /**
+   * Detail page the card leads to. Rendered as a real link so keyboard users
+   * can reach it; takes precedence over `onClick`.
+   */
+  href?: string;
   onClick?: () => void;
 }
 
 /** Marketplace card: icon + name + status + description + tags + type/category. */
-export function AgentCard({ agent, onClick }: AgentCardProps) {
+export function AgentCard({ agent, href, onClick }: AgentCardProps) {
   const statusLabel = AGENT_STATUS_LABEL[agent.status] ?? agent.status;
   const statusVariant = AGENT_STATUS_VARIANT[agent.status] ?? "default";
   const typeLabel = AGENT_TYPE_LABEL[agent.type] ?? agent.type;
   const visibleTags = agent.tags.slice(0, MAX_VISIBLE_TAGS);
   const remainingTags = agent.tags.length - visibleTags.length;
 
-  return (
+  const card = (
     <Card
-      variant={onClick ? "interactive" : "default"}
-      onClick={onClick}
+      variant={href || onClick ? "interactive" : "default"}
+      onClick={href ? undefined : onClick}
       className="flex h-full flex-col"
     >
       <CardHeader>
@@ -67,5 +74,18 @@ export function AgentCard({ agent, onClick }: AgentCardProps) {
         </div>
       </CardContent>
     </Card>
+  );
+
+  if (!href) {
+    return card;
+  }
+
+  return (
+    <Link
+      href={href}
+      className="block h-full rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+    >
+      {card}
+    </Link>
   );
 }

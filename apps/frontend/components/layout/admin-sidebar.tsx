@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   Activity,
   BookOpen,
+  Bot,
   LayoutDashboard,
   ScrollText,
   Server,
@@ -31,6 +32,7 @@ interface NavItem {
 
 const NAV_ITEMS: readonly NavItem[] = [
   { key: "dashboard", labelKey: "dashboard", icon: LayoutDashboard, href: "#" },
+  { key: "agents", labelKey: "agents", icon: Bot, href: "/admin/agents" },
   { key: "knowledge", labelKey: "knowledge", icon: BookOpen, href: "/admin/knowledge" },
   { key: "tools", labelKey: "tools", icon: Wrench, href: "/admin/tools" },
   {
