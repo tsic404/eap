@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
@@ -232,6 +232,7 @@ export function AgentCreateForm() {
   const parsedTags = useMemo(() => parseTags(values.tags), [values.tags]);
 
   const goNext = async () => {
+    if (step >= STEPS.length - 1) return;
     const valid = await trigger(STEP_FIELDS[step], { shouldFocus: true });
     if (valid) setStep((current) => Math.min(current + 1, STEPS.length - 1));
   };
@@ -252,6 +253,7 @@ export function AgentCreateForm() {
   };
 
   const onSubmit = async (formValues: CreateAgentFormValues) => {
+    if (step !== STEPS.length - 1) return;
     setSubmitting(true);
     try {
       const agent = await createAgent({
@@ -282,6 +284,20 @@ export function AgentCreateForm() {
     }
   };
 
+  const submit = handleSubmit(onSubmit);
+
+  /**
+   * Creation is its own action, never a step of the advance path. `detail`
+   * distinguishes the click that opens the preview from the one that follows
+   * it in the same multi-click gesture: the second and later clicks of a
+   * double click carry `detail > 1` and must not create the agent.
+   */
+  const requestCreate = (event: MouseEvent<HTMLButtonElement>) => {
+    if (event.detail > 1) return;
+    if (step !== STEPS.length - 1) return;
+    void submit();
+  };
+
   const toolIds = watch("toolIds");
 
   return (
@@ -299,7 +315,17 @@ export function AgentCreateForm() {
 
       <StepIndicator current={step} />
 
-      <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-6">
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (step < STEPS.length - 1) {
+            void goNext();
+            return;
+          }
+          void submit();
+        }}
+        className="flex flex-col gap-6"
+      >
         {step === 0 && (
           <div className="flex flex-col gap-4">
             <Input
@@ -502,12 +528,18 @@ export function AgentCreateForm() {
             上一步
           </Button>
           {step < STEPS.length - 1 ? (
-            <Button type="button" onClick={goNext}>
+            <Button key="advance" type="button" onClick={goNext}>
               下一步
               <ChevronRight className="h-4 w-4" />
             </Button>
           ) : (
-            <Button type="submit" loading={submitting}>
+            <Button
+              key="create"
+              type="button"
+              onClick={requestCreate}
+              loading={submitting}
+              autoFocus
+            >
               创建智能体
             </Button>
           )}
