@@ -67,6 +67,8 @@ export interface AgentDetail extends Agent {
   boundKnowledge: KnowledgeBinding[];
   boundTools: ToolBinding[];
   recentLogs: RunLog[];
+  /** Tenant-wide conversations with this agent; 0 for non-admin callers (C-35). */
+  conversationCount: number;
 }
 
 /** Query parameters accepted by `GET /api/agents`. */

@@ -34,6 +34,7 @@ const { publishMock, mutateMock, agentStub } = vi.hoisted(() => ({
     boundKnowledge: [],
     boundTools: [],
     recentLogs: [],
+    conversationCount: 0,
   } as AgentDetail,
 }));
 
