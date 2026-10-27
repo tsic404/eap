@@ -1,10 +1,21 @@
-# QA environment: one-command bring-up of the SSO end-to-end stack the
-# Playwright e2e harness exercises, minus the test runner.
+# QA environment: one-command bring-up of the local-family stack the Playwright
+# e2e harness exercises, minus the test runner. It is the local main stack's
+# shape (C-88): the same ten resident containers (the entry here is the
+# reverse-proxy instead of nginx) and the same three one-shot bootstraps.
 #
-#   make qa-up     # generate JWT keys + build + start everything
+#   make qa-up     # generate JWT keys + stack secrets + build + start everything
 #   make qa-down   # stop and remove the stack
 #
 # Entry point: http://localhost:8090 (reverse proxy → frontend + backend).
+#
+# The inference engine (dify-api / dify-worker / plugin-daemon / weaviate) is a
+# resident dependency, so agents can be created and exercised for real. Its
+# console admin, the pinned OpenAI-compatible model plugin and the deterministic
+# model the stub container serves are configured by the `db-seed` one-shot
+# (deploy/qa/dify_bootstrap.py) — no credential is committed: `make qa-up`
+# generates deploy/qa/qa.env (gitignored) and compose is invoked with it as the
+# interpolation env file. Run the compose commands with `make`, or pass
+# `--env-file deploy/qa/qa.env` yourself.
 #
 # The mock IdP is published on :4000 so the *browser* can reach its
 # authorization endpoint directly. The *backend* reaches the IdP's
@@ -13,6 +24,11 @@
 # browser-facing issuer (OIDC_ISSUER). That split is exactly what
 # mock-idp.mjs's MOCK_IDP_ISSUER / MOCK_IDP_BACKEND_BASE contract exists for.
 #
+# The same stub container also serves the deterministic OpenAI-compatible model
+# (apps/frontend/e2e/mock-model.mjs) on an internal-only port, so the engine has
+# a provider that answers chat/stream/embedding calls without an external
+# service or a real credential.
+#
 # Host ports are overridable for machines where the defaults are taken:
 #   QA_IDP_PORT    (default 4000)   mock IdP browser-facing port
 #   QA_PROXY_PORT  (default 8090)   reverse-proxy / entry-point port
@@ -20,6 +36,36 @@
 #   QA_REDIS_PORT  (default 6380)   Redis host port (debug only)
 
 name: eap-qa
+
+# Engine processes: the Dify api image runs either `MODE: api` or `MODE: worker`;
+# model/tool plugins live in `plugin-daemon`, which owns the `dify_plugin`
+# database and reaches the api back through the inner-API key. Secrets come from
+# the generated QA env file through `${...:?}` interpolation — a missing or
+# empty value fails the orchestration instead of booting a keyless engine.
+x-dify-env: &dify-env
+  LOG_LEVEL: INFO
+  SECRET_KEY: ${DIFY_SECRET_KEY:?DIFY_SECRET_KEY must be set (run make qa-secrets)}
+  MIGRATION_ENABLED: "true"
+  DB_TYPE: postgresql
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_USERNAME: eap
+  DB_PASSWORD: eap_password
+  DB_DATABASE: dify
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+  CELERY_BROKER_URL: redis://redis:6379/1
+  VECTOR_STORE: weaviate
+  WEAVIATE_ENDPOINT: http://weaviate:8080
+  WEAVIATE_API_KEY: ${WEAVIATE_API_KEY:?WEAVIATE_API_KEY must be set (run make qa-secrets)}
+  STORAGE_TYPE: local
+  STORAGE_LOCAL_PATH: storage
+  FILES_URL: ""
+  PLUGIN_DAEMON_URL: http://plugin-daemon:5002
+  PLUGIN_DAEMON_KEY: ${PLUGIN_DAEMON_KEY:?PLUGIN_DAEMON_KEY must be set (run make qa-secrets)}
+  INNER_API_KEY_FOR_PLUGIN: ${PLUGIN_DIFY_INNER_API_KEY:?PLUGIN_DIFY_INNER_API_KEY must be set (run make qa-secrets)}
+  PLUGIN_MAX_PACKAGE_SIZE: "52428800"
 
 services:
   postgres:
@@ -50,26 +96,50 @@ services:
       retries: 5
     restart: unless-stopped
 
+  weaviate:
+    # Dify 1.17's weaviate-client rejects servers below 1.27.0 (same pin as the
+    # local main stack); the shared stub model makes the vectorizer a no-op.
+    image: semitechnologies/weaviate:1.27.27
+    environment:
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "false"
+      AUTHENTICATION_APIKEY_ENABLED: "true"
+      AUTHENTICATION_APIKEY_ALLOWED_KEYS: ${WEAVIATE_API_KEY:?WEAVIATE_API_KEY must be set (run make qa-secrets)}
+      AUTHENTICATION_APIKEY_USERS: eap@example.com
+      PERSISTENCE_DATA_PATH: /var/lib/weaviate
+      DEFAULT_VECTORIZER_MODULE: none
+      CLUSTER_HOSTNAME: node1
+    volumes:
+      - qa_weaviadata:/var/lib/weaviate
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/v1/.well-known/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   mock-idp:
     image: node:22-alpine
     working_dir: /app
     volumes:
       - ./apps/frontend/e2e/mock-idp.mjs:/app/mock-idp.mjs:ro
+      - ./apps/frontend/e2e/mock-model.mjs:/app/mock-model.mjs:ro
     environment:
       MOCK_IDP_PORT: "${QA_IDP_PORT:-4000}"
       MOCK_IDP_ISSUER: http://localhost:${QA_IDP_PORT:-4000}
       MOCK_IDP_BACKEND_BASE: http://mock-idp:${QA_IDP_PORT:-4000}
       OIDC_CLIENT_ID: e2e-client
+      # The deterministic model endpoint the engine's provider points at. Kept
+      # off the host: only the compose network consumes it.
+      MOCK_MODEL_PORT: "4100"
+      MOCK_MODEL_NAME: mock-gpt
     command: ["node", "mock-idp.mjs"]
     ports:
       - "${QA_IDP_PORT:-4000}:${QA_IDP_PORT:-4000}"
     healthcheck:
       test:
         [
-          "CMD",
-          "wget",
-          "-qO-",
-          "http://127.0.0.1:${QA_IDP_PORT:-4000}/.well-known/openid-configuration",
+          "CMD-SHELL",
+          "wget -qO- http://127.0.0.1:${QA_IDP_PORT:-4000}/.well-known/openid-configuration >/dev/null && wget -qO- http://127.0.0.1:4100/healthz >/dev/null",
         ]
       interval: 10s
       timeout: 3s
@@ -91,6 +161,12 @@ services:
       RATE_LIMIT_LOGIN_PER_MINUTE: "${RATE_LIMIT_LOGIN_PER_MINUTE:-10}"
       DATABASE_URL: postgresql+asyncpg://eap:eap_password@postgres:5432/eap_e2e
       REDIS_URL: redis://redis:6379/0
+      DIFY_API_BASE_URL: http://dify-api:5001
+      # Readyness requires a console account that can log in and a workspace
+      # with a configured provider; the one-shot bootstrap creates the account
+      # from the same generated values.
+      DIFY_CONSOLE_EMAIL: ${DIFY_CONSOLE_EMAIL:?DIFY_CONSOLE_EMAIL must be set (run make qa-secrets)}
+      DIFY_CONSOLE_PASSWORD: ${DIFY_CONSOLE_PASSWORD:?DIFY_CONSOLE_PASSWORD must be set (run make qa-secrets)}
       OIDC_ISSUER: http://localhost:${QA_IDP_PORT:-4000}
       OIDC_DISCOVERY_URL: http://mock-idp:${QA_IDP_PORT:-4000}
       OIDC_CLIENT_ID: e2e-client
@@ -107,12 +183,62 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3001/api/health/live')",
+        ]
+      interval: 10s
+      timeout: 3s
+      # A fresh QA volume runs the whole Alembic chain before the app serves;
+      # on a loaded host that outlasts the default window, so the container must
+      # not be declared unhealthy mid-migration (the one-shot seed waits on it).
+      start_period: 300s
+      retries: 12
     restart: unless-stopped
 
-  # One-shot seed: the backend's entrypoint migrates the schema before serving,
-  # so once it is healthy the tenants table exists. The same container seeds the
-  # first platform administrator as a local account (must change) because this
-  # stack declares local login on. Re-runs on every `make qa-up`; harmless.
+  # One-shot: Dify's api/worker connect to `dify` and the plugin daemon to
+  # `dify_plugin`; Postgres only auto-creates POSTGRES_DB (`eap_e2e`). Both are
+  # created here, idempotently, on every bring-up.
+  dify-db-init:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: eap_password
+    volumes:
+      - ./deploy/postgres/bootstrap-databases.sql:/bootstrap.sql:ro
+    command:
+      ["psql", "-h", "postgres", "-U", "eap", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-f", "/bootstrap.sql"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # One-shot: the Dify images run as uid 1001, so their storage volume must be
+  # owned by that uid before either process writes an uploaded file into it.
+  init_permissions:
+    image: alpine:3.20
+    command:
+      - sh
+      - -c
+      - |
+        FLAG_FILE="/app/api/storage/.init_permissions"
+        if [ -f "$${FLAG_FILE}" ]; then
+          echo "Permissions already initialized. Exiting."
+          exit 0
+        fi
+        chown -R 1001:1001 /app/api/storage && touch "$${FLAG_FILE}"
+        echo "Permissions initialized. Exiting."
+    volumes:
+      - qa_dify_api_storage:/app/api/storage
+    restart: "no"
+
+  # One-shot: seeds the tenant / identities (app.bootstrap) and then configures
+  # the engine's console account, model provider and deterministic model. Its
+  # exit code is part of the C-88 readiness baseline, so a half-configured
+  # engine cannot read as ready.
   db-seed:
     image: eap-backend:qa-local
     build:
@@ -124,11 +250,138 @@ services:
       LOCAL_LOGIN_ENABLED: "true"
       LOCAL_ADMIN_EMAIL: ${LOCAL_ADMIN_EMAIL:-admin@acme.com}
       LOCAL_ADMIN_PASSWORD: ${LOCAL_ADMIN_PASSWORD:-Local-Admin-1}
-    command: ["python", "-m", "app.bootstrap"]
+      DIFY_API_BASE_URL: http://dify-api:5001
+      DIFY_CONSOLE_EMAIL: ${DIFY_CONSOLE_EMAIL:?DIFY_CONSOLE_EMAIL must be set (run make qa-secrets)}
+      DIFY_CONSOLE_PASSWORD: ${DIFY_CONSOLE_PASSWORD:?DIFY_CONSOLE_PASSWORD must be set (run make qa-secrets)}
+      QA_MODEL_API_KEY: ${QA_MODEL_API_KEY:?QA_MODEL_API_KEY must be set (run make qa-secrets)}
+      QA_MODEL_NAME: mock-gpt
+      QA_MODEL_BASE_URL: http://mock-idp:4100/v1
+      QA_DIFY_TIMEOUT: "900"
+    volumes:
+      - ./deploy/qa/dify_bootstrap.py:/qa/dify_bootstrap.py:ro
+    command: ["sh", "-c", "python -m app.bootstrap && python /qa/dify_bootstrap.py"]
     depends_on:
       backend:
         condition: service_healthy
+      dify-api:
+        condition: service_healthy
+      plugin-daemon:
+        condition: service_healthy
     restart: "no"
+
+  dify-api:
+    image: langgenius/dify-api:1.17.0
+    environment:
+      <<: *dify-env
+      MODE: api
+    volumes:
+      - qa_dify_api_storage:/app/api/storage
+    depends_on:
+      dify-db-init:
+        condition: service_completed_successfully
+      init_permissions:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      weaviate:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:5001/health"]
+      interval: 30s
+      timeout: 10s
+      # Cold start (migrations + gunicorn warmup) has been measured at ~9 min on
+      # this host; the wide window only delays the "unhealthy" verdict.
+      start_period: 600s
+      retries: 10
+    restart: unless-stopped
+
+  dify-worker:
+    image: langgenius/dify-api:1.17.0
+    command: >-
+      celery -A app.celery worker -P gevent -c 1 --loglevel INFO
+      -Q dataset,generation,mail,ops_trace,plugin
+    environment:
+      <<: *dify-env
+      MODE: worker
+    volumes:
+      - qa_dify_api_storage:/app/api/storage
+    depends_on:
+      dify-db-init:
+        condition: service_completed_successfully
+      init_permissions:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      weaviate:
+        condition: service_healthy
+    # Same caveat as the local main stack: this probe checks broker
+    # reachability, not worker liveness; process death is covered by restart.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os, redis; redis.from_url(os.environ['CELERY_BROKER_URL']).ping()",
+        ]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 5
+    restart: unless-stopped
+
+  # Dify 1.x model/tool plugins run out-of-process here; every model-manager
+  # call the api makes is proxied to this daemon.
+  plugin-daemon:
+    image: langgenius/dify-plugin-daemon:0.6.10-local
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USERNAME: eap
+      DB_PASSWORD: eap_password
+      DB_DATABASE: dify_plugin
+      DB_SSL_MODE: disable
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      REDIS_PASSWORD: ""
+      REDIS_USE_SSL: "false"
+      SERVER_PORT: "5002"
+      SERVER_KEY: ${PLUGIN_DAEMON_KEY:?PLUGIN_DAEMON_KEY must be set (run make qa-secrets)}
+      DIFY_INNER_API_URL: http://dify-api:5001
+      DIFY_INNER_API_KEY: ${PLUGIN_DIFY_INNER_API_KEY:?PLUGIN_DIFY_INNER_API_KEY must be set (run make qa-secrets)}
+      PLUGIN_REMOTE_INSTALLING_HOST: 0.0.0.0
+      PLUGIN_REMOTE_INSTALLING_PORT: "5003"
+      PLUGIN_WORKING_PATH: /app/storage/cwd
+      PLUGIN_STORAGE_TYPE: local
+      PLUGIN_STORAGE_LOCAL_ROOT: /app/storage
+      PLUGIN_INSTALLED_PATH: plugin
+      PLUGIN_PACKAGE_CACHE_PATH: plugin_packages
+      PLUGIN_MEDIA_CACHE_PATH: assets
+      MAX_PLUGIN_PACKAGE_SIZE: "52428800"
+      PLUGIN_MAX_EXECUTION_TIMEOUT: "600"
+      PYTHON_ENV_INIT_TIMEOUT: "120"
+      FORCE_VERIFYING_SIGNATURE: "true"
+    volumes:
+      - qa_plugin_daemon_storage:/app/storage
+    depends_on:
+      dify-db-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:5002/health/check"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    restart: unless-stopped
 
   frontend:
     build:
@@ -165,6 +418,14 @@ services:
     command: ["node", "reverse-proxy.mjs"]
     ports:
       - "${QA_PROXY_PORT:-8090}:${QA_PROXY_PORT:-8090}"
+    # /healthz answers from the proxy process itself: the entry's health must
+    # not depend on the services it fronts.
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -qO- http://127.0.0.1:${QA_PROXY_PORT:-8090}/healthz >/dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     depends_on:
       - frontend
       - backend
@@ -178,3 +439,6 @@ secrets:
 
 volumes:
   qa_pgdata:
+  qa_weaviadata:
+  qa_dify_api_storage:
+  qa_plugin_daemon_storage:

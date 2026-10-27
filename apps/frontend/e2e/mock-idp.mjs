@@ -8,6 +8,8 @@
 import { createServer } from "node:http";
 import { createHash, generateKeyPairSync, randomBytes, sign } from "node:crypto";
 
+import { startMockModel } from "./mock-model.mjs";
+
 const PORT = Number(process.env.MOCK_IDP_PORT ?? 4000);
 const ISSUER = process.env.MOCK_IDP_ISSUER ?? `http://localhost:${PORT}`;
 // Base URL the *backend* uses for the server-to-server endpoints (token,
@@ -17,6 +19,11 @@ const ISSUER = process.env.MOCK_IDP_ISSUER ?? `http://localhost:${PORT}`;
 // `localhost` on the host.
 const BACKEND_BASE = process.env.MOCK_IDP_BACKEND_BASE ?? ISSUER;
 const CLIENT_ID = process.env.OIDC_CLIENT_ID ?? "e2e-client";
+// QA variant only: the same container also serves the deterministic
+// OpenAI-compatible model the inference engine's provider is configured
+// against. Unset elsewhere, so the in-process e2e harness keeps one endpoint.
+const MODEL_PORT = process.env.MOCK_MODEL_PORT ? Number(process.env.MOCK_MODEL_PORT) : null;
+const MODEL_NAME = process.env.MOCK_MODEL_NAME ?? "mock-gpt";
 
 const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
 const jwk = publicKey.export({ format: "jwk" });
@@ -170,4 +177,7 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`mock-idp listening on http://localhost:${PORT}`);
+  if (MODEL_PORT !== null) {
+    startMockModel({ port: MODEL_PORT, model: MODEL_NAME });
+  }
 });

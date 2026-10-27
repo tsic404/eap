@@ -141,33 +141,38 @@ pnpm acceptance --list           # 列出可用标识
 
 根目录另有 `make acceptance-ui`（单条：`make acceptance-ui TC=TC-kb-06`）。`TC-tech-ops-02` 末条「浏览器请求实际落在同源相对路径」由 `apps/frontend/e2e/same-origin.spec.ts` 在真实浏览器中取证，随 `pnpm test:e2e` 执行。
 
-## QA 环境（SSO 端到端）
+## QA 环境（本地族完整形态）
 
-一键拉起与 Playwright e2e 回归同源的 SSO 栈（mock IdP + backend + eap_e2e DB + frontend + 反向代理），无需再手动 `docker build` / `uv sync` / 建库 / socat。
+一键拉起与 Playwright e2e 回归同源的本地族栈：入口反向代理 + mock IdP + backend + eap_e2e DB + frontend，以及完整的推理引擎（Dify api / worker / 插件宿主 / Weaviate），无需再手动 `docker build` / `uv sync` / 建库 / socat。容器集合与本地主栈一致（C-88：10 个常驻 + 3 个一次性引导），入口用反向代理代替 nginx。
 
 ```bash
-make qa-up     # 生成 JWT 密钥 + 构建并启动全部服务
-make qa-down   # 停止并移除全部服务（保留 eap_e2e 数据卷）
+make qa-up     # 生成 JWT 密钥与栈密钥 + 构建并启动全部服务
+make qa-down   # 停止并移除全部服务（保留数据卷）
 ```
 
 - 入口：http://localhost:8090（反向代理把前端与后端统一到同一 origin）
 - 登录：首页 → `SSO 登录`；mock IdP 用户 `alice@acme.com` 落到 seed 的 `acme.com` 租户
-- 后端日志：`docker compose -f docker-compose.qa.yml logs -f backend`
+- 后端日志：`docker compose --env-file deploy/qa/qa.env -f docker-compose.qa.yml logs -f backend`
+- 就绪：`curl http://localhost:8090/api/health/ready` 期望 200，且 `checks` 三项均 `ok`
 
 | 服务 | 端口 | 说明 |
 | --- | --- | --- |
-| reverse-proxy | 8090 | 反向代理（`/api/*` → backend，其余 → frontend） |
-| mock-idp | 4000 | mock OIDC IdP（浏览器直达其 authorize 端点） |
+| reverse-proxy | 8090 | 反向代理（`/api/*` → backend，其余 → frontend；`/healthz` 自检） |
+| mock-idp | 4000 | mock OIDC IdP（浏览器直达其 authorize 端点）；同时提供内网确定性模型端点 `:4100` |
 | frontend | 内部 3000 | Next.js 生产构建 |
 | backend | 内部 3001 | FastAPI，含 JWT 密钥生成 |
-| postgres | 5433 | `eap_e2e` 库（首次启动 seed `acme.com` 租户） |
-| redis | 6380 | 会话 / 限流 |
+| dify-api / dify-worker | 内部 5001 | 推理引擎 API 与异步 worker |
+| plugin-daemon | 内部 5002 | 模型 / 工具插件宿主（`dify_plugin` 库） |
+| weaviate | 内部 8080 | 向量库（与主栈同版本） |
+| postgres | 5433 | `eap_e2e` 库；另由 `dify-db-init` 幂等创建 `dify` / `dify_plugin` |
+| redis | 6380 | 会话 / 限流 / 引擎队列 |
 
 说明：
 
-- `make qa-up` 幂等：JWT 密钥首次生成后复用（`deploy/qa/keys/`，已 gitignore），租户 seed 为幂等 SQL。
+- `make qa-up` 幂等：JWT 密钥（`deploy/qa/keys/`）与栈密钥（`deploy/qa/qa.env`）首次生成后复用，均已在 gitignore 内；仓库不落密钥。移除了 `deploy/qa/qa.env` 时须连同数据卷一起清理（`down -v`）再重建，否则引擎控制台账号与生成值不再匹配。
+- `db-seed` 在种入租户 / 账号后调用 `deploy/qa/dify_bootstrap.py`：创建引擎控制台账号、安装固定版本的 OpenAI 兼容模型插件，并把 `mock-idp` 容器内确定性模型注册为工作区模型。它的一次性退出码属于就绪基线（C-88），引擎配置不完整时不会伪装成就绪。工作区模型为 `langgenius/openai_api_compatible/openai_api_compatible` / `mock-gpt`，创建智能体时直接引用。
 - 容器化后浏览器与后端分处不同网络视角：后端经 `OIDC_DISCOVERY_URL` 走 compose 网络访问 IdP 的 token/userinfo/JWKS，同时按浏览器侧 `OIDC_ISSUER` 校验 id_token（对应 `mock-idp.mjs` 的 `MOCK_IDP_ISSUER` / `MOCK_IDP_BACKEND_BASE`）。
-- 连数据库卷一起彻底清理：`docker compose -f docker-compose.qa.yml down -v`。
+- 连数据卷一起彻底清理：`docker compose --env-file deploy/qa/qa.env -f docker-compose.qa.yml down -v`。
 
 ### SSO e2e 回归（Playwright）
 
@@ -211,10 +216,12 @@ make e2e E2E_SPEC=e2e/journeys/tc-auth-09-....spec.ts  # 换一条自足 journey
 
 `scripts/e2e.sh` 一条命令完成：
 
-1. `scripts/gen-jwt-keys.sh deploy/qa/keys` 生成（或复用）QA 密钥；
-2. `docker compose -f docker-compose.qa.yml up -d --build` 起 QA 栈，等到每个带 healthcheck
-   的常驻服务（postgres / redis / mock-idp / backend / frontend）都是 `healthy`、一次性
-   bootstrap 容器退出码 0、入口 `/api/health` 返回 200，才放行用例；
+1. `scripts/gen-jwt-keys.sh deploy/qa/keys` 与 `scripts/gen-qa-secrets.sh` 生成（或复用）QA 的
+   JWT 密钥与栈密钥；
+2. `docker compose --env-file deploy/qa/qa.env -f docker-compose.qa.yml up -d --build` 起 QA 栈，
+   等到 C-88 的 10 个常驻服务（含 dify-api / dify-worker / plugin-daemon / weaviate /
+   reverse-proxy）都是 `healthy`、一次性 bootstrap（含引擎控制台 / 模型插件配置）退出码 0、
+   入口 `/api/health` 返回 200，才放行用例；
 3. 清掉上一轮遗留的登录状态（只删 Redis 的 `login:*` 与 `ratelimit:login:*`，会话等其它键不动）——
    QA 栈的 Redis 是长期存活的，不清理会让上一轮的锁定 / 限流桶漏进本轮；
 4. 在 backend 容器里用应用自己的口令模块种入本地账号（`deploy/e2e/seed_accounts.py`，幂等，
