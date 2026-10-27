@@ -277,6 +277,25 @@ async def test_upload_without_file_part_returns_422_validation_error(api) -> Non
 
 
 @pytest.mark.asyncio
+async def test_unreadable_multipart_body_keeps_the_generic_400_answer(api) -> None:
+    """A body the parser cannot read stays a 400, never an internal error."""
+    tenant, user = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+
+    resp = await api.client.post(
+        f"{_KB_URL}/kb-1/documents",
+        headers={
+            **api.auth(user, tenant),
+            "content-type": "multipart/form-data; boundary=abc",
+        },
+        content=b"garbage",
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "BAD_REQUEST"
+
+
+@pytest.mark.asyncio
 async def test_knowledge_routes_without_a_token_return_401(api) -> None:
     tenant, user = await api.seed(role="knowledge_admin")
     await api.seed_kb(tenant, kb_id="kb-1")
@@ -291,6 +310,44 @@ async def test_knowledge_routes_without_a_token_return_401(api) -> None:
     assert created.json()["error"]["code"] == "UNAUTHORIZED"
     assert uploaded.status_code == 401
     assert uploaded.json()["error"]["code"] == "UNAUTHORIZED"
+
+
+@pytest.mark.asyncio
+async def test_upload_without_a_token_answers_401_before_the_body_is_parsed(api) -> None:
+    """The 401 gate outranks the body: an over-budget payload still answers 401.
+
+    The payload is past the upload budget, so a pipeline that parsed the body
+    first would answer 422 FILE_TOO_LARGE instead.
+    """
+    tenant, _ = await api.seed(role="knowledge_admin")
+    await api.seed_kb(tenant, kb_id="kb-1")
+
+    resp = await api.client.post(
+        f"{_KB_URL}/kb-1/documents",
+        files={"file": ("huge.txt", b"A" * (20 * 1024 * 1024), "text/plain")},
+    )
+
+    assert resp.status_code == 401
+    assert resp.json()["error"]["code"] == "UNAUTHORIZED"
+    api.console.upload_file.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_upload_by_an_employee_answers_403_before_the_body_is_parsed(api) -> None:
+    """The role gate outranks the body: an over-budget payload still answers 403."""
+    tenant, _ = await api.seed(role="knowledge_admin")
+    employee = await api.seed_user(tenant, role="employee")
+    await api.seed_kb(tenant, kb_id="kb-1")
+
+    resp = await api.client.post(
+        f"{_KB_URL}/kb-1/documents",
+        headers=api.auth(employee, tenant),
+        files={"file": ("huge.txt", b"A" * (20 * 1024 * 1024), "text/plain")},
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "FORBIDDEN"
+    api.console.upload_file.assert_not_awaited()
 
 
 @pytest.mark.asyncio

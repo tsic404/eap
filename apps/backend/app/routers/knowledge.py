@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Annotated, cast
 
-from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.datastructures import UploadFile
 
 from app.db import get_session
 from app.dependencies import get_active_tenant, require_tenant_roles
@@ -22,6 +23,7 @@ from app.schemas.knowledge import (
     RetrieveTestResultDto,
 )
 from app.services.knowledge import KnowledgeService
+from app.uploads import OPENAPI_FILE_UPLOAD_BODY, document_upload
 
 router = APIRouter(prefix="/api/knowledge-bases", tags=["knowledge-bases"])
 
@@ -40,6 +42,10 @@ def get_knowledge_service(request: Request) -> KnowledgeService:
 
 
 KnowledgeServiceDep = Annotated[KnowledgeService, Depends(get_knowledge_service)]
+
+# Declared last in the handler signature so the body is only parsed once the
+# caller has passed the tenant and role gates.
+UploadedDocument = Annotated[UploadFile, Depends(document_upload)]
 
 
 @router.get("", response_model=KnowledgeBasePageDto)
@@ -89,14 +95,19 @@ async def delete_knowledge_base(
     await service.delete(session, tenant, kb_id, cascade=cascade)
 
 
-@router.post("/{kb_id}/documents", response_model=DocumentDto, status_code=201)
+@router.post(
+    "/{kb_id}/documents",
+    response_model=DocumentDto,
+    status_code=201,
+    openapi_extra=OPENAPI_FILE_UPLOAD_BODY,
+)
 async def upload_document(
     kb_id: str,
     service: KnowledgeServiceDep,
     tenant: ActiveTenant,
     _: KnowledgeAdmin,
     session: Session,
-    file: Annotated[UploadFile, File(...)],
+    file: UploadedDocument,
 ) -> DocumentDto:
     return await service.upload_document(session, tenant, kb_id, file)
 

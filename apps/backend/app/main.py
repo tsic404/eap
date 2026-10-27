@@ -47,6 +47,7 @@ from app.services.conversation import ConversationService
 from app.services.knowledge import KnowledgeService
 from app.services.task_reconcile import create_scheduler
 from app.services.tool_proxy import ToolProxy
+from app.uploads import create_upload_slots
 
 log = get_logger(__name__)
 
@@ -102,6 +103,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = settings
+    app.state.upload_slots = create_upload_slots()
     app.state.rate_limiter = RedisTokenBucket(settings.redis_url)
     app.state.tool_proxy = ToolProxy()
     app.state.task_reconcile_scheduler = create_scheduler(async_session_factory)
