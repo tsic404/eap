@@ -4,18 +4,23 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { KnowledgeBase } from "@/lib/knowledge-types";
 
-import { INDEXING_STATUS_LABEL, INDEXING_STATUS_VARIANT } from "./kb-labels";
+import {
+  INDEXING_STATUS_LABEL,
+  INDEXING_STATUS_VARIANT,
+  KB_TYPE_LABEL,
+} from "./kb-labels";
 
 export interface KBCardProps {
   knowledgeBase: KnowledgeBase;
   onClick?: () => void;
 }
 
-/** Knowledge-base card: name + indexing status + description + doc/chunk counts. */
+/** Knowledge-base card: name + status badge + description + type + doc/chunk counts. */
 export function KBCard({ knowledgeBase, onClick }: KBCardProps) {
   const status = knowledgeBase.indexing_status ?? "ready";
   const statusLabel = INDEXING_STATUS_LABEL[status] ?? status;
   const statusVariant = INDEXING_STATUS_VARIANT[status] ?? "default";
+  const typeLabel = KB_TYPE_LABEL[knowledgeBase.type] ?? knowledgeBase.type;
 
   return (
     <Card
@@ -44,6 +49,7 @@ export function KBCard({ knowledgeBase, onClick }: KBCardProps) {
           {knowledgeBase.description ?? "暂无描述"}
         </p>
         <div className="flex items-center gap-4 text-xs text-muted-foreground">
+          <span>类型 {typeLabel}</span>
           <span>文档 {knowledgeBase.doc_count}</span>
           <span>分块 {knowledgeBase.chunk_count}</span>
         </div>
