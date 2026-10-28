@@ -38,6 +38,8 @@ TECH_TC_IDS: tuple[str, ...] = (
     "TC-tech-upload-03",
     "TC-tech-tools-01",
     "TC-tech-tools-02",
+    # Design AC-36 (TC-tool-07): the task state machine's transition matrix.
+    "TC-tool-07",
     "TC-tech-ops-01",
     "TC-tech-ops-02",
     "TC-tech-ops-03",
