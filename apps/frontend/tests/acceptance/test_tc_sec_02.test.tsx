@@ -1,12 +1,17 @@
 /**
- * TC-sec-02 — empty-state guidance on the admin lists (AC-43).
+ * TC-sec-02 — empty-state guidance on both sides (AC-43).
  *
  * An admin list with no rows shows a create-first guidance card that carries
- * the next step, and exposes no list at all: every populated grid renders as a
- * named `list`, so a regression to "card + empty grid" fails the empty-state
- * assertion instead of passing silently. Read-only roles see the same card
- * without any create entry. The employee marketplace copy is not asserted
- * here. Browser-side replay: `e2e/journeys/tc-sec-02-empty-guidance.spec.ts`.
+ * the next step, and exposes no list at all: every populated card grid on these
+ * screens renders as a named `list`, so a regression to "card + empty grid"
+ * fails the empty-state assertion instead of passing silently. Read-only roles
+ * see the same card without any create entry.
+ *
+ * On the employee side a tenant without published agents shows the
+ * unpublished-agents illustration and copy on the marketplace and on the
+ * workspace recommendation section — while a filtered-to-nothing marketplace
+ * keeps its "no match" state, because published agents do exist there.
+ * Browser-side replay: `e2e/journeys/tc-sec-02-empty-guidance.spec.ts`.
  */
 import { fireEvent, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,12 +24,35 @@ import { renderWithIntl } from "@/components/test-utils";
 const state = vi.hoisted(() => ({
   pushMock: vi.fn(),
   agents: [] as unknown[],
+  agentsLoading: false,
+  agentsError: undefined as Error | undefined,
   knowledgeBases: [] as unknown[],
   tools: [] as unknown[],
+  homeLoading: false,
+  homeError: undefined as Error | undefined,
+  userHome: {
+    recommendedAgents: [] as unknown[],
+    recentConversations: [] as unknown[],
+    pendingTaskCount: 0,
+  },
 }));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: state.pushMock }),
+}));
+
+// The profile card needs the auth provider and is not part of an empty state.
+vi.mock("@/components/auth/user-profile", () => ({
+  UserProfile: () => null,
+}));
+
+vi.mock("@/lib/use-dashboard", () => ({
+  useUserHome: () => ({
+    data: state.userHome,
+    error: state.homeError,
+    isLoading: state.homeLoading,
+    mutate: vi.fn(),
+  }),
 }));
 
 vi.mock("@/lib/use-knowledge", () => ({
@@ -48,13 +76,15 @@ vi.mock("@/lib/use-tools", () => ({
 vi.mock("@/lib/use-agents", () => ({
   useAllAgents: () => ({
     data: state.agents,
-    error: undefined,
-    isLoading: false,
+    error: state.agentsError,
+    isLoading: state.agentsLoading,
     mutate: vi.fn(),
   }),
 }));
 
 import { AgentListPage } from "@/components/agents/agent-list-page";
+import { AgentMarketplace } from "@/components/agents/agent-marketplace";
+import { UserHomePage } from "@/components/dashboard/user-home-page";
 import { KnowledgeListPage } from "@/components/knowledge/knowledge-list-page";
 import { ToolListPage } from "@/components/tools/tool-list-page";
 import type { Agent } from "@/lib/agent-types";
@@ -145,10 +175,28 @@ function renderAgentList(role: UserRole = "platform_admin") {
   );
 }
 
+function renderMarketplace(role: UserRole = "employee") {
+  return renderWithIntl(
+    <RoleProvider role={role}>
+      <AgentMarketplace />
+    </RoleProvider>,
+  );
+}
+
+function renderUserHome() {
+  return renderWithIntl(
+    <RoleProvider role="employee">
+      <UserHomePage />
+    </RoleProvider>,
+  );
+}
+
 describe("TC-sec-02 admin empty states", () => {
   beforeEach(() => {
     state.pushMock.mockReset();
     state.agents = [];
+    state.agentsLoading = false;
+    state.agentsError = undefined;
     state.knowledgeBases = [];
     state.tools = [];
   });
@@ -235,5 +283,126 @@ describe("TC-sec-02 admin empty states", () => {
     const card = screen.getByRole("region", { name: "创建第一个工具" });
     expect(within(card).queryAllByRole("button")).toHaveLength(0);
     expect(screen.queryByRole("button", { name: "新建工具" })).toBeNull();
+  });
+});
+
+describe("TC-sec-02 employee empty states", () => {
+  beforeEach(() => {
+    state.pushMock.mockReset();
+    state.agents = [];
+    state.agentsLoading = false;
+    state.agentsError = undefined;
+    state.homeLoading = false;
+    state.homeError = undefined;
+    state.userHome = {
+      recommendedAgents: [],
+      recentConversations: [],
+      pendingTaskCount: 0,
+    };
+  });
+
+  it("智能体广场无已发布智能体时呈现未发布插画与引导文案", () => {
+    renderMarketplace("employee");
+
+    const guidance = screen.getByRole("region", {
+      name: "您的管理员尚未发布智能体",
+    });
+    expect(within(guidance).getByRole("img", { name: "尚未发布智能体" })).toBeTruthy();
+    expect(within(guidance).getByText(/联系管理员/)).toBeTruthy();
+  });
+
+  it("智能体广场空态不渲染列表或表格占位", () => {
+    renderMarketplace("employee");
+
+    expect(
+      screen.queryByRole("list", { name: "智能体广场列表" }),
+    ).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(screen.queryByText("暂无已发布的智能体")).toBeNull();
+  });
+
+  it("加载中不呈现未发布引导", () => {
+    state.agentsLoading = true;
+    const marketplace = renderMarketplace("employee");
+    expect(
+      screen.queryByRole("region", { name: "您的管理员尚未发布智能体" }),
+    ).toBeNull();
+    marketplace.unmount();
+
+    state.homeLoading = true;
+    renderUserHome();
+    expect(
+      screen.queryByRole("region", { name: "您的管理员尚未发布智能体" }),
+    ).toBeNull();
+  });
+
+  it("请求失败时不呈现未发布引导", () => {
+    state.agentsError = new Error("network");
+    const marketplace = renderMarketplace("employee");
+    expect(screen.getByText("加载失败")).toBeTruthy();
+    expect(
+      screen.queryByRole("region", { name: "您的管理员尚未发布智能体" }),
+    ).toBeNull();
+    marketplace.unmount();
+
+    state.homeError = new Error("network");
+    renderUserHome();
+    expect(screen.getByText("加载失败")).toBeTruthy();
+    expect(
+      screen.queryByRole("region", { name: "您的管理员尚未发布智能体" }),
+    ).toBeNull();
+  });
+
+  it("智能体广场有已发布智能体时渲染卡片且不出现未发布引导", () => {
+    state.agents = [AGENT];
+    renderMarketplace("employee");
+
+    const list = screen.getByRole("list", { name: "智能体广场列表" });
+    expect(within(list).getByText("售前助手")).toBeTruthy();
+    expect(
+      screen.queryByRole("region", { name: "您的管理员尚未发布智能体" }),
+    ).toBeNull();
+  });
+
+  it("搜索无结果时保留未找到匹配结果，不冒用未发布引导", () => {
+    state.agents = [AGENT];
+    renderMarketplace("employee");
+
+    fireEvent.change(screen.getByLabelText("搜索智能体"), {
+      target: { value: "不存在的智能体" },
+    });
+
+    expect(screen.getByText("未找到匹配结果")).toBeTruthy();
+    expect(
+      screen.queryByRole("region", { name: "您的管理员尚未发布智能体" }),
+    ).toBeNull();
+  });
+
+  it("用户首页推荐智能体为空时呈现未发布插画与引导文案", () => {
+    renderUserHome();
+
+    const guidance = screen.getByRole("region", {
+      name: "您的管理员尚未发布智能体",
+    });
+    expect(within(guidance).getByRole("img", { name: "尚未发布智能体" })).toBeTruthy();
+    expect(within(guidance).getByText(/联系管理员/)).toBeTruthy();
+    expect(screen.queryByRole("list", { name: "推荐智能体列表" })).toBeNull();
+    // The conversation section keeps its own empty state.
+    expect(screen.getByText("暂无会话")).toBeTruthy();
+  });
+
+  it("用户首页有推荐智能体时不出现未发布引导", () => {
+    state.userHome = {
+      recommendedAgents: [AGENT],
+      recentConversations: [],
+      pendingTaskCount: 0,
+    };
+    renderUserHome();
+
+    const list = screen.getByRole("list", { name: "推荐智能体列表" });
+    expect(within(list).getByText("售前助手")).toBeTruthy();
+    expect(
+      screen.queryByRole("region", { name: "您的管理员尚未发布智能体" }),
+    ).toBeNull();
   });
 });

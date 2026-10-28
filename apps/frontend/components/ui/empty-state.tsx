@@ -14,6 +14,8 @@ export interface EmptyStateProps {
   title?: string;
   description?: string;
   icon?: React.ReactNode;
+  /** Whole-surface artwork; replaces the icon bubble when provided. */
+  illustration?: React.ReactNode;
   action?: React.ReactNode;
   variant?: EmptyStateVariant;
   className?: string;
@@ -28,6 +30,7 @@ export function EmptyState({
   title,
   description,
   icon,
+  illustration,
   action,
   variant = "plain",
   className,
@@ -37,9 +40,13 @@ export function EmptyState({
 
   const content = (
     <>
-      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
-        {icon ?? <Inbox className="h-6 w-6" />}
-      </div>
+      {illustration ? (
+        <div className="flex items-center justify-center">{illustration}</div>
+      ) : (
+        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
+          {icon ?? <Inbox className="h-6 w-6" />}
+        </div>
+      )}
       <div className="flex flex-col gap-1">
         <p className="text-sm font-medium text-foreground">{resolvedTitle}</p>
         {description && (
