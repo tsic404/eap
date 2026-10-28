@@ -10,7 +10,7 @@ const { refreshAccessTokenMock, getAccessTokenMock, replaceMock, capabilitiesMoc
   }),
 );
 
-vi.mock("@/lib/http-client", () => ({
+vi.mock("@/lib/refresh-channel", () => ({
   refreshAccessToken: refreshAccessTokenMock,
 }));
 

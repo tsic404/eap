@@ -19,6 +19,7 @@ import type {
   UpdateAgentInput,
 } from "./agent-types";
 import type { ApiEnvelope } from "./auth-types";
+import { extractApiErrorCode } from "./api-error";
 import { API_ROUTES } from "./api-routes";
 import { apiClient } from "./http-client";
 
@@ -124,13 +125,6 @@ export function extractApiErrorMessage(error: unknown): string {
     return error.message;
   }
   return error instanceof Error ? error.message : "请求失败，请稍后重试";
-}
-
-/** Stable machine-readable `error.code` from a failed request, if the backend sent one. */
-export function extractApiErrorCode(error: unknown): string | undefined {
-  if (!axios.isAxiosError(error)) return undefined;
-  const envelope = error.response?.data as ErrorEnvelope | undefined;
-  return envelope?.error?.code;
 }
 
 function isApiError(error: unknown, status: number, code: string): boolean {

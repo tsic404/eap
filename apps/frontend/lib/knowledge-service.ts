@@ -20,7 +20,8 @@ import type {
   RetrieveTestInput,
   RetrievalTestResult,
 } from "./knowledge-types";
-import { extractApiErrorCode, getAgent, listAllAgents } from "./platform-service";
+import { extractApiErrorCode } from "./api-error";
+import { getAgent, listAllAgents } from "./platform-service";
 
 export async function listKnowledgeBases(
   page = 1,

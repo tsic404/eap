@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { postMock, requestUse, responseUse, clientMock, toastMock } = vi.hoisted(() => {
-  const postMock = vi.fn();
+const { refreshMock, requestUse, responseUse, clientMock, toastMock } = vi.hoisted(() => {
+  const refreshMock = vi.fn();
   const requestUse = vi.fn();
   const responseUse = vi.fn();
   const clientMock = Object.assign(vi.fn(), {
@@ -10,22 +10,26 @@ const { postMock, requestUse, responseUse, clientMock, toastMock } = vi.hoisted(
       response: { use: responseUse },
     },
   });
-  return { postMock, requestUse, responseUse, clientMock, toastMock: vi.fn() };
+  return { refreshMock, requestUse, responseUse, clientMock, toastMock: vi.fn() };
 });
 
 vi.mock("axios", () => ({
   default: {
     create: vi.fn(() => clientMock),
-    post: postMock,
   },
+}));
+
+vi.mock("./refresh-channel", () => ({
+  refreshAccessToken: refreshMock,
 }));
 
 vi.mock("./toast-bus", () => ({
   toast: toastMock,
 }));
 
-import { refreshAccessToken } from "./http-client";
-import { getAccessToken, setAccessToken } from "./token-store";
+// Loading the module is what registers the interceptors under test.
+import "./http-client";
+import { setAccessToken } from "./token-store";
 
 const LEGACY_COOKIE = "eap_access_token";
 
@@ -41,7 +45,7 @@ function stubLocation(pathname = "/user") {
 }
 
 beforeEach(() => {
-  postMock.mockReset();
+  refreshMock.mockReset();
   clientMock.mockReset();
   setAccessToken(null);
   document.cookie = `${LEGACY_COOKIE}=; path=/; Max-Age=0`;
@@ -51,55 +55,6 @@ afterEach(() => {
   Object.defineProperty(window, "location", {
     configurable: true,
     value: originalLocation,
-  });
-});
-
-describe("refreshAccessToken", () => {
-  it("keeps the access token from the refresh body in memory only", async () => {
-    postMock.mockImplementationOnce(async () => ({
-      data: { code: 0, data: { accessToken: "new-token", expiresIn: 900 } },
-    }));
-
-    const token = await refreshAccessToken();
-
-    expect(token).toBe("new-token");
-    expect(getAccessToken()).toBe("new-token");
-    expect(document.cookie).toBe("");
-    expect(postMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("single-flights concurrent refreshes in the same tab", async () => {
-    const { promise, resolve } = Promise.withResolvers<unknown>();
-    postMock.mockImplementationOnce(() => promise);
-
-    const first = refreshAccessToken();
-    const second = refreshAccessToken();
-
-    resolve({ data: { code: 0, data: { accessToken: "rotated", expiresIn: 900 } } });
-
-    const [a, b] = await Promise.all([first, second]);
-    expect(postMock).toHaveBeenCalledTimes(1);
-    expect(a).toBe("rotated");
-    expect(b).toBe("rotated");
-  });
-
-  it("returns null and drops the token when the refresh request fails", async () => {
-    setAccessToken("stale-token");
-    postMock.mockRejectedValueOnce(new Error("network"));
-
-    const token = await refreshAccessToken();
-
-    expect(token).toBeNull();
-    expect(getAccessToken()).toBeNull();
-  });
-
-  it("returns null when the refresh body carries no token", async () => {
-    postMock.mockImplementationOnce(async () => ({ data: { code: 0, data: {} } }));
-
-    const token = await refreshAccessToken();
-
-    expect(token).toBeNull();
-    expect(getAccessToken()).toBeNull();
   });
 });
 
@@ -120,7 +75,7 @@ describe("request interceptor", () => {
     const onRequest = requestUse.mock.calls[0][0];
     const headersSet = vi.fn();
 
-    onRequest({ url: "/auth/logout", headers: { set: headersSet } });
+    onRequest({ url: "/me", headers: { set: headersSet } });
 
     expect(headersSet).not.toHaveBeenCalled();
   });
@@ -138,9 +93,7 @@ describe("request interceptor", () => {
 
 describe("response interceptor", () => {
   it("replays a 401 request after refreshing", async () => {
-    postMock.mockImplementationOnce(async () => ({
-      data: { code: 0, data: { accessToken: "fresh-token", expiresIn: 900 } },
-    }));
+    refreshMock.mockResolvedValueOnce("fresh-token");
 
     const onRejected = responseUse.mock.calls[0][1];
     const headersSet = vi.fn();
@@ -156,7 +109,7 @@ describe("response interceptor", () => {
   });
 
   it("redirects to login when the refresh fails", async () => {
-    postMock.mockRejectedValueOnce(new Error("refresh failed"));
+    refreshMock.mockResolvedValueOnce(null);
     const { assign } = stubLocation("/user");
 
     const onRejected = responseUse.mock.calls[0][1];
@@ -171,7 +124,7 @@ describe("response interceptor", () => {
     const config = { url: "/auth/logout", headers: { set: vi.fn() } };
 
     await expect(onRejected({ config, response: { status: 401 } })).rejects.toBeTruthy();
-    expect(postMock).not.toHaveBeenCalled();
+    expect(refreshMock).not.toHaveBeenCalled();
   });
 
   it("raises the permission toast for a 403 on a business request", async () => {
@@ -226,9 +179,7 @@ describe("response interceptor forced password change", () => {
   });
 
   it("refreshes and replays a 401 from the password change route", async () => {
-    postMock.mockImplementationOnce(async () => ({
-      data: { code: 0, data: { accessToken: "fresh-token", expiresIn: 900 } },
-    }));
+    refreshMock.mockResolvedValueOnce("fresh-token");
 
     const onRejected = responseUse.mock.calls[0][1];
     const headersSet = vi.fn();

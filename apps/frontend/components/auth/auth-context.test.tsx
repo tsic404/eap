@@ -22,6 +22,9 @@ vi.mock("@/lib/http-client", () => ({
     get: apiGetMock,
     post: apiPostMock,
   },
+}));
+
+vi.mock("@/lib/refresh-channel", () => ({
   refreshAccessToken: refreshAccessTokenMock,
 }));
 

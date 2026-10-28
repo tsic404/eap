@@ -2,12 +2,11 @@ import axios, { AxiosError } from "axios";
 import type { AxiosInstance, InternalAxiosRequestConfig } from "axios";
 import * as Sentry from "@sentry/nextjs";
 
-import { API_ROUTES, ROUTES } from "./api-routes";
+import { API_BASE_URL, API_ROUTES, ROUTES } from "./api-routes";
 import { PASSWORD_CHANGE_REQUIRED_CODE } from "./auth-types";
-import { getAccessToken, setAccessToken } from "./token-store";
+import { refreshAccessToken } from "./refresh-channel";
+import { getAccessToken } from "./token-store";
 import { toast } from "./toast-bus";
-
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
 
 /** Shared axios instance — every API call routes through the JWT interceptors. */
 export const apiClient: AxiosInstance = axios.create({
@@ -16,53 +15,7 @@ export const apiClient: AxiosInstance = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
-// Single-flight within this tab: concurrent 401s await the same refresh promise.
-let refreshPromise: Promise<string | null> | null = null;
-
-// Web Locks serialises the refresh across tabs so only one tab calls the
-// backend at a time; the next one then refreshes against the rotated cookie.
-const REFRESH_LOCK = "eap-auth-refresh";
-
 type RetriableConfig = InternalAxiosRequestConfig & { _retried?: boolean };
-
-async function requestRefresh(): Promise<string | null> {
-  try {
-    // Raw axios (not apiClient) so the response interceptor cannot re-enter.
-    // The backend returns the rotated access token in the response body
-    // (`{ code, data: { accessToken, expiresIn } }`); the HttpOnly refresh
-    // cookie is rotated separately and is invisible to JavaScript.
-    const response = await axios.post(`${API_BASE_URL}${API_ROUTES.refresh}`, null, {
-      withCredentials: true,
-    });
-    const fresh = response.data?.data?.accessToken;
-    if (typeof fresh !== "string" || fresh.length === 0) {
-      setAccessToken(null);
-      return null;
-    }
-    setAccessToken(fresh);
-    return fresh;
-  } catch {
-    setAccessToken(null);
-    return null;
-  }
-}
-
-export function refreshAccessToken(): Promise<string | null> {
-  if (refreshPromise) return refreshPromise;
-
-  refreshPromise = (async () => {
-    try {
-      if (typeof navigator !== "undefined" && "locks" in navigator) {
-        return await navigator.locks.request(REFRESH_LOCK, requestRefresh);
-      }
-      return await requestRefresh();
-    } finally {
-      refreshPromise = null;
-    }
-  })();
-
-  return refreshPromise;
-}
 
 function redirectToLogin(): void {
   if (typeof window !== "undefined" && window.location.pathname !== ROUTES.login) {
