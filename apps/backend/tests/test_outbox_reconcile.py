@@ -9,6 +9,7 @@ import pytest
 
 from app.models.task import Task
 from app.models.task_outbox import TaskOutboxEvent
+from app.models.tool import ToolRegistry
 from app.services.task_reconcile import (
     claim_outbox_row,
     reconcile_undelivered,
@@ -154,6 +155,7 @@ async def _seed_dispatch(
     *,
     task_status: str,
     delivered_age_s: int | None,
+    tool_id: str = "tool-1",
 ) -> tuple[uuid.UUID, str]:
     async with session_factory() as session:
         tenant, user = await seed_tenant_user(session, worker_index="rescue")
@@ -163,7 +165,7 @@ async def _seed_dispatch(
             task_id=str(task.id),
             type="tool-approval",
             status="approved",
-            payload={"tool_id": "tool-1"},
+            payload={"tool_id": tool_id},
             created_at=datetime.now(UTC) - timedelta(seconds=delivered_age_s or 0),
             delivered_at=(
                 datetime.now(UTC) - timedelta(seconds=delivered_age_s)
@@ -204,7 +206,7 @@ async def test_rescue_skips_finished_undelivered_and_recent_dispatches(
 ):
     await _seed_dispatch(session_factory, task_status="completed", delivered_age_s=1800)
     await _seed_dispatch(session_factory, task_status="approved", delivered_age_s=None)
-    await _seed_dispatch(session_factory, task_status="approved", delivered_age_s=60)
+    await _seed_dispatch(session_factory, task_status="approved", delivered_age_s=30)
     enqueued: list[str] = []
 
     def fake_enqueue(*, task_id: str, outbox_id: str, queue_name: str, payload: dict) -> None:
@@ -231,14 +233,17 @@ async def test_rescue_ignores_superseded_dispatch(session_factory, monkeypatch):
             created_at=datetime.now(UTC) - timedelta(hours=1),
             delivered_at=datetime.now(UTC) - timedelta(hours=1),
         )
+        # Older than its own grace, so only supersession can explain why it is
+        # the row that gets re-sent while the hour-old one does not.
+        fresh_id = str(uuid.uuid4())
         fresh = TaskOutboxEvent(
-            id=str(uuid.uuid4()),
+            id=fresh_id,
             task_id=str(task.id),
             type="tool-approval",
             status="approved",
             payload={"tool_id": "tool-1"},
-            created_at=datetime.now(UTC) - timedelta(seconds=30),
-            delivered_at=datetime.now(UTC) - timedelta(seconds=30),
+            created_at=datetime.now(UTC) - timedelta(seconds=120),
+            delivered_at=datetime.now(UTC) - timedelta(seconds=120),
         )
         session.add_all([stale, fresh])
         await session.commit()
@@ -250,7 +255,107 @@ async def test_rescue_ignores_superseded_dispatch(session_factory, monkeypatch):
     monkeypatch.setattr("app.services.task_reconcile.enqueue_process_task", fake_enqueue)
 
     await rescue_stuck_dispatches(session_factory, marker_redis=_MarkerRedis())
-    assert enqueued == []
+    assert enqueued == [fresh_id]
+
+
+@pytest.mark.asyncio
+async def test_rescue_grace_comes_from_the_dispatch_tools_budget(session_factory, monkeypatch):
+    """A dispatch is re-sent only after its own tool could have finished."""
+    async with session_factory() as session:
+        session.add(
+            ToolRegistry(
+                tool_id="slow-tool",
+                tenant_id=None,
+                name="Slow tool",
+                type="http",
+                endpoint="http://tool.example/api",
+                method="POST",
+                risk_level="medium",
+                permission_mode="auto",
+                auth_type="none",
+                timeout_ms=10_000,
+                retry_policy={"max_retries": 2, "base_delay_ms": 1_000},
+                status="active",
+            )
+        )
+        await session.commit()
+
+    # 10s per attempt × 3 attempts + 1s + 2s backoff + 60s lease = 93s.
+    _, slow_ready = await _seed_dispatch(
+        session_factory, task_status="executing", delivered_age_s=100, tool_id="slow-tool"
+    )
+    _, slow_young = await _seed_dispatch(
+        session_factory, task_status="executing", delivered_age_s=80, tool_id="slow-tool"
+    )
+    # A dispatch whose tool is gone carries the lease-only grace (60s).
+    _, gone_ready = await _seed_dispatch(
+        session_factory, task_status="executing", delivered_age_s=70, tool_id="gone-tool"
+    )
+    _, gone_young = await _seed_dispatch(
+        session_factory, task_status="executing", delivered_age_s=50, tool_id="gone-tool"
+    )
+    enqueued: list[str] = []
+
+    def fake_enqueue(*, task_id: str, outbox_id: str, queue_name: str, payload: dict) -> None:
+        enqueued.append(outbox_id)
+
+    monkeypatch.setattr("app.services.task_reconcile.enqueue_process_task", fake_enqueue)
+    marker = _MarkerRedis()
+
+    await rescue_stuck_dispatches(session_factory, marker_redis=marker)
+
+    # Ordered by dispatch age: the older slow dispatch goes first.
+    assert enqueued == [slow_ready, gone_ready]
+    assert slow_young not in enqueued
+    assert gone_young not in enqueued
+    # The marker suppresses resends for exactly the derived grace.
+    assert marker.ttls[f"task:rescue:{slow_ready}"] == 93
+    assert marker.ttls[f"task:rescue:{gone_ready}"] == 60
+
+
+@pytest.mark.asyncio
+async def test_rescue_reaches_a_younger_dispatch_behind_in_budget_rows(
+    session_factory, monkeypatch
+):
+    """Rows still inside their own budget must not fill the page and starve the rest."""
+    async with session_factory() as session:
+        session.add(
+            ToolRegistry(
+                tool_id="long-tool",
+                tenant_id=None,
+                name="Long tool",
+                type="http",
+                endpoint="http://tool.example/api",
+                method="POST",
+                risk_level="medium",
+                permission_mode="auto",
+                auth_type="none",
+                timeout_ms=600_000,
+                retry_policy={"max_retries": 0, "base_delay_ms": 0},
+                status="active",
+            )
+        )
+        await session.commit()
+
+    # 150 older dispatches are still inside a 660 s grace: they head the age
+    # order but must not consume the whole batch.
+    for _ in range(150):
+        await _seed_dispatch(
+            session_factory, task_status="executing", delivered_age_s=200, tool_id="long-tool"
+        )
+    _, ready = await _seed_dispatch(
+        session_factory, task_status="executing", delivered_age_s=100, tool_id="gone-tool"
+    )
+    enqueued: list[str] = []
+
+    def fake_enqueue(*, task_id: str, outbox_id: str, queue_name: str, payload: dict) -> None:
+        enqueued.append(outbox_id)
+
+    monkeypatch.setattr("app.services.task_reconcile.enqueue_process_task", fake_enqueue)
+
+    await rescue_stuck_dispatches(session_factory, marker_redis=_MarkerRedis())
+
+    assert enqueued == [ready]
 
 
 @pytest.mark.asyncio

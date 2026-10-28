@@ -5,7 +5,7 @@ the task queues cannot be a container of its own: it runs as a thread in the
 backend. RQ's ``SimpleWorker`` executes a job in this thread instead of forking
 a work horse. Dispatch jobs carry a retry budget (``app.queue``), so a job whose
 worker died is requeued by the maintenance pass — delivery stays at-least-once,
-and the worker's execution claim and status guards absorb the repeat.
+and the worker's execution lease and status guards absorb the repeat.
 
 The work loop is written here rather than taken from ``Worker.work()``, which
 stops only when a SIGINT/SIGTERM handler raises inside its blocking dequeue —

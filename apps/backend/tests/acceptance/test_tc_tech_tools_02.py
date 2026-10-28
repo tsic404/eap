@@ -27,6 +27,7 @@ from app.models.task_outbox import TaskOutboxEvent
 from app.models.tool import ToolRegistry
 from app.services.conversation import ConversationService
 from app.services.task_expiry import SCAN_INTERVAL_SECONDS, expire_overdue_approvals
+from app.services.task_lease import ExecutionLease
 from app.services.task_reconcile import reconcile_undelivered
 from app.services.tool_proxy import ToolProxy
 
@@ -485,14 +486,19 @@ async def test_reconciler_redispatches_an_unclaimed_row_and_a_duplicate_is_absor
     proxy = api.app.state.tool_proxy
     monkeypatch.setattr(_PROCESS_TASK_MODULE, "async_session_factory", api.db.session)
 
-    def _claim(row_id: str) -> bool:
-        return _PROCESS_TASK_MODULE._claim_execution(row_id, client=api.redis_conn)
-
     await _PROCESS_TASK_MODULE._process(
-        str(task.id), outbox_id, task.payload, tool_proxy=proxy, claim_execution=_claim
+        str(task.id),
+        outbox_id,
+        task.payload,
+        tool_proxy=proxy,
+        lease=ExecutionLease(outbox_id, client=api.redis_conn),
     )
     await _PROCESS_TASK_MODULE._process(
-        str(task.id), outbox_id, task.payload, tool_proxy=proxy, claim_execution=_claim
+        str(task.id),
+        outbox_id,
+        task.payload,
+        tool_proxy=proxy,
+        lease=ExecutionLease(outbox_id, client=api.redis_conn),
     )
 
     assert len(calls) == 1

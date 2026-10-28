@@ -22,6 +22,7 @@ import pytest
 from rq import Queue
 
 import app.services.conversation as conversation_module
+from app.services.task_lease import ExecutionLease
 from app.services.tool_proxy import ToolProxy
 
 _PROCESS_TASK_MODULE = importlib.import_module("app.workers.process_task")
@@ -146,7 +147,11 @@ async def test_tool_approval_chain_end_to_end(api, monkeypatch, wait_for_job) ->
         transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"ok": True}))
     )
     monkeypatch.setattr(_PROCESS_TASK_MODULE, "async_session_factory", api.db.session)
-    await _PROCESS_TASK_MODULE._process(*job.args, tool_proxy=proxy, claim_execution=lambda _: True)
+    await _PROCESS_TASK_MODULE._process(
+        *job.args,
+        tool_proxy=proxy,
+        lease=ExecutionLease(job.args[1], client=api.redis_conn),
+    )
 
     # 5. The task is completed and carries the tool response.
     final = await api.client.get(f"/api/tasks/{task_id}", headers=headers)

@@ -4,7 +4,7 @@ Task execution (§32.7) enqueues ``process_task`` onto the queue named by the
 task type (see ``QUEUE_NAME_MAP``). Dispatch is idempotent only through the
 outbox *claim* (``claim_outbox_row``) — RQ does NOT deduplicate by ``job_id``
 (rq>=2.0), so callers must enqueue and then claim (or claim then enqueue) with
-the worker's atomic execution claim as the backstop against duplicates.
+the worker's execution lease as the backstop against duplicates.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ MEMORY_EXTRACTION_QUEUE = "memory-extraction"
 PROCESS_TASK_JOB = "app.workers.process_task.process_task"
 
 # Requeues per dispatch when a worker dies mid-job or the job raises. Each
-# execution is idempotent (execution claim + status guards), so a repeat is
+# execution is idempotent (execution lease + status guards), so a repeat is
 # safe; the budget bounds how long a crash loop can postpone a terminal state.
 _JOB_MAX_RETRIES = 3
 

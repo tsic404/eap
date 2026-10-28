@@ -21,6 +21,7 @@ import pytest
 
 from app.models.task import Task
 from app.models.tool import ToolDebugCase, ToolRegistry
+from app.services.task_lease import ExecutionLease
 from app.services.tool_proxy import ToolProxy
 
 TC_ID = "TC-tech-tools-01"
@@ -138,12 +139,13 @@ async def _run_execution(
 ) -> None:
     """Drive the platform's approved-task execution of ``task`` end to end."""
     monkeypatch.setattr(_PROCESS_TASK_MODULE, "async_session_factory", api.db.session)
+    outbox_id = str(uuid.uuid4())
     await _PROCESS_TASK_MODULE._process(
         str(task.id),
-        str(uuid.uuid4()),
+        outbox_id,
         task.payload,
         tool_proxy=proxy,
-        claim_execution=lambda _outbox_id: True,
+        lease=ExecutionLease(outbox_id, client=api.redis_conn),
     )
 
 
