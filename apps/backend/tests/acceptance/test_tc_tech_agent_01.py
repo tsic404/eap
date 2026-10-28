@@ -25,6 +25,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy import func, select
 
+import app.services.conversation as conversation_module
 from app.config import Settings
 from app.db import get_session
 from app.dify_console import DifyConsoleClient, DifyConsoleError
@@ -113,6 +114,444 @@ async def test_create_returns_201_draft_version_one_with_creator_and_tenant(api)
     assert body["publishedAt"] is None
     # The stored row is readable again through the detail read.
     assert (await _detail(api, headers, "sales-bot"))["version"] == 1
+
+
+@pytest.mark.asyncio
+async def test_create_with_a_model_configures_the_engine_with_a_nested_model_object(api) -> None:
+    """C-31/AC-08: the model selection reaches the engine as the object it validates."""
+    tenant, user = await api.seed(role="agent_admin")
+    headers = api.auth(user, tenant)
+
+    resp = await _create(
+        api,
+        headers,
+        _payload(
+            "model-bot",
+            modelProvider="openai",
+            modelId="gpt-4o",
+            prompt="You are helpful",
+        ),
+    )
+
+    assert resp.status_code == 201, resp.text
+    config = api.console.configure_model.await_args.args[1]
+    # C-125: the prompt is the system prompt; nothing is sent as the greeting.
+    assert config.model_dump(exclude_none=True) == {
+        "model": {"provider": "openai", "name": "gpt-4o", "completion_params": {}},
+        "pre_prompt": "You are helpful",
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_resolves_the_provider_key_the_form_suggests(api) -> None:
+    """C-126/AC-T03: ``azure`` resolves to the installed plugin identifier."""
+    api.console.get_model_providers.return_value = {
+        "data": [
+            {"provider": "langgenius/openai/openai"},
+            {"provider": "langgenius/azure_openai/azure_openai"},
+        ]
+    }
+    tenant, user = await api.seed(role="agent_admin")
+    headers = api.auth(user, tenant)
+
+    resp = await _create(
+        api,
+        headers,
+        _payload("azure-bot", modelProvider="azure", modelId="gpt-4o"),
+    )
+
+    assert resp.status_code == 201, resp.text
+    configured = api.console.configure_model.await_args.args[1]
+    assert configured.model.provider == "langgenius/azure_openai/azure_openai"
+
+    # A full identifier passes through untouched.
+    api.console.configure_model.reset_mock()
+    resp = await _create(
+        api,
+        headers,
+        _payload(
+            "full-id-bot",
+            modelProvider="langgenius/azure_openai/azure_openai",
+            modelId="gpt-4o",
+        ),
+    )
+
+    assert resp.status_code == 201, resp.text
+    configured = api.console.configure_model.await_args.args[1]
+    assert configured.model.provider == "langgenius/azure_openai/azure_openai"
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_an_uninstalled_provider_without_side_effects(api) -> None:
+    """C-126/AC-T03: an unknown provider is a 400 before the engine is touched."""
+    api.console.get_model_providers.return_value = {"data": [{"provider": "openai"}]}
+    tenant, user = await api.seed(role="agent_admin")
+    headers = api.auth(user, tenant)
+
+    resp = await _create(
+        api,
+        headers,
+        _payload("ghost-bot", modelProvider="azure", modelId="gpt-4o"),
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "INVALID_MODEL_PROVIDER"
+    api.console.create_app.assert_not_awaited()
+    assert "ghost-bot" not in await _list_agent_ids(api, headers)
+
+
+@pytest.mark.parametrize(
+    "model_fields",
+    [{"modelProvider": "azure"}, {"modelId": "gpt-4o"}],
+    ids=["provider-only", "model-id-only"],
+)
+@pytest.mark.asyncio
+async def test_create_with_only_one_model_field_skips_model_configuration(
+    api, model_fields
+) -> None:
+    """C-126/AC-T03: a lone model field is stored, never resolved or configured."""
+    tenant, user = await api.seed(role="agent_admin")
+    headers = api.auth(user, tenant)
+
+    resp = await _create(api, headers, _payload("partial-model-bot", **model_fields))
+
+    assert resp.status_code == 201, resp.text
+    api.console.get_model_providers.assert_not_awaited()
+    api.console.configure_model.assert_not_awaited()
+
+
+# ── C-126/AC-T03 provider resolution: every accepted and rejected input ─────
+
+
+def _installed(*providers: str) -> dict[str, object]:
+    """The console listing for a workspace with exactly ``providers`` installed."""
+    return {"data": [{"provider": provider} for provider in providers]}
+
+
+@pytest.mark.asyncio
+async def test_create_treats_a_full_identifier_as_decisive(api) -> None:
+    """C-126/AC-T03: a full-identifier hit wins even when its segments repeat."""
+    api.console.get_model_providers.return_value = _installed(
+        "langgenius/openai/openai", "acme/openai/legacy"
+    )
+    tenant, user = await api.seed(role="agent_admin")
+    headers = api.auth(user, tenant)
+
+    resp = await _create(
+        api,
+        headers,
+        _payload(
+            "full-id-exact-bot",
+            modelProvider="langgenius/openai/openai",
+            modelId="gpt-4o",
+        ),
+    )
+
+    assert resp.status_code == 201, resp.text
+    configured = api.console.configure_model.await_args.args[1]
+    assert configured.model.provider == "langgenius/openai/openai"
+
+
+@pytest.mark.asyncio
+async def test_create_prefers_an_exact_segment_over_a_longer_prefix(api) -> None:
+    """C-126/AC-T03: a segment-equal provider wins over a prefix-only one."""
+    api.console.get_model_providers.return_value = _installed(
+        "langgenius/openai/openai", "langgenius/openai_compatible/openai_compatible"
+    )
+    tenant, user = await api.seed(role="agent_admin")
+    headers = api.auth(user, tenant)
+
+    resp = await _create(
+        api,
+        headers,
+        _payload("exact-segment-bot", modelProvider="openai", modelId="gpt-4o"),
+    )
+
+    # ``openai`` equals a segment of the first provider and is only a prefix of
+    # the second, so the exact layer decides; a prefix-only implementation sees
+    # two candidates and answers 400.
+    assert resp.status_code == 201, resp.text
+    configured = api.console.configure_model.await_args.args[1]
+    assert configured.model.provider == "langgenius/openai/openai"
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_a_provider_matching_two_installed_segments(api) -> None:
+    """C-126/AC-T03: two segment-equal providers leave the input undecidable."""
+    api.console.get_model_providers.return_value = _installed(
+        "langgenius/openai/openai", "acme/openai/legacy"
+    )
+    tenant, user = await api.seed(role="agent_admin")
+    headers = api.auth(user, tenant)
+
+    resp = await _create(
+        api,
+        headers,
+        _payload("segment-tie-bot", modelProvider="openai", modelId="gpt-4o"),
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "INVALID_MODEL_PROVIDER"
+    api.console.create_app.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_a_case_variant_of_an_installed_provider(api) -> None:
+    """C-126/AC-T03: matching is case-sensitive, so folding is not accepted."""
+    api.console.get_model_providers.return_value = _installed("langgenius/openai/openai")
+    tenant, user = await api.seed(role="agent_admin")
+    headers = api.auth(user, tenant)
+
+    resp = await _create(
+        api,
+        headers,
+        _payload("case-bot", modelProvider="OPENAI", modelId="gpt-4o"),
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "INVALID_MODEL_PROVIDER"
+    api.console.create_app.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "provider",
+    ["open ai", "langgenius / openai / openai"],
+    ids=["inside-a-segment", "around-a-separator"],
+)
+@pytest.mark.asyncio
+async def test_create_rejects_whitespace_inside_a_provider_identifier(api, provider) -> None:
+    """C-126/AC-T03: only whitespace around the whole input is ignored."""
+    api.console.get_model_providers.return_value = _installed("langgenius/openai/openai")
+    tenant, user = await api.seed(role="agent_admin")
+    headers = api.auth(user, tenant)
+
+    resp = await _create(
+        api,
+        headers,
+        _payload("inner-space-bot", modelProvider=provider, modelId="gpt-4o"),
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "INVALID_MODEL_PROVIDER"
+    api.console.create_app.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_a_whitespace_only_provider(api) -> None:
+    """C-126/AC-T03: an input empty after trimming never resolves."""
+    api.console.get_model_providers.return_value = _installed("langgenius/openai/openai")
+    tenant, user = await api.seed(role="agent_admin")
+    headers = api.auth(user, tenant)
+
+    resp = await _create(
+        api,
+        headers,
+        _payload("blank-provider-bot", modelProvider="   ", modelId="gpt-4o"),
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "INVALID_MODEL_PROVIDER"
+    api.console.create_app.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_ignores_whitespace_around_a_provider(api) -> None:
+    """C-126/AC-T03: surrounding whitespace is ignored, so the key still resolves."""
+    api.console.get_model_providers.return_value = _installed(
+        "langgenius/azure_openai/azure_openai"
+    )
+    tenant, user = await api.seed(role="agent_admin")
+    headers = api.auth(user, tenant)
+
+    resp = await _create(
+        api,
+        headers,
+        _payload("padded-bot", modelProvider="  azure  ", modelId="gpt-4o"),
+    )
+
+    assert resp.status_code == 201, resp.text
+    configured = api.console.configure_model.await_args.args[1]
+    assert configured.model.provider == "langgenius/azure_openai/azure_openai"
+
+
+@pytest.mark.asyncio
+async def test_create_with_an_empty_provider_listing_is_a_client_error(api) -> None:
+    """C-126/AC-T03: an empty but readable listing is a miss, not an upstream failure."""
+    api.console.get_model_providers.return_value = {"data": []}
+    tenant, user = await api.seed(role="agent_admin")
+    headers = api.auth(user, tenant)
+
+    resp = await _create(
+        api,
+        headers,
+        _payload("empty-listing-bot", modelProvider="openai", modelId="gpt-4o"),
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "INVALID_MODEL_PROVIDER"
+    api.console.create_app.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_maps_a_provider_listing_failure_to_502(api) -> None:
+    """C-126/AC-T03: only a listing read failure is an upstream error."""
+    api.console.get_model_providers.side_effect = DifyConsoleError(503, "engine unavailable")
+    tenant, user = await api.seed(role="agent_admin")
+    headers = api.auth(user, tenant)
+
+    resp = await _create(
+        api,
+        headers,
+        _payload("listing-down-bot", modelProvider="openai", modelId="gpt-4o"),
+    )
+
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "DIFY_ERROR"
+    api.console.create_app.assert_not_awaited()
+
+
+# ── C-125/AC-T03 prompt: the observable system-prompt surface ───────────────
+
+
+@pytest.mark.asyncio
+async def test_create_without_a_prompt_sends_no_system_prompt(api) -> None:
+    """C-125/AC-T03: no prompt submitted, no system prompt on the engine config."""
+    api.console.get_model_providers.return_value = _installed("langgenius/openai/openai")
+    tenant, user = await api.seed(role="agent_admin")
+    headers = api.auth(user, tenant)
+
+    resp = await _create(
+        api,
+        headers,
+        _payload("silent-bot", modelProvider="openai", modelId="gpt-4o"),
+    )
+
+    assert resp.status_code == 201, resp.text
+    config = api.console.configure_model.await_args.args[1]
+    # "Empty" covers both an omitted key and an explicit empty string.
+    assert config.pre_prompt in (None, "")
+    assert config.opening_statement in (None, "")
+
+
+class _PromptFollowingUpstream:
+    """Dify Service-API stand-in that answers out of the app's system prompt.
+
+    The engine is mocked, so the reply is derived from the prompt the creation
+    payload actually carried: only when it equals the submitted instruction does
+    the stand-in answer with the fixed prefix. Redirect the prompt elsewhere and
+    the observable answer changes, so this is not a constant.
+    """
+
+    def __init__(
+        self,
+        captured: dict[str, object],
+        configured_prompt: str | None,
+        expected_prompt: str,
+    ) -> None:
+        self._captured = captured
+        self._configured_prompt = configured_prompt
+        self._expected_prompt = expected_prompt
+
+    @property
+    def _answer(self) -> str:
+        if self._configured_prompt == self._expected_prompt:
+            return "OK：收到"
+        return "提示未生效"
+
+    async def post_stream(self, path: str, body: object):
+        self._captured["path"] = path
+        self._captured["body"] = body
+        events = [
+            {"event": "message", "answer": self._answer, "message_id": "m1"},
+            {"event": "message_end", "id": "t1", "metadata": {}},
+        ]
+        for event in events:
+            yield f"data: {json.dumps(event)}\n\n".encode()
+
+    async def get(
+        self, path: str, query: object = None, *, retries: int = 3, timeout: object = None
+    ):
+        return {"data": [], "has_more": False}
+
+    async def aclose(self) -> None:
+        pass
+
+
+def _first_message_content(body: str) -> str:
+    for block in body.split("\n\n"):
+        lines = block.split("\n")
+        if len(lines) == 2 and lines[0] == "event: message":
+            return json.loads(lines[1][len("data: ") :])["content"]
+    raise AssertionError(f"no message frame in {body!r}")
+
+
+@pytest.mark.asyncio
+async def test_a_fixed_prefix_prompt_is_the_system_prompt_behind_the_answer(
+    api, monkeypatch
+) -> None:
+    """C-125/AC-T03: the submitted instruction is the app-level system prompt.
+
+    The creation payload carries it as the engine's system prompt, the
+    conversation turn adds no competing prompt, and the engine answer reaches
+    the client. Whether the model truly obeys needs a real engine.
+    """
+    api.console.get_model_providers.return_value = _installed("langgenius/openai/openai")
+    tenant, user = await api.seed(role="agent_admin")
+    headers = api.auth(user, tenant)
+    instruction = "只以 OK 开头回答"
+
+    created = await _create(
+        api,
+        headers,
+        _payload(
+            "prefix-bot",
+            modelProvider="openai",
+            modelId="gpt-4o",
+            prompt=instruction,
+        ),
+    )
+    assert created.status_code == 201, created.text
+    config = api.console.configure_model.await_args.args[1]
+    assert config.pre_prompt == instruction
+
+    published = await api.client.post(
+        "/api/agents/prefix-bot/publish", headers=headers, json={"version": 1}
+    )
+    assert published.status_code == 200, published.text
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        conversation_module,
+        "DifyClientService",
+        lambda *args, **kwargs: _PromptFollowingUpstream(
+            captured, config.pre_prompt, instruction
+        ),
+    )
+    conversation = await api.client.post(
+        "/api/conversations", headers=headers, json={"agentId": "prefix-bot"}
+    )
+    assert conversation.status_code == 201, conversation.text
+    conversation_id = conversation.json()["data"]["id"]
+
+    streamed = await api.client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        headers=headers,
+        json={"query": "hi", "agentId": "prefix-bot"},
+    )
+    assert streamed.status_code == 200, streamed.text
+    assert _first_message_content(streamed.text).startswith("OK")
+    upstream_body = captured["body"]
+    assert isinstance(upstream_body, dict)
+    # The instruction must not compete with the app-level prompt: neither
+    # concatenated into the query nor smuggled into the inputs map.
+    assert upstream_body["query"] == "hi"
+    assert set(upstream_body["inputs"]) == {
+        "tenant_id",
+        "user_id",
+        "user_preferences",
+        "user_facts",
+    }
+    assert not [key for key in upstream_body if "prompt" in key]
 
 
 @pytest.mark.asyncio

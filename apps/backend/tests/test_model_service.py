@@ -13,6 +13,7 @@ from app.services.model import (
     _count_models,
     _localized_label,
     _normalize_providers,
+    match_provider_identifier,
 )
 
 
@@ -140,3 +141,64 @@ async def test_get_models_delegates_to_console() -> None:
 
     assert result == {"data": []}
     console.get_models.assert_awaited_once_with("openai")
+
+
+_INSTALLED = [
+    "langgenius/openai/openai",
+    "langgenius/azure_openai/azure_openai",
+    "langgenius/gemini/google",
+]
+
+
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [
+        # A full identifier passes through.
+        ("langgenius/openai/openai", "langgenius/openai/openai"),
+        # A segment that matches exactly wins over prefix matches elsewhere.
+        ("openai", "langgenius/openai/openai"),
+        # The provider name and the plugin name may differ (C-126).
+        ("google", "langgenius/gemini/google"),
+        # A unique prefix of an installed identifier is accepted.
+        ("azure", "langgenius/azure_openai/azure_openai"),
+        # Whitespace from the form is ignored.
+        ("  azure  ", "langgenius/azure_openai/azure_openai"),
+        # No installed provider answers to it.
+        ("anthropic", None),
+        # The organization segment matches several providers.
+        ("langgenius", None),
+        # Two segments are not a full identifier.
+        ("langgenius/openai", None),
+        ("", None),
+    ],
+)
+def test_match_provider_identifier(requested: str, expected: str | None) -> None:
+    assert match_provider_identifier(_INSTALLED, requested) == expected
+
+
+def test_match_provider_identifier_resolves_a_unique_segment_prefix() -> None:
+    assert match_provider_identifier(_INSTALLED, "gemi") == "langgenius/gemini/google"
+
+
+def test_match_provider_identifier_refuses_an_ambiguous_prefix() -> None:
+    installed = [
+        "langgenius/openai/openai",
+        "langgenius/openai_compatible/openai_compatible",
+    ]
+
+    assert match_provider_identifier(installed, "op") is None
+
+
+def test_match_provider_identifier_handles_an_empty_workspace() -> None:
+    assert match_provider_identifier([], "openai") is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_provider_identifier_rejects_an_uninstalled_provider() -> None:
+    console = AsyncMock()
+    console.get_model_providers = AsyncMock(return_value={"data": [{"provider": "openai"}]})
+
+    with pytest.raises(AppError) as exc:
+        await ModelService(console).resolve_provider_identifier("azure")
+
+    assert (exc.value.status_code, exc.value.code) == (400, "INVALID_MODEL_PROVIDER")

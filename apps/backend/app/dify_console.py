@@ -76,26 +76,29 @@ class UpdateAppParams(BaseModel):
     max_active_requests: int | None = None
 
 
+class ModelSelection(BaseModel):
+    """The nested ``model`` object Dify's model-config endpoint validates.
+
+    Dify 1.17.0 reads the selection from a nested object and rejects a flat
+    ``provider``/``model`` pair with ``model must be of object type`` before it
+    looks the provider up, so completion parameters travel inside the object.
+    """
+
+    provider: str
+    name: str
+    completion_params: dict[str, Any] = Field(default_factory=dict)
+
+
 class ModelConfig(BaseModel):
     """Payload for ``POST /console/api/apps/<id>/model-config``.
 
-    Dify 1.17.0 selects the model with flat ``provider``/``model`` strings and
-    carries prompt + completion parameters inside ``configs``; the architecture
-    doc's ``model: dict`` / ``pre_prompt`` shape predates that change.
+    ``pre_prompt`` is the app's system prompt and ``opening_statement`` the
+    greeting shown before the first turn; Dify keeps them in separate slots.
     """
 
-    provider: str | None = None
-    model: str | None = None
-    configs: dict[str, Any] | None = None
+    model: ModelSelection
+    pre_prompt: str | None = None
     opening_statement: str | None = None
-    suggested_questions: list[str] | None = None
-    more_like_this: dict[str, Any] | None = None
-    speech_to_text: dict[str, Any] | None = None
-    text_to_speech: dict[str, Any] | None = None
-    retrieval_model: dict[str, Any] | None = None
-    tools: list[dict[str, Any]] | None = None
-    dataset_configs: dict[str, Any] | None = None
-    agent_mode: dict[str, Any] | None = None
 
 
 class CreateDatasetParams(BaseModel):

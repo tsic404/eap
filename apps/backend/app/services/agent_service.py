@@ -13,7 +13,13 @@ from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dify_console import CreateAppParams, DifyConsoleClient, DifyConsoleError, ModelConfig
+from app.dify_console import (
+    CreateAppParams,
+    DifyConsoleClient,
+    DifyConsoleError,
+    ModelConfig,
+    ModelSelection,
+)
 from app.errors import AppError
 from app.events.agent import AGENT_CREATED, AGENT_DELETED, AGENT_OFFLINE, AGENT_PUBLISHED
 from app.events.bus import EventBus, bus
@@ -22,6 +28,7 @@ from app.models.knowledge import KnowledgeBaseRegistry
 from app.models.tool import ToolRegistry
 from app.repositories.agent_repository import AgentRepository
 from app.schemas.agent import CreateAgentDto, UpdateAgentDto
+from app.services.model import ModelService
 
 log = structlog.get_logger(__name__)
 
@@ -81,6 +88,15 @@ class AgentService:
         Any failure after the Dify app is created compensates by deleting that
         app, so a failed registration never leaves an orphaned Dify app behind.
         """
+        # Resolve the form's provider key before touching the engine: an
+        # uninstalled provider is a request error, not a fault to discover
+        # halfway through the Saga with a created app to clean up.
+        provider: str | None = None
+        if dto.modelProvider is not None and dto.modelId is not None:
+            provider = await ModelService(self._console).resolve_provider_identifier(
+                dto.modelProvider
+            )
+
         dify_app_id: str | None = None
         try:
             app = await self._console.create_app(
@@ -95,13 +111,12 @@ class AgentService:
 
             # A draft agent may be registered without a model (configured later
             # via PATCH); only configure the Dify app when a model was supplied.
-            if dto.modelProvider is not None and dto.modelId is not None:
+            if provider is not None and dto.modelId is not None:
                 await self._console.configure_model(
                     dify_app_id,
                     ModelConfig(
-                        provider=dto.modelProvider,
-                        model=dto.modelId,
-                        opening_statement=dto.prompt,
+                        model=ModelSelection(provider=provider, name=dto.modelId),
+                        pre_prompt=dto.prompt,
                     ),
                 )
 
