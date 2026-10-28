@@ -48,6 +48,7 @@ from app.services.knowledge import KnowledgeService
 from app.services.task_reconcile import create_scheduler
 from app.services.tool_proxy import ToolProxy
 from app.uploads import create_upload_slots
+from app.workers.executor import TaskExecutor
 
 log = get_logger(__name__)
 
@@ -79,9 +80,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings, limiter=app.state.rate_limiter, attempts=app.state.login_attempts
     )
     app.state.task_reconcile_scheduler.start()
+    # Task execution is what turns an approval into a finished tool call: the
+    # same process consumes the queues its own transitions fill.
+    if settings.task_executor_enabled:
+        app.state.task_executor.start()
     try:
         yield
     finally:
+        await app.state.task_executor.stop()
         app.state.task_reconcile_scheduler.shutdown(wait=False)
         await oidc.close()
         await redis.aclose()
@@ -107,6 +113,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.rate_limiter = RedisTokenBucket(settings.redis_url)
     app.state.tool_proxy = ToolProxy()
     app.state.task_reconcile_scheduler = create_scheduler(async_session_factory)
+    app.state.task_executor = TaskExecutor(settings)
     # add_middleware prepends, so the LAST added here is the OUTERMOST stage.
     # Execution order: RequestContext → Helmet → CORS → JWT → Tenant → RateLimit
     # → Roles → Transform → router. RequestContext wraps everything for access

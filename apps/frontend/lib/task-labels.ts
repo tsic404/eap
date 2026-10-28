@@ -56,3 +56,9 @@ export const TASK_TYPE_VARIANT: Record<string, BadgeVariant> = {
   memory_extraction: "info",
   audit_log: "default",
 };
+
+/** Copy for a resolved tool-approval task's outcome (C-74, C-75). */
+export const TASK_RESULT_TITLE = "执行结果";
+export const TASK_REJECTED_PROMPT = "工具被拒绝";
+export const TASK_FAILED_PROMPT = "执行失败";
+export const TASK_TIMEOUT_HINT = "审批超过 24 小时未处理，任务已取消";

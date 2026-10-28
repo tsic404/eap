@@ -20,6 +20,7 @@ import {
 } from "@/lib/task-types";
 
 import { ApproveButton } from "./task-approve-button";
+import { TaskOutcome } from "./task-outcome";
 import { RejectButton } from "./task-reject-button";
 import { RetryButton } from "./task-retry-button";
 
@@ -84,6 +85,8 @@ export function TaskCard({ task, onAction }: TaskCardProps) {
           <p>{formatDateTime(task.created_at)}</p>
         </div>
       </div>
+
+      <TaskOutcome task={task} />
 
       {(canApprove || canReject || canRetry) && (
         <div className="mt-4 flex items-center gap-2">

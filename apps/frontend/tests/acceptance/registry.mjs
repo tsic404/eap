@@ -11,7 +11,7 @@ export const ACCEPTANCE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 // Frontend acceptance cases ride this suite alongside the browser-side
 // journeys, mirroring the backend registry's practice.
-export const TECH_TC_IDS = ["TC-tech-ui-01", "TC-kb-01", "TC-kb-06", "TC-sec-02"];
+export const TECH_TC_IDS = ["TC-tech-ui-01", "TC-kb-01", "TC-kb-06", "TC-sec-02", "TC-tool-05"];
 
 export function modulePath(tcId) {
   return path.join(

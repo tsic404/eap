@@ -8,6 +8,7 @@
 | `TC-kb-01` | AC-15 | `test_tc_kb_01.test.tsx` |
 | `TC-kb-06` | AC-20 | `test_tc_kb_06.test.tsx` |
 | `TC-sec-02` | AC-43 | `test_tc_sec_02.test.tsx` |
+| `TC-tool-05` | AC-34 | `test_tc_tool_05.test.tsx` |
 
 ## 按标识执行
 

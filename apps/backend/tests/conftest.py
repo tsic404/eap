@@ -67,6 +67,11 @@ from app.services.tool_proxy import ToolProxy
 # 因此在 import 之后设置依然生效；需要兜底清理时显式设 false 覆盖。
 os.environ.setdefault("TESTCONTAINERS_RYUK_DISABLED", "true")
 
+# The task executor consumes the RQ queues from a background thread; the suite
+# drives jobs explicitly (and most cases run without Redis), so it stays off
+# here. ``TASK_EXECUTOR_ENABLED=true`` on the command line must not change that.
+os.environ["TASK_EXECUTOR_ENABLED"] = "false"
+
 Role = str
 
 

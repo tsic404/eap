@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import { ListTodo } from "lucide-react";
-import { useSWRConfig } from "swr";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -98,14 +97,13 @@ export function TaskCenterPage() {
     setSize,
     mutate,
   } = useTasks(params);
-  const { data: pending } = usePendingTaskCount();
-  const { mutate: mutateGlobal } = useSWRConfig();
+  const { data: pending, mutate: mutatePending } = usePendingTaskCount();
 
-  // Revalidate every `tasks*` SWR key (list pages + pending count) after an action.
+  // Refresh the list pages and the pending count after an action, so the card
+  // and the badge reflect the new state without waiting for the next poll.
   const revalidateTasks = () => {
-    void mutateGlobal(
-      (key) => typeof key === "string" && key.startsWith("tasks"),
-    );
+    void mutate();
+    void mutatePending();
   };
 
   const statusOptions = buildFilterOptions(
@@ -141,7 +139,10 @@ export function TaskCenterPage() {
         />
       </aside>
 
-      <section className="flex flex-1 flex-col gap-4">
+      <section
+        aria-label="任务列表"
+        className="flex flex-1 flex-col gap-4"
+      >
         <div className="flex items-center gap-3">
           <h1 className="text-2xl font-bold text-foreground">任务中心</h1>
           {pending != null && (

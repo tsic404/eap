@@ -100,6 +100,12 @@ class Settings(BaseSettings):
     # of trusting the header's leftmost (spoofable) value.
     trusted_proxy_count: int = 0
 
+    # Task executor: the API process consumes the RQ task queues itself (an
+    # approval must actually run, and the deployment contract fixes the resident
+    # container set, so the consumer cannot be its own container). Disable it
+    # where another process owns the queues, or in tests that must not consume.
+    task_executor_enabled: bool = True
+
     # Logging
     log_level: str = "INFO"
     log_json: bool = True
