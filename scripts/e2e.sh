@@ -101,6 +101,11 @@ trap 'exit 143' TERM
 PRE_BACKEND_ID="$("${COMPOSE[@]}" ps -a -q backend 2>/dev/null || true)"
 STACK_STARTED=1
 "${COMPOSE[@]}" up -d --build
+# The stub IdP container also serves the tool upstream the approval journeys
+# point at, and its source is a bind-mounted file Node reads once at start. A
+# stack that outlives an edit to that file would keep answering without the new
+# routes, so the stub is recreated explicitly on every run.
+"${COMPOSE[@]}" up -d --no-deps --force-recreate mock-idp
 STACK_UP_COMPLETE=1
 
 stack_ready() {
@@ -178,7 +183,17 @@ done
 # container so the application's own password hash and schema apply.
 "${COMPOSE[@]}" exec -T backend python - < deploy/e2e/seed_accounts.py
 
-# 4. Runner image: the Playwright version comes from the repo lockfile and the
+# 4. Seed the data the requested journey asserts on and hand the runner its
+# manifest. The spec name scopes the seed: an unrelated journey seeds nothing,
+# so the long-lived stack keeps its accumulated state. The seed prints the
+# manifest on stdout and its log lines on stderr, so the redirect keeps the
+# file parseable.
+"${COMPOSE[@]}" exec -T \
+  -e "MOCK_IDP_PORT=${QA_IDP_PORT:-4000}" \
+  -e "E2E_FIXTURE_SPEC=${SPEC}" \
+  backend python - < deploy/e2e/seed_fixtures.py > "${ARTIFACTS}/fixtures.json"
+
+# 5. Runner image: the Playwright version comes from the repo lockfile and the
 # image installs its own locked dependency graph.
 PLAYWRIGHT_VERSION="$(sed -n "s/^  '@playwright\/test@\([^']*\)':$/\1/p" pnpm-lock.yaml | sed -n '1p')"
 if [[ -z "${PLAYWRIGHT_VERSION}" ]]; then
@@ -190,7 +205,7 @@ docker build \
   --build-arg "PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION}" \
   --tag "${IMAGE}" deploy/e2e
 
-# 5. Drive the running stack from the runner container. Reports land on the
+# 6. Drive the running stack from the runner container. Reports land on the
 # host through /out; the checkout itself is mounted read-only.
 status=0
 docker run --rm \
@@ -199,6 +214,7 @@ docker run --rm \
   --env "E2E_BASE_URL=${BASE_URL}" \
   --env "E2E_REPORT_DIR=/out/report" \
   --env "E2E_OUTPUT_DIR=/out/test-results" \
+  --env "E2E_FIXTURE_MANIFEST=/out/fixtures.json" \
   --volume "${REPO_ROOT}/apps/frontend:/src:ro" \
   --volume "${ARTIFACTS}:/out" \
   "${IMAGE}" \

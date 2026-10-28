@@ -17,7 +17,7 @@
 // extensions) makes the run deterministic regardless of prior state.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -43,6 +43,21 @@ const BACKEND_PYTHON =
 
 // Only these databases may be destroyed without an explicit opt-in.
 const DISPOSABLE_DB_RE = /_(?:e2e|test)$/;
+
+// The journey fixtures (tasks, probe tools, metric rows) are seeded by the
+// backend's own script, which prints the manifest the journeys read. Workers
+// inherit this process's environment, so the path set here is the one the specs
+// resolve; the file is rewritten on every run.
+const FIXTURE_SCRIPT = path.join(repoRoot, "deploy/e2e/seed_fixtures.py");
+// The harness backend runs on the host, so the stub upstream is reached over
+// the stub container's published port rather than its compose service name.
+const STUB_PORT = process.env.E2E_IDP_PORT ?? "4000";
+// Keyed by this run's stub port, like the Redis owner marker below: the
+// manifest carries a stub URL and a call ledger that belong to one run, so two
+// concurrent harnesses must never read each other's file.
+const FIXTURE_MANIFEST =
+  process.env.E2E_FIXTURE_MANIFEST ??
+  path.join(tmpdir(), `eap-e2e-fixtures-${STUB_PORT}.json`);
 
 // The folded columns are the C-122 comparison keys the application writes; this
 // seed carries only ASCII fixture values, where SQL ``lower()`` is that fold.
@@ -263,6 +278,24 @@ export default async function globalSetup() {
   });
 
   runPsql(PSQL_DSN, ["-c", SEED_SQL + localAccountSeedSql(localAccountPasswordHash())]);
+
+  // The journeys' own rows. No spec filter: this run executes the whole suite,
+  // so every fixture set is seeded exactly once, up front.
+  const fixtures = execFileSync(BACKEND_PYTHON, ["-"], {
+    cwd: backendDir,
+    input: readFileSync(FIXTURE_SCRIPT),
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "inherit"],
+    env: {
+      ...process.env,
+      DATABASE_URL,
+      MOCK_IDP_PORT: STUB_PORT,
+      E2E_TOOL_STUB_BASE: `http://127.0.0.1:${STUB_PORT}/tool-stub`,
+      E2E_FIXTURE_SPEC: "",
+    },
+  });
+  writeFileSync(FIXTURE_MANIFEST, fixtures);
+  process.env.E2E_FIXTURE_MANIFEST = FIXTURE_MANIFEST;
 
   // Start the Redis container only after the DB reset succeeds: any earlier
   // failure exits globalSetup, which skips teardown, so a container started

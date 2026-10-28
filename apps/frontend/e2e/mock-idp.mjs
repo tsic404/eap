@@ -92,6 +92,60 @@ function json(res, status, body) {
   res.end(data);
 }
 
+// Controllable tool upstream: a registered tool can point here so an approved
+// task's execution is observable end to end without an external service. The
+// delay keeps a task in `executing` long enough for a browser journey to see
+// the middle state; the ledger proves a task that must not run never called out.
+//   GET  /tool-stub?marker=<id>&delay_ms=<n>&status=<code>
+//   GET  /tool-stub/calls?marker=<id>   → every call seen, newest last
+//   POST /tool-stub/reset               → forget the ledger
+const TOOL_STUB_CALLS = [];
+const TOOL_STUB_MAX_DELAY_MS = 30_000;
+
+function recordToolStubCall(marker, delayMs, statusCode) {
+  TOOL_STUB_CALLS.push({ marker, delayMs, statusCode, at: new Date().toISOString() });
+}
+
+function toolStubResponse(res, marker, statusCode) {
+  json(res, statusCode, {
+    marker,
+    message: "tool-stub executed",
+    receivedAt: new Date().toISOString(),
+  });
+}
+
+function handleToolStub(req, res, url, path) {
+  const marker = url.searchParams.get("marker") ?? "";
+  if (path === "/tool-stub") {
+    const delayMs = Math.min(
+      Math.max(Number(url.searchParams.get("delay_ms") ?? 0) || 0, 0),
+      TOOL_STUB_MAX_DELAY_MS,
+    );
+    const statusCode = Number(url.searchParams.get("status") ?? 200) || 200;
+    recordToolStubCall(marker, delayMs, statusCode);
+    if (delayMs === 0) {
+      toolStubResponse(res, marker, statusCode);
+      return;
+    }
+    setTimeout(() => {
+      // The caller may have given up (tool timeout) or the run may have ended.
+      if (!res.writableEnded && !res.destroyed) toolStubResponse(res, marker, statusCode);
+    }, delayMs);
+    return;
+  }
+  if (path === "/tool-stub/calls") {
+    const calls = TOOL_STUB_CALLS.filter((call) => marker === "" || call.marker === marker);
+    json(res, 200, { calls, count: calls.length });
+    return;
+  }
+  if (path === "/tool-stub/reset") {
+    TOOL_STUB_CALLS.length = 0;
+    json(res, 200, { ok: true });
+    return;
+  }
+  json(res, 404, { error: "not_found" });
+}
+
 function readBody(req) {
   return new Promise((resolve) => {
     const chunks = [];
@@ -103,6 +157,10 @@ function readBody(req) {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", ISSUER);
   const path = url.pathname;
+
+  if (path.startsWith("/tool-stub")) {
+    return handleToolStub(req, res, url, path);
+  }
 
   if (path === "/.well-known/openid-configuration") {
     return json(res, 200, CONFIG);
