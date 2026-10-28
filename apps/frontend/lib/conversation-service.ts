@@ -14,7 +14,8 @@ import type {
   MessagePage,
   UploadedFile,
 } from "./conversation-types";
-import { apiClient, API_BASE_URL } from "./http-client";
+import { API_BASE_URL } from "./api-routes";
+import { apiClient } from "./http-client";
 import { getAccessToken } from "./token-store";
 
 export interface SendMessageInput {

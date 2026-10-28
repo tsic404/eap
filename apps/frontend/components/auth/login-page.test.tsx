@@ -1,9 +1,14 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { useAuthMock, fetchAuthCapabilitiesMock } = vi.hoisted(() => ({
+const { useAuthMock, fetchAuthCapabilitiesMock, replaceMock } = vi.hoisted(() => ({
   useAuthMock: vi.fn(),
   fetchAuthCapabilitiesMock: vi.fn(),
+  replaceMock: vi.fn(),
+}));
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: replaceMock }),
 }));
 
 vi.mock("./auth-context", () => ({

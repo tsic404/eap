@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 
 import { Button } from "@/components/ui/button";
@@ -12,14 +13,15 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { DEFAULT_SSO_PROVIDER } from "@/lib/api-routes";
+import { DEFAULT_SSO_PROVIDER, ROUTES } from "@/lib/api-routes";
 import { fetchAuthCapabilities } from "@/lib/auth-service";
 import { useAuth } from "./auth-context";
 import { LocalLoginForm } from "./local-login-form";
 
 /** Centred login card: the enterprise entry, plus the local account form when enabled. */
 export function LoginPage() {
-  const { login, error } = useAuth();
+  const { login, error, isLoading, isAuthenticated } = useAuth();
+  const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLocalLoginEnabled, setIsLocalLoginEnabled] = useState(false);
   const [queryError, setQueryError] = useState<string | null>(null);
@@ -30,6 +32,14 @@ export function LoginPage() {
       setQueryError(new URLSearchParams(window.location.search).get("error"));
     }
   }, []);
+
+  // A live session skips the identity provider entirely (AC-02): bootstrap
+  // already proved it through the same refresh channel, so this only follows
+  // its settled answer.
+  useEffect(() => {
+    if (isLoading || !isAuthenticated) return;
+    router.replace(ROUTES.home);
+  }, [isAuthenticated, isLoading, router]);
 
   // The capability read point is the only switch (C-110). A read point that
   // cannot be reached leaves the form hidden rather than offering an entry the

@@ -14,7 +14,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ROUTES } from "@/lib/api-routes";
-import { refreshAccessToken } from "@/lib/http-client";
+import { refreshAccessToken } from "@/lib/refresh-channel";
 import { getAccessToken } from "@/lib/token-store";
 
 import { PasswordChangeForm } from "./password-change-form";

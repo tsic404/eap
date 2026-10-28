@@ -14,7 +14,8 @@ import { API_ROUTES, AUTH_ROUTES, ROUTES } from "@/lib/api-routes";
 import { publishAuthSignal, subscribeAuthSignal } from "@/lib/auth-channel";
 import { isPasswordChangeRequiredError, loginWithLocalAccount } from "@/lib/auth-service";
 import type { ApiEnvelope, CurrentUser, Tenant } from "@/lib/auth-types";
-import { apiClient, refreshAccessToken } from "@/lib/http-client";
+import { apiClient } from "@/lib/http-client";
+import { refreshAccessToken } from "@/lib/refresh-channel";
 import { resolveRole } from "@/lib/roles";
 import { clearRoleCookie, setRoleCookie } from "@/lib/role-store";
 import { getAccessToken, setAccessToken } from "@/lib/token-store";
@@ -35,6 +36,10 @@ export interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+// The profile read is part of bootstrap; a request that never answers must not
+// hold the page in its loading state.
+const AUTH_PROFILE_TIMEOUT_MS = 8_000;
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [tenant, setTenant] = useState<Tenant | null>(null);
@@ -44,7 +49,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const loadUser = useCallback(async (): Promise<CurrentUser | null> => {
     try {
-      const response = await apiClient.get<ApiEnvelope<CurrentUser>>(API_ROUTES.me);
+      const response = await apiClient.get<ApiEnvelope<CurrentUser>>(API_ROUTES.me, {
+        timeout: AUTH_PROFILE_TIMEOUT_MS,
+      });
       const currentUser = response.data?.data ?? null;
       if (currentUser) {
         setRoleCookie(resolveRole(currentUser.role));
@@ -80,18 +87,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!getAccessToken()) {
-        const token = await refreshAccessToken();
-        // A failed refresh leaves no session; drop any stale role cookie so
-        // the middleware gate falls back to least privilege.
-        if (!token) {
-          clearRoleCookie();
+      try {
+        if (!getAccessToken()) {
+          const token = await refreshAccessToken();
+          // A failed refresh leaves no session; drop any stale role cookie so
+          // the middleware gate falls back to least privilege.
+          if (!token) {
+            clearRoleCookie();
+            return;
+          }
         }
+        if (!cancelled && getAccessToken()) {
+          await loadUser();
+        }
+      } finally {
+        // The loading state must always settle: an unresolved one is the
+        // "正在完成登录…" page that never reaches either the workspace or login.
+        if (!cancelled) setIsLoading(false);
       }
-      if (!cancelled && getAccessToken()) {
-        await loadUser();
-      }
-      if (!cancelled) setIsLoading(false);
     })();
     return () => {
       cancelled = true;

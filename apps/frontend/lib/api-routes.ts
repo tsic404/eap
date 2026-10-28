@@ -6,6 +6,9 @@
  * to `NEXT_PUBLIC_API_BASE_URL` (see `lib/http-client.ts`).
  */
 
+/** Base every axios call and the refresh channel are relative to (same-origin by default). */
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
+
 /** Auth endpoints reached by full browser navigation. */
 export const AUTH_ROUTES = {
   login: "/api/auth/login",

@@ -15,9 +15,9 @@ vi.mock("./http-client", () => ({
 }));
 
 import type { Agent } from "./agent-types";
+import { extractApiErrorCode } from "./api-error";
 import {
   deleteAgent,
-  extractApiErrorCode,
   extractApiErrorMessage,
   isConflictError,
   isDuplicateAgentError,

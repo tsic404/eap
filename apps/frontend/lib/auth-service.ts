@@ -9,8 +9,8 @@
 
 import { API_ROUTES } from "./api-routes";
 import { PASSWORD_CHANGE_REQUIRED_CODE, type ApiEnvelope } from "./auth-types";
+import { extractApiErrorCode } from "./api-error";
 import { apiClient } from "./http-client";
-import { extractApiErrorCode } from "./platform-service";
 
 /** Public capability read point; the backend answers in both states (C-110). */
 export interface AuthCapabilities {
