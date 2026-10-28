@@ -28,6 +28,7 @@ from app.models.task import Task
 from app.models.task_outbox import TaskOutboxEvent
 from app.queue import _JOB_MAX_RETRIES
 from app.services import task_service as task_service_module
+from app.services.task_lease import LEASE_KEY
 from app.services.task_service import TaskService
 from app.services.tool_proxy import ToolProxy
 from app.workers.executor import TaskExecutor
@@ -89,7 +90,7 @@ async def test_executor_completes_approved_task(
         )
 
     # The job body has to write through a real session, the tool HTTP boundary
-    # stays mocked, and the dispatch claim uses the executor's Redis.
+    # stays mocked, and the dispatch lease uses the executor's Redis.
     monkeypatch.setattr(_PROCESS_TASK_MODULE, "async_session_factory", session_factory)
     monkeypatch.setattr(
         _PROCESS_TASK_MODULE,
@@ -98,7 +99,7 @@ async def test_executor_completes_approved_task(
             transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"ok": True}))
         ),
     )
-    monkeypatch.setattr(_PROCESS_TASK_MODULE, "_get_redis", lambda: redis_conn)
+    monkeypatch.setattr("app.services.task_lease._open_redis", lambda: redis_conn)
 
     async def _approve() -> None:
         async with session_factory() as session:
@@ -147,12 +148,13 @@ async def test_executor_finishes_task_abandoned_by_a_dead_worker(
     worker_index: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """RQ's requeue plus the claim takeover must still converge to 已完成.
+    """RQ's requeue plus the lease expiry must still converge to 已完成.
 
-    Reproduces the crash the review found: the worker claimed the dispatch and
-    moved the task to 执行中, then died, leaving both the execution claim and an
-    expired started-registry entry behind. RQ's maintenance pass requeues the
-    job; the executor has to run it despite the leftover claim.
+    Reproduces the crash the review found: the worker leased the dispatch and
+    moved the task to 执行中, then died, leaving the lease (until its TTL runs
+    out), an expired started-registry entry and the requeued job behind. The
+    requeued copy must run once the lease expired, not by taking over a lease
+    its holder might still be renewing.
     """
     async with session_factory() as session:
         tenant, admin = await seed_tenant_user(
@@ -171,7 +173,7 @@ async def test_executor_finishes_task_abandoned_by_a_dead_worker(
             transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"ok": True}))
         ),
     )
-    monkeypatch.setattr(_PROCESS_TASK_MODULE, "_get_redis", lambda: redis_conn)
+    monkeypatch.setattr("app.services.task_lease._open_redis", lambda: redis_conn)
     # The real dispatch path, so the enqueue carries its retry budget.
     monkeypatch.setattr(
         queue_module, "_task_queue", lambda name: Queue(name, connection=redis_conn)
@@ -194,12 +196,18 @@ async def test_executor_finishes_task_abandoned_by_a_dead_worker(
     # The dead worker had already dequeued it; the job hash outlives the pop.
     redis_conn.lrem(queue.key, 0, job.id)
 
-    # The dead worker's leftovers: the claim it never released, the 执行中 write
-    # it committed, and a started-registry entry RQ will retire as abandoned.
-    redis_conn.set(f"task:exec:{outbox_id}", "1", ex=3600)
+    # The dead worker's leftovers: the lease it stopped renewing (it survives
+    # only until its TTL), the 执行中 write it committed, and a started-registry
+    # entry RQ will retire as abandoned.
+    lease_key = LEASE_KEY.format(outbox_id=outbox_id)
+    redis_conn.set(lease_key, "dead-worker", ex=1)
     async with session_factory() as session:
         await session.execute(update(Task).where(Task.id == task_id).values(status="executing"))
         await session.commit()
+    deadline = time.monotonic() + 3
+    while redis_conn.exists(lease_key) and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    assert redis_conn.exists(lease_key) == 0
     with redis_conn.pipeline() as pipeline:
         Execution.create(job, 0, pipeline=pipeline)
         pipeline.execute()

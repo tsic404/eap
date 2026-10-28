@@ -1,13 +1,15 @@
-"""``process_task`` worker tests: execution, cancel guard, claim dedup, fallback."""
+"""``process_task`` worker tests: execution, cancel guard, lease dedup, fallback."""
 
 from __future__ import annotations
 
 import asyncio
 import importlib
+import time
 import uuid
 
 import httpx
 import pytest
+from redis import Redis
 from sqlalchemy import update
 
 from app.events.bus import bus
@@ -16,6 +18,7 @@ from app.models.task import Task
 from app.models.tenant import Tenant
 from app.models.tool import ToolRegistry
 from app.models.user import User
+from app.services.task_lease import LEASE_KEY, ExecutionLease
 from app.services.tool_proxy import ExecutionResult, ToolProxy
 from app.workers.bridge import bind_runtime_loop
 from app.workers.process_task import _execute_tool, _process
@@ -95,6 +98,29 @@ def _proxy() -> ToolProxy:
     )
 
 
+class _HeldLease:
+    """Non-Redis stand-in for the execution lease.
+
+    ``acquired`` decides the claim outcome; the unit cases below are about what
+    the worker does with a won or lost lease, not about the store itself.
+    """
+
+    def __init__(self, *, acquired: bool = True) -> None:
+        self.acquired = acquired
+        self.started = False
+        self.stopped = False
+        self.lost = False
+
+    def acquire(self) -> bool:
+        return self.acquired
+
+    def start(self) -> None:
+        self.started = True
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
 @pytest.mark.asyncio
 async def test_process_task_executes_approved_tool(session_factory, monkeypatch):
     task_id = await _seed_task_and_tool(session_factory)
@@ -105,7 +131,7 @@ async def test_process_task_executes_approved_tool(session_factory, monkeypatch)
         "outbox-1",
         {"tool_id": "my-tool", "params": {"a": 1}},
         tool_proxy=_proxy(),
-        claim_execution=lambda _: True,
+        lease=_HeldLease(),
     )
 
     async with session_factory() as session:
@@ -125,7 +151,7 @@ async def test_process_task_skips_cancelled_task(session_factory, monkeypatch):
         "outbox-1",
         {"tool_id": "my-tool", "params": {"a": 1}},
         tool_proxy=_proxy(),
-        claim_execution=lambda _: True,
+        lease=_HeldLease(),
     )
 
     async with session_factory() as session:
@@ -153,7 +179,7 @@ async def test_process_task_marks_unsupported_type_failed(session_factory, monke
             "outbox-1",
             {"tool_id": "my-tool"},
             tool_proxy=_proxy(),
-            claim_execution=lambda _: True,
+            lease=_HeldLease(),
         )
     finally:
         bus.unsubscribe(TASK_STATUS_CHANGED_EVENT, handler)
@@ -184,7 +210,7 @@ async def test_process_task_fails_a_tool_deleted_before_execution(session_factor
             "outbox-1",
             {"tool_id": "deleted-tool", "params": {}},
             tool_proxy=_proxy(),
-            claim_execution=lambda _: True,
+            lease=_HeldLease(),
         )
     finally:
         bus.unsubscribe(TASK_STATUS_CHANGED_EVENT, handler)
@@ -197,8 +223,8 @@ async def test_process_task_fails_a_tool_deleted_before_execution(session_factor
 
 
 @pytest.mark.asyncio
-async def test_process_task_duplicate_claim_skips_live_delivery(session_factory, monkeypatch):
-    """A copy that loses the claim while another delivery is alive must not run."""
+async def test_process_task_duplicate_delivery_skips_a_live_lease(session_factory, monkeypatch):
+    """A copy that cannot take the lease while its holder is alive must not run."""
     task_id = await _seed_task_and_tool(session_factory)
     monkeypatch.setattr(_PROCESS_TASK_MODULE, "async_session_factory", session_factory)
 
@@ -207,8 +233,7 @@ async def test_process_task_duplicate_claim_skips_live_delivery(session_factory,
         "outbox-1",
         {"tool_id": "my-tool", "params": {"a": 1}},
         tool_proxy=_proxy(),
-        claim_execution=lambda _: False,
-        take_over_claim=lambda _: False,
+        lease=_HeldLease(acquired=False),
     )
 
     async with session_factory() as session:
@@ -256,37 +281,156 @@ async def test_process_task_marks_executing_before_calling_tool(session_factory,
         "outbox-1",
         {"tool_id": "my-tool", "params": {"a": 1}},
         tool_proxy=_ObservingProxy(),
-        claim_execution=lambda _: True,
+        lease=_HeldLease(),
     )
 
     assert observed == ["executing"]
 
 
 @pytest.mark.asyncio
-async def test_process_task_takes_over_claim_left_by_crashed_delivery(session_factory, monkeypatch):
-    """The claim a dead delivery never released must not swallow the requeued copy."""
+async def test_replayed_dispatch_waits_for_the_dead_holders_lease_to_expire(
+    session_factory, monkeypatch, redis_url
+):
+    """A crash leaves the lease behind; only its expiry lets the replay run."""
     task_id = await _seed_task_and_tool(session_factory, status="executing")
     monkeypatch.setattr(_PROCESS_TASK_MODULE, "async_session_factory", session_factory)
-    taken_over: list[str] = []
+    client = Redis.from_url(redis_url)
+    outbox_id = f"outbox-{uuid.uuid4().hex}"
+    dead_worker = ExecutionLease(outbox_id, client=client, ttl_seconds=1)
+    assert dead_worker.acquire()
+    calls: list[str] = []
 
-    def _take_over(outbox_id: str) -> bool:
-        taken_over.append(outbox_id)
-        return True
+    class _RecordingProxy(ToolProxy):
+        async def execute(self, tool, params):  # type: ignore[no-untyped-def]
+            calls.append("executed")
+            return ExecutionResult(status_code=200, body={"ok": True}, latency_ms=1, attempts=1)
 
-    await _process(
-        str(task_id),
-        "outbox-1",
-        {"tool_id": "my-tool", "params": {"a": 1}},
-        tool_proxy=_proxy(),
-        claim_execution=lambda _: False,
-        take_over_claim=_take_over,
-    )
+    try:
+        # The dead holder's key is still alive: a replay must not run the tool.
+        await _process(
+            str(task_id),
+            outbox_id,
+            {"tool_id": "my-tool", "params": {}},
+            tool_proxy=_RecordingProxy(),
+            lease=ExecutionLease(outbox_id, client=client, ttl_seconds=1),
+        )
+        assert calls == []
 
-    assert taken_over == ["outbox-1"]
+        deadline = time.monotonic() + 3
+        while client.exists(LEASE_KEY.format(outbox_id=outbox_id)) and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        assert client.exists(LEASE_KEY.format(outbox_id=outbox_id)) == 0
+
+        await _process(
+            str(task_id),
+            outbox_id,
+            {"tool_id": "my-tool", "params": {}},
+            tool_proxy=_RecordingProxy(),
+            lease=ExecutionLease(outbox_id, client=client),
+        )
+    finally:
+        client.delete(LEASE_KEY.format(outbox_id=outbox_id))
+        client.close()
+
+    assert calls == ["executed"]
     async with session_factory() as session:
         task = await session.get(Task, task_id)
         assert task.status == "completed"
         assert task.result is not None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_deliveries_execute_the_tool_once(session_factory, monkeypatch, redis_url):
+    """Two workers handed the same dispatch must not both call the tool."""
+    task_id = await _seed_task_and_tool(session_factory)
+    monkeypatch.setattr(_PROCESS_TASK_MODULE, "async_session_factory", session_factory)
+    client = Redis.from_url(redis_url)
+    outbox_id = f"outbox-{uuid.uuid4().hex}"
+    calls: list[str] = []
+    running = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _deliver() -> None:
+        class _SlowProxy(ToolProxy):
+            async def execute(self, tool, params):  # type: ignore[no-untyped-def]
+                calls.append("executed")
+                running.set()
+                await release.wait()
+                return ExecutionResult(status_code=200, body={"ok": True}, latency_ms=1, attempts=1)
+
+        await _process(
+            str(task_id),
+            outbox_id,
+            {"tool_id": "my-tool", "params": {}},
+            tool_proxy=_SlowProxy(),
+            lease=ExecutionLease(outbox_id, client=client),
+        )
+
+    first = asyncio.create_task(_deliver())
+    try:
+        await asyncio.wait_for(running.wait(), timeout=3)
+        await _deliver()
+        assert calls == ["executed"]
+    finally:
+        release.set()
+        await first
+        client.delete(LEASE_KEY.format(outbox_id=outbox_id))
+        client.close()
+
+    async with session_factory() as session:
+        task = await session.get(Task, task_id)
+        assert task.status == "completed"
+        assert task.result is not None
+
+
+@pytest.mark.asyncio
+async def test_lost_lease_abandons_the_running_call_without_writing(
+    session_factory, monkeypatch, redis_url
+):
+    """A takeover must stop the old holder, not just leave a warning."""
+    task_id = await _seed_task_and_tool(session_factory)
+    monkeypatch.setattr(_PROCESS_TASK_MODULE, "async_session_factory", session_factory)
+    client = Redis.from_url(redis_url)
+    outbox_id = f"outbox-{uuid.uuid4().hex}"
+    started = asyncio.Event()
+    cancelled: list[str] = []
+
+    class _BlockingProxy(ToolProxy):
+        async def execute(self, tool, params):  # type: ignore[no-untyped-def]
+            started.set()
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                cancelled.append("cancelled")
+                raise
+            return ExecutionResult(status_code=200, body={"ok": True}, latency_ms=1, attempts=1)
+
+    delivery = asyncio.create_task(
+        _process(
+            str(task_id),
+            outbox_id,
+            {"tool_id": "my-tool", "params": {}},
+            tool_proxy=_BlockingProxy(),
+            lease=ExecutionLease(outbox_id, client=client, ttl_seconds=1, renew_seconds=0.1),
+        )
+    )
+    try:
+        await asyncio.wait_for(started.wait(), timeout=3)
+        # What a takeover after expiry leaves behind: the key no longer exists.
+        client.delete(LEASE_KEY.format(outbox_id=outbox_id))
+        await asyncio.wait_for(delivery, timeout=5)
+    finally:
+        if not delivery.done():
+            delivery.cancel()
+        client.delete(LEASE_KEY.format(outbox_id=outbox_id))
+        client.close()
+
+    assert cancelled == ["cancelled"]
+    async with session_factory() as session:
+        task = await session.get(Task, task_id)
+        assert task.status == "executing"
+        assert task.result is None
+        assert task.error_message is None
 
 
 @pytest.mark.asyncio
@@ -307,7 +451,9 @@ async def test_execute_tool_stops_before_upstream_after_cancel(session_factory):
                 update(Task).where(Task.id == task_id).values(status="cancelled")
             )
             await canceller.commit()
-        await _execute_tool(session, task, {"tool_id": "my-tool", "params": {}}, _RecordingProxy())
+        await _execute_tool(
+            session, task, {"tool_id": "my-tool", "params": {}}, _RecordingProxy(), _HeldLease()
+        )
 
     assert calls == []
     async with session_factory() as session:
@@ -337,7 +483,7 @@ async def test_process_task_discards_outcome_when_cancelled_mid_call(session_fac
         "outbox-1",
         {"tool_id": "my-tool", "params": {"a": 1}},
         tool_proxy=_CancellingProxy(),
-        claim_execution=lambda _: True,
+        lease=_HeldLease(),
     )
 
     async with session_factory() as session:
@@ -366,7 +512,7 @@ async def test_process_task_emits_each_status_transition(session_factory, monkey
             "outbox-1",
             {"tool_id": "my-tool", "params": {"a": 1}},
             tool_proxy=_proxy(),
-            claim_execution=lambda _: True,
+            lease=_HeldLease(),
         )
     finally:
         bus.unsubscribe(TASK_STATUS_CHANGED_EVENT, handler)
