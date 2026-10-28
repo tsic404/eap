@@ -16,6 +16,7 @@ from app.models.agent import (
     AgentRegistry,
     AgentToolBinding,
 )
+from app.models.conversation import Conversation
 from app.models.run_log import RunLog
 
 _RECENT_LOGS_LIMIT = 10
@@ -129,6 +130,19 @@ class AgentRepository:
             .limit(limit)
         )
         return list((await self._session.scalars(stmt)).all())
+
+    async def count_conversations(self, tenant_id: uuid.UUID, agent_id: str) -> int:
+        """Count the tenant's live conversations bound to the agent (C-35)."""
+        stmt = (
+            select(func.count())
+            .select_from(Conversation)
+            .where(
+                Conversation.tenant_id == tenant_id,
+                Conversation.agent_id == agent_id,
+                Conversation.deleted_at.is_(None),
+            )
+        )
+        return int(await self._session.scalar(stmt) or 0)
 
     async def create(self, agent: AgentRegistry) -> AgentRegistry:
         self._session.add(agent)

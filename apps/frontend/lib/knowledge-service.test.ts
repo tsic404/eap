@@ -55,6 +55,7 @@ function detailStub(agent: Agent, kbIds: string[]): AgentDetail {
     boundKnowledge: kbIds.map((kbId) => ({ kbId, name: null })),
     boundTools: [],
     recentLogs: [],
+    conversationCount: 0,
   };
 }
 

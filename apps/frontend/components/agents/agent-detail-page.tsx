@@ -206,9 +206,16 @@ export function AgentDetailPage() {
         confirmLabel="删除"
         danger
         loading={pending}
+        requiredName={agent.name}
         onCancel={() => setConfirmAction(null)}
         onConfirm={() => void handleAction("delete")}
-      />
+      >
+        {agent.conversationCount > 0 && (
+          <p className="text-sm text-muted-foreground">
+            {`该智能体有 ${agent.conversationCount} 个关联会话（跨全部用户统计）。删除后这些会话不会被删除，历史记录仍可查看。`}
+          </p>
+        )}
+      </ConfirmDialog>
       <ConflictDialog
         open={conflictOpen}
         onCancel={() => setConflictOpen(false)}
