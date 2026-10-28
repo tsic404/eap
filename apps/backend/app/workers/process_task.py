@@ -1,32 +1,30 @@
 """RQ worker job: execute an approved task (ApprovalConsumer).
 
-Enqueued by ``app.services.task_service`` with a retry budget, so RQ puts a job
-whose worker died back on the queue; the reconciler re-sends undelivered
-dispatch records. This worker claims execution (Redis SETNX keyed on the
-outbox id), takes a stale claim over when the task is still runnable, and
-re-checks the status, so a cancelled task never runs. Every status write is a
-conditional UPDATE, so a cancel that lands mid-flight is never overwritten.
+RQ requeues a job whose worker died, and the reconciler re-sends undelivered
+dispatch records. This worker takes the dispatch's execution lease — renewed
+for the length of the job — then re-checks the status, so a duplicate cannot
+run concurrently and a cancelled task never runs. Every status write is a
+conditional UPDATE, so a cancel landing mid-flight is never overwritten.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
-from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, cast
 
 import structlog
-from redis import Redis
 from sqlalchemy import CursorResult, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
 from app.db import async_session_factory
 from app.events.task import TaskStatusChangedEvent, emit_task_status_changed_best_effort
 from app.models.task import Task
 from app.models.tool import ToolRegistry
-from app.services.tool_proxy import ToolProxy
+from app.services.task_lease import ExecutionLease
+from app.services.tool_proxy import ExecutionResult, ToolProxy
 from app.services.tool_service import ToolService
 from app.workers.bridge import get_runtime_loop
 
@@ -38,50 +36,6 @@ _RUNNABLE_STATUSES = frozenset({"approved", "executing"})
 # Only a running task may be finished: this is the guard that stops a cancel
 # committed during the tool call from being overwritten by the outcome.
 _EXECUTING_STATUSES = frozenset({"executing"})
-
-# Execution-claim TTL: long enough to outlive any duplicate delivery (the
-# reconciler's 15s window plus queue dwell), short enough to not leak keys.
-_EXEC_CLAIM_TTL_SECONDS = 3600
-_EXEC_CLAIM_KEY = "task:exec:{outbox_id}"
-
-_redis_client: Redis | None = None
-
-
-def _get_redis() -> Redis:
-    """Return the process-wide Redis client, created lazily once."""
-    global _redis_client
-    if _redis_client is None:
-        _redis_client = Redis.from_url(get_settings().redis_url)
-    return _redis_client
-
-
-def _claim_execution(outbox_id: str, client: Redis | None = None) -> bool:
-    """Atomically claim execution for ``outbox_id`` (SETNX). True if first."""
-    client = client or _get_redis()
-    return bool(
-        client.set(
-            _EXEC_CLAIM_KEY.format(outbox_id=outbox_id),
-            "1",
-            nx=True,
-            ex=_EXEC_CLAIM_TTL_SECONDS,
-        )
-    )
-
-
-def _take_over_claim(outbox_id: str, client: Redis | None = None) -> bool:
-    """Re-take the claim a delivery that died mid-job never released.
-
-    The key absorbs duplicates while its holder is alive, but a crashed holder
-    leaves it behind for the full idempotency window; refusing the requeued
-    copy then loses the dispatch. The caller decides from the task row whether
-    taking over is warranted, so this only swaps the key. Interleaving copies
-    can both win and execute twice, which at-least-once already permits and
-    the conditional status writes absorb.
-    """
-    client = client or _get_redis()
-    key = _EXEC_CLAIM_KEY.format(outbox_id=outbox_id)
-    client.delete(key)
-    return bool(client.set(key, "1", nx=True, ex=_EXEC_CLAIM_TTL_SECONDS))
 
 
 def process_task(task_id: str, outbox_id: str, payload: dict[str, Any]) -> None:
@@ -103,16 +57,22 @@ async def _process(
     outbox_id: str,
     payload: dict[str, Any],
     tool_proxy: ToolProxy | None = None,
-    claim_execution: Callable[[str], bool] | None = None,
-    take_over_claim: Callable[[str], bool] | None = None,
+    lease: ExecutionLease | None = None,
 ) -> None:
-    """Claim execution, then load the task and dispatch to its type handler.
+    """Take the dispatch lease, then load the task and dispatch to its handler.
 
-    ``tool_proxy``, ``claim_execution`` and ``take_over_claim`` are injectable
-    for tests; production creates its own proxy and uses the Redis claim.
+    ``tool_proxy`` and ``lease`` are injectable for tests; production creates
+    its own proxy and leases the dispatch record in the shared store.
     """
-    claim = claim_execution or _claim_execution
-    take_over = take_over_claim or _take_over_claim
+    lease = lease or ExecutionLease(outbox_id)
+    if not await asyncio.to_thread(lease.acquire):
+        # The holder renews its lease while the job runs, so a taken key means
+        # a live worker owns this dispatch: this delivery is dropped, it does
+        # not wait. RQ's requeue and the rescue scan are the recovery path, and
+        # both only get the lease once the holder's lease expired.
+        log.info("process_task_duplicate_skipped", task_id=task_id, outbox_id=outbox_id)
+        return
+    lease.start()
     owns_proxy = tool_proxy is None
     proxy = tool_proxy or ToolProxy()
     try:
@@ -124,21 +84,14 @@ async def _process(
             if task.status not in _RUNNABLE_STATUSES:
                 log.info("process_task_skipped", task_id=task_id, status=task.status)
                 return
-            if not claim(outbox_id):
-                # A stale claim looks exactly like a live duplicate: only the
-                # task row tells them apart. A task that already reached a
-                # terminal state is a duplicate of a finished delivery; one
-                # still runnable has no live owner after the crash, so this is
-                # the copy RQ requeued and it must run.
-                if not take_over(outbox_id):
-                    log.info("process_task_duplicate_skipped", task_id=task_id)
-                    return
-                log.warning("process_task_claim_taken_over", task_id=task_id, status=task.status)
             if task.type != "tool_approval":
                 await _fail_unsupported(session, task)
                 return
-            await _execute_tool(session, task, payload, proxy)
+            await _execute_tool(session, task, payload, proxy, lease)
     finally:
+        # Off the event loop: a renewal stuck on an unreachable store must not
+        # freeze the loop the in-process executor shares with the API.
+        await asyncio.to_thread(lease.stop)
         if owns_proxy:
             await proxy.aclose()
 
@@ -224,11 +177,51 @@ async def _fail_unsupported(session: AsyncSession, task: Task) -> None:
     await _fail_before_execution(session, task, "不支持的任务类型")
 
 
+class _LeaseLost(Exception):
+    """The dispatch lease moved to another worker; this call must not record."""
+
+
+# How often a running call checks that it still owns the dispatch. Loss is
+# recorded by the heartbeat, so this bounds how long the old holder keeps a
+# possibly duplicated call open.
+_LEASE_POLL_SECONDS = 0.5
+
+
+async def _call_tool(
+    proxy: ToolProxy,
+    tool: ToolRegistry,
+    payload: dict[str, Any],
+    lease: ExecutionLease,
+) -> ExecutionResult:
+    """Await the tool call, abandoning it the moment the lease is lost.
+
+    Cancelling the request does not undo a side effect the upstream already
+    performed — at-least-once permits the duplicate — but the old holder must
+    not wait out a call whose outcome it may no longer write.
+    """
+    call = asyncio.create_task(proxy.execute(tool, payload.get("params", {})))
+    try:
+        while True:
+            done, _ = await asyncio.wait({call}, timeout=_LEASE_POLL_SECONDS)
+            if done:
+                if lease.lost:
+                    raise _LeaseLost
+                return call.result()
+            if lease.lost:
+                raise _LeaseLost
+    finally:
+        if not call.done():
+            call.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await call
+
+
 async def _execute_tool(
     session: AsyncSession,
     task: Task,
     payload: dict[str, Any],
     proxy: ToolProxy,
+    lease: ExecutionLease,
 ) -> None:
     """Run the approved tool and record the outcome on the task row."""
     task_id = task.id
@@ -250,12 +243,22 @@ async def _execute_tool(
         return
     await _emit_transition(task_id, from_status, "executing")
 
+    if lease.lost:
+        # Another delivery took the lease over and is responsible for the
+        # outcome; this one must not add a second external call.
+        log.warning("process_task_lease_lost_before_call", task_id=str(task_id))
+        return
+
     values: dict[str, Any]
     try:
         # Approval is a decision about one request, not about the tool's current
         # mode: re-run the judgement so a tool disabled after approval is refused.
         ToolService.ensure_invocable(tool)
-        result = await proxy.execute(tool, payload.get("params", {}))
+        result = await _call_tool(proxy, tool, payload, lease)
+    except _LeaseLost:
+        # Writing this outcome would race the new holder's row.
+        log.warning("process_task_lease_lost_mid_call", task_id=str(task_id))
+        return
     except Exception as exc:
         to_status = "failed"
         values = {"error_message": str(exc)}

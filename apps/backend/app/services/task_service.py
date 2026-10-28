@@ -327,7 +327,7 @@ class TaskService:
 
         Enqueueing before the claim means a crash after a successful enqueue
         leaves the row undelivered and the reconciler re-enqueues it
-        (at-least-once); the worker's atomic ``SETNX`` execution claim turns
+        (at-least-once); the worker's execution lease turns
         that duplicate into a no-op. The reverse order (claim then enqueue)
         would lose the task forever if the process died between claim-commit
         and enqueue, since the reconciler only scans ``delivered_at IS NULL``.
@@ -345,6 +345,6 @@ class TaskService:
             log.warning("task_enqueue_failed", task_id=str(task_uuid), exc_info=True)
             return
         # Enqueue succeeded: mark delivered. A failure here only risks a
-        # duplicate re-enqueue, which the worker's SETNX claim dedups.
+        # duplicate re-enqueue, which the worker's execution lease dedups.
         await claim_outbox_row(self.session, outbox_id)
         await self.session.commit()
