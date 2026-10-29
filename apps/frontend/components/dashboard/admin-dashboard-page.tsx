@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 
-import { Activity, AlertTriangle, Bot, Clock } from "lucide-react";
+import { Activity, AlertTriangle, Bot, CheckCircle2, Clock } from "lucide-react";
 
 import { AlertList } from "@/components/dashboard/alert-list";
 import { DashboardSkeleton } from "@/components/dashboard/dashboard-skeleton";
@@ -69,7 +69,7 @@ export function AdminDashboardPage() {
         </p>
       </header>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <MetricCard
           label="智能体总数"
           value={formatNumber(dashboard.metrics.totalAgents)}
@@ -79,6 +79,11 @@ export function AdminDashboardPage() {
           label="今日调用"
           value={formatNumber(dashboard.metrics.todayCalls)}
           icon={Activity}
+        />
+        <MetricCard
+          label="成功率"
+          value={formatPercent(dashboard.metrics.successRate)}
+          icon={CheckCircle2}
         />
         <MetricCard
           label="平均耗时"

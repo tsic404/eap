@@ -3,9 +3,9 @@
 The case drives the public ``/api/run-logs``, ``/api/dashboard/*`` and
 ``/metrics`` surfaces end to end: PostgreSQL and Redis are real, the Dify
 boundary is mocked, and every test seeds its own tenant so no clause depends on
-another test's leftovers. C-21 also defines success rate as ``1 - error rate``,
-but the admin dashboard DTO exposes no success-rate field, so only ``errorRate``
-is asserted here.
+another test's leftovers. C-21 defines success rate as ``1 - error rate``, so the
+dashboard cases assert both halves of that pair together, including the empty
+state where the error rate is 0 and the success rate is therefore 1.
 """
 
 import contextlib
@@ -586,6 +586,8 @@ async def test_admin_dashboard_counts_today_calls_and_excludes_blocked_from_fail
     assert metrics["todayCalls"] == 3
     assert metrics["avgLatencyMs"] == 200
     assert metrics["errorRate"] == pytest.approx(1 / 3)
+    assert metrics["successRate"] == pytest.approx(1 - 1 / 3)
+    assert metrics["successRate"] == pytest.approx(1 - metrics["errorRate"])
 
 
 @pytest.mark.asyncio
@@ -600,6 +602,7 @@ async def test_admin_dashboard_reports_empty_metric_defaults_without_today_run_l
     assert body["metrics"]["todayCalls"] == 0
     assert body["metrics"]["avgLatencyMs"] is None
     assert body["metrics"]["errorRate"] == 0.0
+    assert body["metrics"]["successRate"] == 1.0
     assert body["metrics"]["totalAgents"] == 1
     assert body["topAgents"] == []
     assert sum(point["calls"] for point in body["trend"]) == 0

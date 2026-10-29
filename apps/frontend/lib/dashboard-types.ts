@@ -8,12 +8,16 @@
 import type { Agent } from "./agent-types";
 import type { Conversation } from "./conversation-types";
 
-/** Admin four-dimension metrics over the current tenant, scoped to today. */
+/**
+ * Admin metrics over the current tenant, scoped to today. `successRate` is the
+ * complement of `errorRate` (1 when there are no calls).
+ */
 export interface MetricSummary {
   totalAgents: number;
   todayCalls: number;
   avgLatencyMs: number | null;
   errorRate: number;
+  successRate: number;
 }
 
 /** One hourly bucket of the rolling 24h call trend. */

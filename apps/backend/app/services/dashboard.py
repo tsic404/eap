@@ -64,13 +64,22 @@ class DashboardService:
         self._session = session
 
     async def get_admin_dashboard(self, tenant_id: uuid.UUID) -> AdminDashboardDto:
-        """Aggregate the admin view: four metrics, 24h trend, top agents."""
+        """Aggregate the admin view: metrics, 24h trend, top agents.
+
+        The design's four-dimension card row renders five cards: today's calls
+        and the success rate share one dimension, so the metric summary carries
+        five numeric fields. ``successRate`` is ``1 - errorRate`` and stays
+        ``1.0`` when there are no calls.
+        """
         now = datetime.now(UTC)
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
         total_agents = await self._count_agents(tenant_id)
         today_calls, avg_latency, failed = await self._today_run_stats(tenant_id, today_start)
+        # Success rate is the complement of the error rate; with no calls the
+        # error rate is 0 and the success rate is therefore 1 (C-21).
         error_rate = (failed / today_calls) if today_calls else 0.0
+        success_rate = 1.0 - error_rate
 
         return AdminDashboardDto(
             metrics=MetricSummaryDto(
@@ -78,6 +87,7 @@ class DashboardService:
                 todayCalls=today_calls,
                 avgLatencyMs=round(avg_latency) if avg_latency is not None else None,
                 errorRate=error_rate,
+                successRate=success_rate,
             ),
             trend=await self._hourly_trend(tenant_id, now),
             topAgents=await self._top_agents(tenant_id, today_start),

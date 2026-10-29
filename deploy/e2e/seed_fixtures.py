@@ -412,12 +412,17 @@ async def _seed_metrics(session) -> dict[str, object]:
                 )
             )
 
+    total_calls = sum(calls for _, _, calls, _ in RANKING)
+    failed_calls = sum(failures for _, _, _, failures in RANKING)
+    error_rate = failed_calls / total_calls
+
     return {
         "dashboard": {
             "accountEmail": METRICS_ADMIN_EMAIL,
-            "todayCalls": sum(calls for _, _, calls, _ in RANKING),
+            "todayCalls": total_calls,
             "avgLatencyMs": RUN_LATENCY_MS,
-            "errorRate": 1 / sum(calls for _, _, calls, _ in RANKING),
+            "errorRate": error_rate,
+            "successRate": 1 - error_rate,
             "ranking": [
                 {"name": name, "calls": calls}
                 for _, name, calls, _ in sorted(RANKING, key=lambda item: item[2], reverse=True)

@@ -109,7 +109,13 @@ def test_admin_dashboard_returns_data_for_admin(monkeypatch) -> None:
 
     async def _fake_admin_dashboard(self, tenant_id):
         return {
-            "metrics": {"totalAgents": 3, "todayCalls": 7, "avgLatencyMs": 120, "errorRate": 0.0},
+            "metrics": {
+                "totalAgents": 3,
+                "todayCalls": 7,
+                "avgLatencyMs": 120,
+                "errorRate": 0.0,
+                "successRate": 1.0,
+            },
             "trend": [],
             "topAgents": [],
         }

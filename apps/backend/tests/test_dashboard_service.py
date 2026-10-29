@@ -179,6 +179,7 @@ async def test_admin_dashboard_metrics_scoped_to_tenant_and_today(session_factor
         assert dashboard.metrics.todayCalls == 2
         assert dashboard.metrics.avgLatencyMs == 200
         assert dashboard.metrics.errorRate == 0.5
+        assert dashboard.metrics.successRate == 0.5
         assert {point.agentId for point in dashboard.topAgents} == {"a1"}
         assert sum(point.calls for point in dashboard.trend) == 2
 
@@ -194,6 +195,7 @@ async def test_admin_dashboard_empty_metrics(session_factory) -> None:
         assert dashboard.metrics.todayCalls == 0
         assert dashboard.metrics.avgLatencyMs is None
         assert dashboard.metrics.errorRate == 0.0
+        assert dashboard.metrics.successRate == 1.0
         assert dashboard.topAgents == []
         assert len(dashboard.trend) == 24
         assert sum(point.calls for point in dashboard.trend) == 0
