@@ -156,9 +156,15 @@ services:
     environment:
       <<: *dify-env
       MODE: worker
+      # Only the api migrates: `flask upgrade-db` skips while another process
+      # holds its non-blocking lock and still exits 0, so a concurrent migrator
+      # would let the api serve on a schema that is behind head.
+      MIGRATION_ENABLED: "false"
     volumes:
       - dify_api_storage:/app/api/storage
     depends_on:
+      dify-api:
+        condition: service_healthy
       dify-db-init:
         condition: service_completed_successfully
       init_permissions:

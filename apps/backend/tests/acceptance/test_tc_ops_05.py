@@ -221,6 +221,75 @@ def test_qa_stack_one_shot_containers_exit_without_restart() -> None:
         assert resolved[service].get("restart") == "no", service
 
 
+@pytest.mark.parametrize(
+    "compose",
+    [_COMPOSE_LOCAL, _COMPOSE_QA, _COMPOSE_PROD],
+    ids=["local", "qa", "prod"],
+)
+def test_engine_api_is_the_only_migrator_and_gates_the_worker(compose: Path) -> None:
+    """A healthy engine api must mean the engine schema is at head.
+
+    ``flask upgrade-db`` runs before the api serves but takes a non-blocking
+    Redis lock and exits 0 when it loses that race, so two migrators let the
+    api read healthy while the migrations are still running elsewhere — the
+    state in which a fresh volume answers the bootstrap's setup call with a
+    missing column. The worker therefore never migrates, and starts only once
+    the api is healthy, i.e. after the api's own migration finished.
+    """
+    services = _compose_json(compose, _ENV_TEMPLATE)["services"]
+    assert services["dify-api"]["environment"]["MIGRATION_ENABLED"] == "true"
+    assert services["dify-worker"]["environment"]["MIGRATION_ENABLED"] == "false"
+    assert services["dify-worker"]["depends_on"]["dify-api"]["condition"] == "service_healthy"
+
+
+def test_qa_seed_starts_only_on_a_healthy_engine_api() -> None:
+    """The seed's setup call is the one that fails on a schema behind head, so
+    its dependency on the api's health is what turns "migrated" into its
+    precondition."""
+    services = _compose_json(_COMPOSE_QA, _ENV_TEMPLATE)["services"]
+    assert services["db-seed"]["depends_on"]["dify-api"]["condition"] == "service_healthy"
+
+
+def test_qa_seed_starts_only_on_a_healthy_stub_identity_provider() -> None:
+    """The engine phase registers the deterministic model the stub serves.
+
+    A stub recreated while the seed runs leaves `mock-idp` unresolvable for the
+    seconds its replacement takes to start, and the registration fails with a
+    400 that nothing else in the stack observes. The dependency is what keeps
+    compose from releasing the seed into that window.
+    """
+    services = _compose_json(_COMPOSE_QA, _ENV_TEMPLATE)["services"]
+    dependencies = services["db-seed"]["depends_on"]
+    assert dependencies.get("mock-idp", {}).get("condition") == "service_healthy"
+
+
+_E2E_SCRIPT = _REPO_ROOT / "scripts" / "e2e.sh"
+
+
+def test_qa_e2e_recreates_the_stub_before_the_stack_up() -> None:
+    """The bring-up order is the other half of the stub guarantee.
+
+    The run has to recreate the stub (its source is read once at start) before
+    the stack that starts the one-shot seed, or the seed meets the window the
+    compose dependency cannot cover: it is already running when the stub is
+    replaced. The script prints its ordered bring-up steps for exactly this
+    assertion, so restoring the old order fails here rather than only on a
+    fresh volume.
+    """
+    result = subprocess.run(
+        [str(_E2E_SCRIPT), "--print-bring-up"],
+        cwd=_REPO_ROOT,
+        env=_compose_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    steps = result.stdout.split()
+    assert steps.count("stub-recreate") == 1
+    assert steps.index("stub-recreate") < steps.index("stack-up")
+
+
 # ── ② probes ────────────────────────────────────────────────────────────────
 
 
@@ -482,3 +551,59 @@ def test_qa_engine_bootstrap_exits_non_zero_when_a_model_step_is_rejected(
         module.ensure_model(console)
     assert caught.value.code not in (None, 0)
     assert expected in str(caught.value.code)
+
+
+def test_qa_engine_bootstrap_logs_in_on_a_client_created_after_setup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The engine's working session is established after setup, on its own client.
+
+    Setup creates the admin account before it writes the workspace, so an
+    interrupted setup leaves an account without one. Reusing the setup client
+    would carry that state into the plugin and model steps, where every call
+    then answers 401; a session obtained afterwards is the one the remaining
+    steps can rely on.
+    """
+    module = _load_dify_bootstrap()
+    events: list[str] = []
+    clients: list[int] = []
+
+    class RecordingConsole:
+        def __init__(self) -> None:
+            self.index = len(clients)
+            clients.append(self.index)
+
+        def __enter__(self) -> RecordingConsole:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            events.append(f"close:{self.index}")
+
+        def login(self) -> None:
+            events.append(f"login:{self.index}")
+
+    monkeypatch.setattr(module, "Console", RecordingConsole)
+    monkeypatch.setattr(module, "wait_for_engine", lambda: events.append("wait"))
+    monkeypatch.setattr(
+        module, "ensure_setup", lambda console: events.append(f"setup:{console.index}")
+    )
+    monkeypatch.setattr(
+        module,
+        "ensure_model_plugin",
+        lambda console: events.append(f"plugin:{console.index}"),
+    )
+    monkeypatch.setattr(
+        module, "ensure_model", lambda console: events.append(f"model:{console.index}")
+    )
+
+    module.main()
+
+    assert events == [
+        "wait",
+        "setup:0",
+        "close:0",
+        "login:1",
+        "plugin:1",
+        "model:1",
+        "close:1",
+    ]

@@ -240,9 +240,16 @@ services:
     environment:
       <<: *dify-env
       MODE: worker
+      # Only the api migrates. `flask upgrade-db` takes a non-blocking Redis
+      # lock and exits 0 when it loses the race, so a second migrator lets the
+      # api answer healthy while the schema is still behind head; the worker
+      # instead starts once the api is healthy, i.e. after its migration ran.
+      MIGRATION_ENABLED: "false"
     volumes:
       - dify_api_storage:/app/api/storage
     depends_on:
+      dify-api:
+        condition: service_healthy
       dify-db-init:
         condition: service_completed_successfully
       init_permissions:

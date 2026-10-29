@@ -77,6 +77,12 @@ class Console:
     def close(self) -> None:
         self._client.close()
 
+    def __enter__(self) -> Console:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
     def _headers(self) -> dict[str, str]:
         token = self._client.cookies.get("csrf_token")
         return {"X-CSRF-Token": token} if token else {}
@@ -108,8 +114,9 @@ class Console:
         if response.status_code != 200:
             fail(
                 "console login failed "
-                f"({response.status_code}): {_body(response)} — if the console account "
-                "predates the generated env file, reset the QA volumes "
+                f"({response.status_code}): {_body(response)} — an account without "
+                "a workspace (left by an interrupted setup) or one that predates the "
+                "generated env file cannot log in. Reset the QA volumes "
                 "(`docker compose --env-file deploy/qa/qa.env -f docker-compose.qa.yml "
                 "down -v`) or restore deploy/qa/qa.env"
             )
@@ -328,14 +335,16 @@ def ensure_model(console: Console) -> None:
 
 def main() -> None:
     wait_for_engine()
-    console = Console()
-    try:
-        ensure_setup(console)
+    # Setup is not a session: Dify answers it before an admin exists, and it can
+    # leave an account without a workspace when its write fails midway. Configure
+    # the engine on a client that logs in afterwards, so no state from the setup
+    # call is carried into the plugin and model steps.
+    with Console() as setup_console:
+        ensure_setup(setup_console)
+    with Console() as console:
         console.login()
         ensure_model_plugin(console)
         ensure_model(console)
-    finally:
-        console.close()
     log("inference engine is configured")
 
 
