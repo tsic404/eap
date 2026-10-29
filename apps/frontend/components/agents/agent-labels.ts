@@ -8,11 +8,12 @@ export const AGENT_STATUS_LABEL: Record<string, string> = {
   offline: "已下线",
 };
 
+/** 状态配色：草稿灰、测试中蓝、已发布绿、已下线红（下线为终态，红色承载撤下语义）。 */
 export const AGENT_STATUS_VARIANT: Record<string, BadgeVariant> = {
   draft: "default",
   testing: "info",
   published: "success",
-  offline: "warning",
+  offline: "danger",
 };
 
 /** Human labels for agent type values (`chat`/`agent`/`workflow`/`data`). */

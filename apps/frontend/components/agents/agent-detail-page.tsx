@@ -127,6 +127,8 @@ export function AgentDetailPage() {
   const statusLabel = AGENT_STATUS_LABEL[agent.status] ?? agent.status;
   const statusVariant = AGENT_STATUS_VARIANT[agent.status] ?? "default";
   const isPublished = agent.status === "published";
+  // 下线为终态：发布只对草稿与测试中开放，已下线不渲染发布入口（后端仍以 409 兜底）。
+  const canPublish = agent.status === "draft" || agent.status === "testing";
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6 px-6 py-8">
@@ -155,7 +157,7 @@ export function AgentDetailPage() {
           </div>
         </div>
         <div className="flex gap-2">
-          {isPublished ? (
+          {isPublished && (
             <Button
               variant="outline"
               disabled={pending}
@@ -163,7 +165,8 @@ export function AgentDetailPage() {
             >
               下线
             </Button>
-          ) : (
+          )}
+          {canPublish && (
             <Button disabled={pending} onClick={() => setConfirmAction("publish")}>
               发布
             </Button>
