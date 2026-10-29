@@ -210,9 +210,27 @@ make e2e E2E_SPEC=e2e/journeys/tc-auth-09-....spec.ts  # 换一条自足 journey
 ```
 
 **覆盖范围**：runner 只接**自足 spec**——只依赖 QA 栈的租户 / 本地账号种子与普通 Playwright
-的 journey。完整套件仍走 `playwright.config.mjs`（自起 4 个 webServer 并重放 DB / Redis 准备）；
-依赖该 global setup 的用例（如 `sso.spec.ts`、`admin-rbac.spec.ts`）或依赖应用专属包的用例
-（`a11y.spec.ts` 需要 `@axe-core/playwright`）不在本入口范围内。
+的 journey。完整套件仍走 `playwright.config.mjs`（自起 4 个 webServer 并重放 DB / Redis 准备），
+工具 / 运维域的四条 journey 在**两条路径都跑**：整套套件由 `e2e/global-setup.mjs` 一次性种入夹具，
+容器入口按 `E2E_SPEC` 只种该条所需。依赖该 global setup 的用例（如 `sso.spec.ts`、
+`admin-rbac.spec.ts`）或依赖应用专属包的用例（`a11y.spec.ts` 需要 `@axe-core/playwright`）不在本入口范围内。
+
+**夹具与清理范围**（`deploy/e2e/seed_fixtures.py`，按 `E2E_SPEC` 的子串判定，未命中则不种不删）：
+
+| journey | 种入 | 删除（均带 `tenant_id` 条件） |
+|---|---|---|
+| `tc-tool-01-tool-registration` | `acme.com` 租户下两条 `e2e-` 探针工具 | 该租户的 `e2e-` 工具与固定 id 夹具任务 |
+| `tc-tool-05-approval-chain` | 同上 + 五条夹具任务（含已过期待审批） | 同上 |
+| `tc-tool-07-task-state-machine` | 同上 | 同上 |
+| `tc-ops-01-dashboard` | 专用租户 `metrics.acme.com` 的三智能体与九条当日运行日志 | **仅该租户**的运行日志与 `e2e-fixture-` 智能体 |
+| 其它任意 spec | 无 | 无（不动长期栈上累积的日志与夹具） |
+
+仪表盘夹具独占租户，因此它的指标永远精确，且不会被其它 journey 的日志污染；共享租户 `acme.com`
+的累计运行日志只有在该租户的夹具工具/任务被重建时才会被触碰（且范围限定在 `e2e-` 前缀与固定 id）。
+
+夹具清单的落点：容器入口固定为 `artifacts/playwright/fixtures.json`（`E2E_FIXTURE_MANIFEST` 显式传入）；
+宿主 harness 写在系统临时目录、**按本轮 `E2E_IDP_PORT` 键控**（`eap-e2e-fixtures-<port>.json`，与 Redis
+所有者标记同一约定）——清单里的桩地址与调用台账只属于一次运行，并发跑两套 harness 时不得互读。
 
 `scripts/e2e.sh` 一条命令完成：
 
@@ -221,11 +239,15 @@ make e2e E2E_SPEC=e2e/journeys/tc-auth-09-....spec.ts  # 换一条自足 journey
 2. `docker compose --env-file deploy/qa/qa.env -f docker-compose.qa.yml up -d --build` 起 QA 栈，
    等到 C-88 的 10 个常驻服务（含 dify-api / dify-worker / plugin-daemon / weaviate /
    reverse-proxy）都是 `healthy`、一次性 bootstrap（含引擎控制台 / 模型插件配置）退出码 0、
-   入口 `/api/health` 返回 200，才放行用例；
+   入口 `/api/health` 返回 200，才放行用例；桩 IdP 容器同时托管工具上游的 `/tool-stub`
+   路由，其源码是只读挂载、Node 启动时读取一次，因此每次都显式重建它；
 3. 清掉上一轮遗留的登录状态（只删 Redis 的 `login:*` 与 `ratelimit:login:*`，会话等其它键不动）——
    QA 栈的 Redis 是长期存活的，不清理会让上一轮的锁定 / 限流桶漏进本轮；
 4. 在 backend 容器里用应用自己的口令模块种入本地账号（`deploy/e2e/seed_accounts.py`，幂等，
-   对应 `e2e/helpers/accounts.cjs`）；
+   对应 `e2e/helpers/accounts.cjs`），再按 `E2E_SPEC` 种入该 journey 的夹具
+   （`deploy/e2e/seed_fixtures.py`，按固定标识先删后建、删除均带 `tenant_id`；上表列出每条
+   journey 的清空范围）；后者的清单写到 `artifacts/playwright/fixtures.json` 并以
+   `E2E_FIXTURE_MANIFEST` 交给 runner，任务是按清单里的 id 与标题取数的；
 5. 从 `pnpm-lock.yaml` 取 `@playwright/test` 版本作为 build arg，用 `deploy/e2e/Dockerfile`
    （`node:22-bookworm-slim` + `npm ci` 按 `deploy/e2e/package-lock.json` + `playwright install
    --with-deps chromium`）构建 runner 镜像；版本与 `deploy/e2e/package.json` 不一致时构建失败；
