@@ -43,6 +43,7 @@ const AGENT: AgentDetail = {
   boundKnowledge: [],
   boundTools: [],
   recentLogs: [],
+  conversationCount: 0,
 };
 
 const STATES: { status: string; label: string; family: ColourFamily }[] = [
