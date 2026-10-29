@@ -37,6 +37,7 @@ export const createAgentSchema = z.object({
   modelId: z.string().max(255, "模型 ID 最多 255 个字符"),
   modelName: z.string().max(255, "模型名称最多 255 个字符"),
   prompt: z.string(),
+  knowledgeBaseIds: z.array(z.string()),
   toolIds: z.array(z.string()),
 });
 
@@ -54,5 +55,6 @@ export const DEFAULT_AGENT_FORM_VALUES: CreateAgentFormValues = {
   modelId: "",
   modelName: "",
   prompt: "",
+  knowledgeBaseIds: [],
   toolIds: [],
 };
