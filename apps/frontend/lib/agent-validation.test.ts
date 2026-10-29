@@ -19,6 +19,7 @@ const VALID_VALUES: CreateAgentFormValues = {
   modelId: "",
   modelName: "",
   prompt: "",
+  knowledgeBaseIds: [],
   toolIds: [],
 };
 

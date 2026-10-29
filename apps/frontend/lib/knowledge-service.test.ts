@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { listAllAgentsMock, getAgentMock } = vi.hoisted(() => ({
+const { listAllAgentsMock, getAgentMock, getMock } = vi.hoisted(() => ({
   listAllAgentsMock: vi.fn(),
   getAgentMock: vi.fn(),
+  getMock: vi.fn(),
 }));
 
 import * as platformServiceModule from "./platform-service";
+
+vi.mock("./http-client", () => ({
+  apiClient: { get: getMock, post: vi.fn(), delete: vi.fn() },
+}));
 
 vi.mock("./platform-service", async (importOriginal) => ({
   // Keep the real error helpers; the duplicate-name predicate exercises them.
@@ -15,10 +20,29 @@ vi.mock("./platform-service", async (importOriginal) => ({
 }));
 
 import type { Agent, AgentDetail } from "./agent-types";
+import type { KnowledgeBase } from "./knowledge-types";
 import {
   isKbNameExistsError,
   listAgentsBoundToKnowledge,
+  listAllKnowledgeBases,
 } from "./knowledge-service";
+
+function envelope<T>(data: T) {
+  return { code: 0, data, message: "" };
+}
+
+function knowledgeBaseStub(kbId: string): KnowledgeBase {
+  return {
+    kb_id: kbId,
+    name: kbId,
+    description: null,
+    type: "business",
+    indexing_status: "ready",
+    doc_count: 0,
+    chunk_count: 0,
+    created_at: "2026-01-01T00:00:00Z",
+  };
+}
 
 function axiosError(status: number, data?: unknown): unknown {
   return { isAxiosError: true, response: { status, data }, message: "Request failed" };
@@ -62,6 +86,52 @@ function detailStub(agent: Agent, kbIds: string[]): AgentDetail {
 beforeEach(() => {
   listAllAgentsMock.mockReset();
   getAgentMock.mockReset();
+  getMock.mockReset();
+});
+
+describe("listAllKnowledgeBases", () => {
+  it("walks every page when the tenant has more than one page of knowledge bases", async () => {
+    const total = 250;
+    getMock.mockImplementation(
+      async (_url: string, config: { params: { page: number; limit: number } }) => {
+        const { page, limit } = config.params;
+        const start = (page - 1) * limit;
+        const count = Math.min(limit, total - start);
+        const items = Array.from({ length: count }, (_, index) =>
+          knowledgeBaseStub(`kb-${start + index}`),
+        );
+        return { data: envelope({ items, total }) };
+      },
+    );
+
+    const result = await listAllKnowledgeBases();
+
+    expect(result).toHaveLength(total);
+    expect(result[0].kb_id).toBe("kb-0");
+    expect(result[total - 1].kb_id).toBe(`kb-${total - 1}`);
+    expect(
+      getMock.mock.calls.map((call) => [
+        call[1].params.page,
+        call[1].params.limit,
+      ]),
+    ).toEqual([
+      [1, 100],
+      [2, 100],
+      [3, 100],
+    ]);
+  });
+
+  it("returns the first page without extra calls when everything fits one page", async () => {
+    getMock.mockResolvedValueOnce({
+      data: envelope({ items: [knowledgeBaseStub("kb-1")], total: 1 }),
+    });
+
+    const result = await listAllKnowledgeBases();
+
+    expect(result).toHaveLength(1);
+    expect(getMock).toHaveBeenCalledTimes(1);
+    expect(getMock.mock.calls[0][1].params).toEqual({ page: 1, limit: 100 });
+  });
 });
 
 describe("listAgentsBoundToKnowledge", () => {

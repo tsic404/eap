@@ -10,6 +10,7 @@
 | `TC-sec-02` | AC-43 | `test_tc_sec_02.test.tsx` |
 | `TC-tool-05` | AC-34 | `test_tc_tool_05.test.tsx` |
 | `TC-auth-02` | AC-02 | `test_tc_auth_02.test.tsx` |
+| `TC-agent-01` | AC-08 | `test_tc_agent_01.test.tsx` |
 | `TC-agent-06` | AC-13 | `test_tc_agent_06.test.tsx` |
 
 ## 按标识执行
@@ -32,6 +33,7 @@ pnpm acceptance --list           # 列出可用标识
 - `TC-sec-02`：空态引导。三个管理端列表的列表读取被桩成空页，断言呈现带可操作入口的引导卡片、且不渲染具名列表（`list` 角色）占位；同一模块再以非空数据确认该具名列表确实出现，使空态断言具备判别力。只读角色（审计员、知识库管理员）在同一引导卡片上没有创建入口，头部也没有新建按钮；智能体卡片是可用键盘进入的详情链接。员工端广场文案不在本用例。浏览器侧证据在 `e2e/journeys/tc-sec-02-empty-guidance.spec.ts`（真实 Chromium 中重放，含空态、键盘进入详情、`/admin/agents` 的 200 与角色门禁），单跑：`pnpm test:e2e e2e/journeys/tc-sec-02-empty-guidance.spec.ts`。
 - `TC-tech-ops-02` 末条「浏览器请求实际落在同源相对路径」的浏览器侧证据在 `e2e/same-origin.spec.ts`，随 e2e 套件执行（单跑：`pnpm test:e2e e2e/same-origin.spec.ts`）；后端模块已注明该取证边界。
 - `TC-conv-03`（AC-24）的删除撤销判据是界面用例、不在本套件（本套件按标识承载前端用例），其浏览器侧证据在 `e2e/journeys/conversation-delete-undo.spec.ts`，随 e2e 套件执行（单跑：`pnpm test:e2e e2e/journeys/conversation-delete-undo.spec.ts`）。
+- `TC-agent-01`：分步创建向导。向导、步骤指示器、绑定分组与预览表是真实组件，仅桩掉工具/知识库列表与创建调用，断言的是四步命名与当前步标记、第三步同时提供知识库与工具绑定、预览逐项回显实际配置（含知识库名与 Prompt），以及创建成功后落入详情页；后端 201 属后端套件，浏览器侧证据在 `e2e/journeys/tc-agent-01-agent-create-wizard.spec.ts`。
 - `TC-agent-06`：删除二次确认（AC-13）的 jsdom 证据驱动真实详情页、弹层与名称比较，桩掉的是数据来源与删除调用；浏览器侧证据在 `e2e/journeys/tc-agent-06-agent-delete-confirm.spec.ts`，以桩响应携带关联会话数量重放同一判据。上游删除语义（204 / 软删除 / 历史会话保留）属后端证据，不在此重复判定。
 
 ## 已知实现缺口

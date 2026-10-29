@@ -36,6 +36,29 @@ const TOOLS = [
   },
 ];
 
+const KNOWLEDGE_BASES = [
+  {
+    kb_id: "kb-1",
+    name: "差旅政策",
+    description: "报销与出行规范",
+    type: "business",
+    indexing_status: "ready",
+    doc_count: 2,
+    chunk_count: 18,
+    created_at: "2026-01-01T00:00:00Z",
+  },
+  {
+    kb_id: "kb-2",
+    name: "行政流程",
+    description: null,
+    type: "business",
+    indexing_status: "ready",
+    doc_count: 1,
+    chunk_count: 6,
+    created_at: "2026-01-02T00:00:00Z",
+  },
+];
+
 const CREATED_AGENT: AgentDetail = {
   agentId: "travel-bot",
   tenantId: "tenant-1",
@@ -98,6 +121,11 @@ async function signInAsAgentAdmin(page: Page): Promise<void> {
 
 test(`${TC_ID} wizard: 表单四步逐步推进且步骤指示器高亮当前步`, async ({ page }) => {
   await page.route("**/api/tools", (route) => route.fulfill({ json: envelope(TOOLS) }));
+  await page.route("**/api/knowledge-bases**", (route) =>
+    route.fulfill({
+      json: envelope({ items: KNOWLEDGE_BASES, total: KNOWLEDGE_BASES.length }),
+    }),
+  );
   await signInAsAgentAdmin(page);
 
   await page.goto("/admin/agents/new");
@@ -129,10 +157,12 @@ test(`${TC_ID} wizard: 表单四步逐步推进且步骤指示器高亮当前步
   await page.getByLabel("模型 ID").fill("gpt-4o-mini");
   await page.getByRole("button", { name: "下一步" }).click();
 
-  // Step 3 — resource binding.
+  // Step 3 — knowledge-base and tool binding.
   await expectHighlightedStep(page, 2);
+  await expect(page.getByRole("heading", { name: "绑定知识库" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "绑定工具" })).toBeVisible();
 
+  await page.getByText("差旅政策", { exact: true }).click();
   await page.getByText("天气查询", { exact: true }).click();
   await page.getByText("汇率换算", { exact: true }).click();
   await page.getByRole("button", { name: "下一步" }).click();
@@ -145,6 +175,11 @@ test(`${TC_ID} wizard: 表单四步逐步推进且步骤指示器高亮当前步
 test(`${TC_ID} wizard: 双击「下一步」的第二击不创建智能体`, async ({ page }) => {
   const posts: unknown[] = [];
   await page.route("**/api/tools", (route) => route.fulfill({ json: envelope(TOOLS) }));
+  await page.route("**/api/knowledge-bases**", (route) =>
+    route.fulfill({
+      json: envelope({ items: KNOWLEDGE_BASES, total: KNOWLEDGE_BASES.length }),
+    }),
+  );
   await page.route("**/api/agents", async (route) => {
     if (route.request().method() !== "POST") {
       await route.fallback();
@@ -185,6 +220,11 @@ test(`${TC_ID} wizard: 双击「下一步」的第二击不创建智能体`, asy
 
 test(`${TC_ID} preview: 预览区与已填配置逐项一致`, async ({ page }) => {
   await page.route("**/api/tools", (route) => route.fulfill({ json: envelope(TOOLS) }));
+  await page.route("**/api/knowledge-bases**", (route) =>
+    route.fulfill({
+      json: envelope({ items: KNOWLEDGE_BASES, total: KNOWLEDGE_BASES.length }),
+    }),
+  );
   await signInAsAgentAdmin(page);
 
   await page.goto("/admin/agents/new");
@@ -203,6 +243,8 @@ test(`${TC_ID} preview: 预览区与已填配置逐项一致`, async ({ page }) 
   await page.getByLabel("系统 Prompt").fill("你是差旅助手。");
   await page.getByRole("button", { name: "下一步" }).click();
 
+  await page.getByText("差旅政策", { exact: true }).click();
+  await page.getByText("行政流程", { exact: true }).click();
   await page.getByText("天气查询", { exact: true }).click();
   await page.getByText("汇率换算", { exact: true }).click();
   await page.getByRole("button", { name: "下一步" }).click();
@@ -217,12 +259,19 @@ test(`${TC_ID} preview: 预览区与已填配置逐项一致`, async ({ page }) 
   await expect(page.getByText("差旅", { exact: true })).toBeVisible();
   await expect(page.getByText("审批", { exact: true })).toBeVisible();
   await expect(previewValue(page, "模型")).toHaveText("openai / gpt-4o-mini");
-  await expect(previewValue(page, "绑定工具")).toHaveText("2 个工具");
+  await expect(previewValue(page, "系统 Prompt")).toHaveText("你是差旅助手。");
+  await expect(previewValue(page, "绑定知识库")).toHaveText("差旅政策、行政流程");
+  await expect(previewValue(page, "绑定工具")).toHaveText("天气查询、汇率换算");
 });
 
 test(`${TC_ID} submit: 创建返回 201 后显示成功并跳转详情页`, async ({ page }) => {
   const posts: unknown[] = [];
   await page.route("**/api/tools", (route) => route.fulfill({ json: envelope(TOOLS) }));
+  await page.route("**/api/knowledge-bases**", (route) =>
+    route.fulfill({
+      json: envelope({ items: KNOWLEDGE_BASES, total: KNOWLEDGE_BASES.length }),
+    }),
+  );
   await page.route("**/api/agents", async (route) => {
     if (route.request().method() !== "POST") {
       await route.fallback();
@@ -255,6 +304,7 @@ test(`${TC_ID} submit: 创建返回 201 后显示成功并跳转详情页`, asyn
   await page.getByLabel("系统 Prompt").fill("你是差旅助手。");
   await page.getByRole("button", { name: "下一步" }).click();
 
+  await page.getByText("差旅政策", { exact: true }).click();
   await page.getByText("天气查询", { exact: true }).click();
   await page.getByText("汇率换算", { exact: true }).click();
   await page.getByRole("button", { name: "下一步" }).click();
@@ -283,7 +333,7 @@ test(`${TC_ID} submit: 创建返回 201 后显示成功并跳转详情页`, asyn
       modelId: "gpt-4o-mini",
       modelName: "GPT-4o mini",
       prompt: "你是差旅助手。",
-      knowledgeBaseIds: [],
+      knowledgeBaseIds: ["kb-1"],
       toolIds: ["tool-1", "tool-2"],
     },
   ]);
@@ -295,6 +345,11 @@ test(`${TC_ID} submit: 创建返回 201 后显示成功并跳转详情页`, asyn
 
 test(`${TC_ID} submit: 创建失败时停留原页并给出失败提示`, async ({ page }) => {
   await page.route("**/api/tools", (route) => route.fulfill({ json: envelope(TOOLS) }));
+  await page.route("**/api/knowledge-bases**", (route) =>
+    route.fulfill({
+      json: envelope({ items: KNOWLEDGE_BASES, total: KNOWLEDGE_BASES.length }),
+    }),
+  );
   await page.route("**/api/agents", async (route) => {
     if (route.request().method() !== "POST") {
       await route.fallback();

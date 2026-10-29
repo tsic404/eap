@@ -34,6 +34,27 @@ export async function listKnowledgeBases(
   return response.data.data;
 }
 
+/**
+ * Every knowledge base in the tenant, across pages. The backend caps `limit`
+ * at 100, so a picker bound to page one would silently hide the rest.
+ */
+export async function listAllKnowledgeBases(): Promise<KnowledgeBase[]> {
+  const pageSize = 100;
+  const first = await listKnowledgeBases(1, pageSize);
+  const totalPages = Math.ceil(first.total / pageSize);
+  if (totalPages <= 1) {
+    return first.items;
+  }
+
+  const remaining = await Promise.all(
+    Array.from({ length: totalPages - 1 }, (_, index) =>
+      listKnowledgeBases(index + 2, pageSize),
+    ),
+  );
+
+  return [...first.items, ...remaining.flatMap((page) => page.items)];
+}
+
 export async function createKnowledgeBase(
   input: CreateKnowledgeBaseInput,
 ): Promise<KnowledgeBase> {

@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
@@ -23,6 +30,8 @@ import {
 } from "@/lib/agent-validation";
 import type { AgentType } from "@/lib/agent-types";
 import { ROUTES } from "@/lib/api-routes";
+import { listAllKnowledgeBases } from "@/lib/knowledge-service";
+import type { KnowledgeBase } from "@/lib/knowledge-types";
 import {
   createAgent,
   extractApiErrorMessage,
@@ -35,15 +44,15 @@ const DRAFT_KEY = "eap:agent-create-draft";
 
 const STEPS = [
   { key: "basic", label: "基本信息" },
-  { key: "model", label: "模型与 Prompt" },
-  { key: "resources", label: "绑定资源" },
-  { key: "confirm", label: "确认" },
+  { key: "model", label: "模型与提示" },
+  { key: "resources", label: "知识库/工具绑定" },
+  { key: "confirm", label: "预览" },
 ] as const;
 
 const STEP_FIELDS: (keyof CreateAgentFormValues)[][] = [
   ["agentId", "name", "description", "type", "category", "icon", "tags"],
   ["modelProvider", "modelId", "modelName", "prompt"],
-  ["toolIds"],
+  ["knowledgeBaseIds", "toolIds"],
   [],
 ];
 
@@ -53,7 +62,7 @@ interface ToolOption {
   description: string | null;
 }
 
-type ToolsStatus = "loading" | "loaded" | "error";
+type ListStatus = "loading" | "loaded" | "error";
 
 function orNull(value: string): string | null {
   return value === "" ? null : value;
@@ -61,15 +70,19 @@ function orNull(value: string): string | null {
 
 /**
  * Read and validate a saved draft. The draft is an arbitrary JSON blob from
- * localStorage, so it is parsed through the schema — a corrupt or stale draft
- * (e.g. `tags` no longer a string) is discarded instead of crashing the form.
+ * localStorage, so it is parsed through the schema — a corrupt draft (e.g.
+ * `tags` no longer a string) is discarded instead of crashing the form, and a
+ * field added after the draft was written falls back to its default.
  */
 function loadDraft(): CreateAgentFormValues | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(DRAFT_KEY);
     if (!raw) return null;
-    const result = createAgentSchema.safeParse(JSON.parse(raw));
+    const result = createAgentSchema.safeParse({
+      ...DEFAULT_AGENT_FORM_VALUES,
+      ...JSON.parse(raw),
+    });
     return result.success ? result.data : null;
   } catch {
     return null;
@@ -101,7 +114,11 @@ function StepIndicator({ current }: { current: number }) {
         const isCurrent = index === current;
         const isDone = index < current;
         return (
-          <li key={step.key} className="flex items-center gap-2">
+          <li
+            key={step.key}
+            className="flex items-center gap-2"
+            aria-current={isCurrent ? "step" : undefined}
+          >
             <span
               className={cn(
                 "flex h-7 w-7 items-center justify-center rounded-full text-sm font-medium",
@@ -129,6 +146,83 @@ function StepIndicator({ current }: { current: number }) {
         );
       })}
     </ol>
+  );
+}
+
+function ResourceSection({
+  title,
+  hint,
+  status,
+  loadingText,
+  errorText,
+  onRetry,
+  children,
+}: {
+  title: string;
+  hint: string;
+  status: ListStatus;
+  loadingText: string;
+  errorText: string;
+  onRetry: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-base font-semibold text-foreground">{title}</h2>
+        <p className="text-sm text-muted-foreground">{hint}</p>
+      </div>
+      {status === "loading" ? (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Spinner size="sm" />
+          {loadingText}
+        </div>
+      ) : status === "error" ? (
+        <div className="flex flex-col items-start gap-2 rounded-lg border border-border p-4">
+          <p className="text-sm text-muted-foreground">{errorText}</p>
+          <Button variant="outline" size="sm" onClick={onRetry}>
+            <RefreshCw className="h-4 w-4" />
+            重试
+          </Button>
+        </div>
+      ) : (
+        children
+      )}
+    </section>
+  );
+}
+
+function ResourceOption({
+  name,
+  description,
+  checked,
+  onToggle,
+}: {
+  name: string;
+  description: string | null;
+  checked: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <label
+      className={cn(
+        "flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors",
+        checked ? "border-primary bg-primary-subtle" : "border-border",
+      )}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onToggle}
+        className="mt-1 h-4 w-4"
+      />
+      <span className="flex flex-col gap-0.5">
+        <span className="text-sm font-medium text-foreground">{name}</span>
+        {description && (
+          <span className="text-xs text-muted-foreground">{description}</span>
+        )}
+      </span>
+    </label>
   );
 }
 
@@ -178,7 +272,9 @@ export function AgentCreateForm() {
   const [step, setStep] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [tools, setTools] = useState<ToolOption[]>([]);
-  const [toolsStatus, setToolsStatus] = useState<ToolsStatus>("loading");
+  const [toolsStatus, setToolsStatus] = useState<ListStatus>("loading");
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
+  const [kbStatus, setKbStatus] = useState<ListStatus>("loading");
 
   const [defaultValues] = useState<CreateAgentFormValues>(
     () => loadDraft() ?? DEFAULT_AGENT_FORM_VALUES,
@@ -206,28 +302,68 @@ export function AgentCreateForm() {
     return () => clearTimeout(timer);
   }, [values]);
 
+  /**
+   * A draft outlives the assets it names. Once a list has loaded, ids it no
+   * longer offers would be unremovable (the picker only toggles visible rows)
+   * and would fail the create call with `INVALID_BINDING`. Prune only after a
+   * successful load: a failed load must not silently drop the draft's bindings.
+   */
+  const pruneUnavailableIds = useCallback(
+    (field: "knowledgeBaseIds" | "toolIds", availableIds: string[]) => {
+      const available = new Set(availableIds);
+      const current = getValues(field);
+      const kept = current.filter((id) => available.has(id));
+      if (kept.length !== current.length) {
+        setValue(field, kept);
+      }
+    },
+    [getValues, setValue],
+  );
+
   const loadTools = useCallback(async () => {
     setToolsStatus("loading");
     try {
       const result = await listTools();
-      setTools(
-        result
-          .filter((tool) => tool.status === "active")
-          .map((tool) => ({
-            toolId: tool.tool_id,
-            name: tool.name,
-            description: tool.description,
-          })),
+      const activeTools = result
+        .filter((tool) => tool.status === "active")
+        .map((tool) => ({
+          toolId: tool.tool_id,
+          name: tool.name,
+          description: tool.description,
+        }));
+      setTools(activeTools);
+      pruneUnavailableIds(
+        "toolIds",
+        activeTools.map((tool) => tool.toolId),
       );
       setToolsStatus("loaded");
     } catch {
       setToolsStatus("error");
     }
-  }, []);
+  }, [pruneUnavailableIds]);
 
   useEffect(() => {
     void loadTools();
   }, [loadTools]);
+
+  const loadKnowledgeBases = useCallback(async () => {
+    setKbStatus("loading");
+    try {
+      const loaded = await listAllKnowledgeBases();
+      setKnowledgeBases(loaded);
+      pruneUnavailableIds(
+        "knowledgeBaseIds",
+        loaded.map((kb) => kb.kb_id),
+      );
+      setKbStatus("loaded");
+    } catch {
+      setKbStatus("error");
+    }
+  }, [pruneUnavailableIds]);
+
+  useEffect(() => {
+    void loadKnowledgeBases();
+  }, [loadKnowledgeBases]);
 
   const parsedTags = useMemo(() => parseTags(values.tags), [values.tags]);
 
@@ -242,6 +378,14 @@ export function AgentCreateForm() {
   const handleClearDraft = () => {
     clearDraft();
     reset(DEFAULT_AGENT_FORM_VALUES);
+  };
+
+  const toggleKnowledgeBase = (kbId: string) => {
+    const current = getValues("knowledgeBaseIds");
+    const next = current.includes(kbId)
+      ? current.filter((id) => id !== kbId)
+      : [...current, kbId];
+    setValue("knowledgeBaseIds", next, { shouldDirty: true });
   };
 
   const toggleTool = (toolId: string) => {
@@ -268,7 +412,7 @@ export function AgentCreateForm() {
         modelId: orNull(formValues.modelId.trim()),
         modelName: orNull(formValues.modelName.trim()),
         prompt: orNull(formValues.prompt.trim()),
-        knowledgeBaseIds: [],
+        knowledgeBaseIds: formValues.knowledgeBaseIds,
         toolIds: formValues.toolIds,
       });
       clearDraft();
@@ -299,6 +443,17 @@ export function AgentCreateForm() {
   };
 
   const toolIds = watch("toolIds");
+  const knowledgeBaseIds = watch("knowledgeBaseIds");
+
+  const toolNames = useMemo(() => {
+    const byId = new Map(tools.map((tool) => [tool.toolId, tool.name]));
+    return toolIds.map((id) => byId.get(id) ?? id);
+  }, [tools, toolIds]);
+
+  const knowledgeBaseNames = useMemo(() => {
+    const byId = new Map(knowledgeBases.map((kb) => [kb.kb_id, kb.name]));
+    return knowledgeBaseIds.map((id) => byId.get(id) ?? id);
+  }, [knowledgeBases, knowledgeBaseIds]);
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6 px-6 py-8">
@@ -418,65 +573,62 @@ export function AgentCreateForm() {
         )}
 
         {step === 2 && (
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-col gap-1">
-              <h2 className="text-base font-semibold text-foreground">绑定工具</h2>
-              <p className="text-sm text-muted-foreground">
-                选择智能体可调用的工具（可选）
-              </p>
-            </div>
-            {toolsStatus === "loading" ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Spinner size="sm" />
-                加载工具列表…
-              </div>
-            ) : toolsStatus === "error" ? (
-              <div className="flex flex-col items-start gap-2 rounded-lg border border-border p-4">
-                <p className="text-sm text-muted-foreground">工具列表加载失败</p>
-                <Button variant="outline" size="sm" onClick={() => void loadTools()}>
-                  <RefreshCw className="h-4 w-4" />
-                  重试
-                </Button>
-              </div>
-            ) : tools.length === 0 ? (
-              <EmptyState
-                title="暂无可用工具"
-                description="尚未注册启用的工具，可稍后返回绑定"
-              />
-            ) : (
-              <div className="flex flex-col gap-2">
-                {tools.map((tool) => {
-                  const checked = toolIds.includes(tool.toolId);
-                  return (
-                    <label
+          <div className="flex flex-col gap-6">
+            <ResourceSection
+              title="绑定知识库"
+              hint="选择智能体可召回的知识库（可选）"
+              status={kbStatus}
+              loadingText="加载知识库列表…"
+              errorText="知识库列表加载失败"
+              onRetry={() => void loadKnowledgeBases()}
+            >
+              {knowledgeBases.length === 0 ? (
+                <EmptyState
+                  title="暂无可用知识库"
+                  description="尚未创建知识库，可稍后返回绑定"
+                />
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {knowledgeBases.map((kb) => (
+                    <ResourceOption
+                      key={kb.kb_id}
+                      name={kb.name}
+                      description={kb.description}
+                      checked={knowledgeBaseIds.includes(kb.kb_id)}
+                      onToggle={() => toggleKnowledgeBase(kb.kb_id)}
+                    />
+                  ))}
+                </div>
+              )}
+            </ResourceSection>
+
+            <ResourceSection
+              title="绑定工具"
+              hint="选择智能体可调用的工具（可选）"
+              status={toolsStatus}
+              loadingText="加载工具列表…"
+              errorText="工具列表加载失败"
+              onRetry={() => void loadTools()}
+            >
+              {tools.length === 0 ? (
+                <EmptyState
+                  title="暂无可用工具"
+                  description="尚未注册启用的工具，可稍后返回绑定"
+                />
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {tools.map((tool) => (
+                    <ResourceOption
                       key={tool.toolId}
-                      className={cn(
-                        "flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors",
-                        checked ? "border-primary bg-primary-subtle" : "border-border",
-                      )}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggleTool(tool.toolId)}
-                        className="mt-1 h-4 w-4"
-                      />
-                      <span className="flex flex-col gap-0.5">
-                        <span className="text-sm font-medium text-foreground">{tool.name}</span>
-                        {tool.description && (
-                          <span className="text-xs text-muted-foreground">
-                            {tool.description}
-                          </span>
-                        )}
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-            )}
-            <p className="text-sm text-muted-foreground">
-              知识库绑定将在知识库模块接入后开放。
-            </p>
+                      name={tool.name}
+                      description={tool.description}
+                      checked={toolIds.includes(tool.toolId)}
+                      onToggle={() => toggleTool(tool.toolId)}
+                    />
+                  ))}
+                </div>
+              )}
+            </ResourceSection>
           </div>
         )}
 
@@ -508,11 +660,13 @@ export function AgentCreateForm() {
                 value={[values.modelProvider, values.modelId].filter(Boolean).join(" / ") || "—"}
               />
               <div className="flex flex-col gap-1.5">
-                <span className="text-sm text-muted-foreground">绑定工具</span>
-                <span className="text-sm text-foreground">
-                  {toolIds.length === 0 ? "—" : `${toolIds.length} 个工具`}
+                <span className="text-sm text-muted-foreground">系统 Prompt</span>
+                <span className="whitespace-pre-wrap text-sm text-foreground">
+                  {values.prompt || "—"}
                 </span>
               </div>
+              <SummaryRow label="绑定知识库" value={knowledgeBaseNames.join("、") || "—"} />
+              <SummaryRow label="绑定工具" value={toolNames.join("、") || "—"} />
             </CardContent>
           </Card>
         )}
