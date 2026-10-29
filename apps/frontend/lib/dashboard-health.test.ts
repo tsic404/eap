@@ -12,6 +12,7 @@ function metrics(overrides: Partial<MetricSummary> = {}): MetricSummary {
     todayCalls: 100,
     avgLatencyMs: 500,
     errorRate: 0,
+    successRate: 1,
     ...overrides,
   };
 }

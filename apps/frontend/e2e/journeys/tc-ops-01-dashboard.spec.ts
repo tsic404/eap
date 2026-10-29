@@ -4,7 +4,7 @@ import { loadFixtures, metricValue, openApiSession, signIn } from "../helpers/fi
 
 // Browser-side evidence for the admin dashboard. The fixture seeds today's run
 // logs (9 calls, one failed, every call 1200 ms) and three agents into a tenant
-// of its own, so the four metric values, the trend's buckets and the ranking
+// of its own, so the five metric values, the trend's buckets and the ranking
 // order are exact rather than "the card rendered something" — and no other
 // journey's rows can enter the totals.
 
@@ -21,6 +21,7 @@ interface AdminDashboardPayload {
     todayCalls: number;
     avgLatencyMs: number | null;
     errorRate: number;
+    successRate: number;
   };
   trend: TrendPoint[];
 }
@@ -40,7 +41,7 @@ async function bucketLabel(page: Page, hour: string): Promise<string> {
 }
 
 test.describe(TC_ID, () => {
-  test("四维指标卡片齐全且数值与夹具一致", async ({ page, playwright }) => {
+  test("指标卡片五维齐全且数值与夹具一致", async ({ page, playwright }) => {
     const fixtures = loadFixtures();
     const account = { email: fixtures.dashboard.accountEmail };
     const api = await openApiSession(playwright.request, account);
@@ -64,10 +65,18 @@ test.describe(TC_ID, () => {
     expect(agentTotal).toBeGreaterThanOrEqual(fixtures.dashboard.ranking.length);
 
     await expect(metricValue(page, "今日调用")).toHaveText(String(fixtures.dashboard.todayCalls));
+    // Success and error are the two halves of the same seeded ratio: 9 calls
+    // with one failure → 88.9% success, 11.1% error.
+    await expect(metricValue(page, "成功率")).toHaveText("88.9%");
     await expect(metricValue(page, "平均耗时")).toHaveText("1.2 s");
-    // Error rate is the rendered half of the pair C-21 defines; 1 - errorRate
-    // is therefore 88.9%.
     await expect(metricValue(page, "错误率")).toHaveText("11.1%");
+    // The rendered pair must complement whatever the tenant's numbers are.
+    const successPercent = Number.parseFloat(await metricValue(page, "成功率").innerText());
+    const errorPercent = Number.parseFloat(await metricValue(page, "错误率").innerText());
+    expect(successPercent + errorPercent).toBeCloseTo(100, 1);
+    // And the API carries the complement itself, matching the seeded projection.
+    expect(dashboard.metrics.successRate).toBeCloseTo(1 - dashboard.metrics.errorRate);
+    expect(dashboard.metrics.successRate).toBeCloseTo(fixtures.dashboard.successRate);
     expect(dashboard.metrics).toMatchObject({
       todayCalls: fixtures.dashboard.todayCalls,
       avgLatencyMs: fixtures.dashboard.avgLatencyMs,

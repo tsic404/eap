@@ -636,7 +636,7 @@ async def test_admin_dashboard_returns_metrics(api) -> None:
 
     assert resp.status_code == 200
     metrics = resp.json()["data"]["metrics"]
-    assert set(metrics) == {"totalAgents", "todayCalls", "avgLatencyMs", "errorRate"}
+    assert set(metrics) == {"totalAgents", "todayCalls", "avgLatencyMs", "errorRate", "successRate"}
 
 
 @pytest.mark.asyncio

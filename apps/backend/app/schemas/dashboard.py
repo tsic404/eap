@@ -15,16 +15,19 @@ from app.schemas.conversation import ConversationDto
 
 
 class MetricSummaryDto(BaseModel):
-    """Admin four-dimension metrics over the current tenant, scoped to today.
+    """Admin metrics over the current tenant, scoped to today.
 
-    ``errorRate`` is the fraction of failed runs in ``[0, 1]`` (``0.0`` when
-    there are no calls). ``avgLatencyMs`` is ``None`` when there are no calls.
+    The design's four-dimension card row renders five cards: today's calls and
+    the success rate share one dimension, so five numeric fields are exposed.
+    ``successRate`` is ``1 - errorRate`` (``1.0`` when there are no calls);
+    ``avgLatencyMs`` is ``None`` when there are no calls.
     """
 
     totalAgents: int
     todayCalls: int
     avgLatencyMs: int | None = None
     errorRate: float
+    successRate: float
 
 
 class TrendPointDto(BaseModel):

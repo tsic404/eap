@@ -36,6 +36,7 @@ export interface FixtureManifest {
     todayCalls: number;
     avgLatencyMs: number;
     errorRate: number;
+    successRate: number;
     ranking: { name: string; calls: number }[];
   };
 }
