@@ -185,6 +185,8 @@ async def test_trace_id_is_persisted_as_a_run_log_readable_after_the_stream(
     assert body["traceId"] == trace_id
     assert body["agentId"] == "traced-bot"
     assert body["input"] == "测试问题"
+    # C-127: status is reversible from the trace id, even with no workflow status.
+    assert body["status"] == "success"
     assert body["tokenUsage"] == 7
     assert body["latencyMs"] == 250
 

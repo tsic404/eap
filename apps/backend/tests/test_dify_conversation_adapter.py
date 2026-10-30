@@ -304,7 +304,7 @@ async def test_flushes_trailing_frame_without_newline() -> None:
                 "steps": [],
                 "toolCalls": [],
                 "output": "hi",
-                "status": None,
+                "status": "success",
             },
         )
     ]

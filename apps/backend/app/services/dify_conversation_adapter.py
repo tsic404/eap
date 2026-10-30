@@ -239,7 +239,8 @@ class DifyConversationAdapter:
                     "steps": list(trace["steps"].values()),
                     "toolCalls": trace["tool_calls"],
                     "output": trace["output"],
-                    "status": trace["status"],
+                    # A normal end implies success unless the workflow reported a status.
+                    "status": trace["status"] or "success",
                 },
             )
 
