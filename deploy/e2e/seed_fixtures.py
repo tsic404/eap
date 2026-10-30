@@ -38,6 +38,7 @@ from app.auth.password import hash_password
 from app.core.folding import fold
 from app.db import async_session_factory
 from app.models.agent import AgentRegistry
+from app.models.conversation import Conversation
 from app.models.run_log import RunLog, TraceCitation, TraceStep, TraceToolCall
 from app.models.task import Task
 from app.models.tenant import Tenant
@@ -85,6 +86,38 @@ TOOLS = {
     "denied": "e2e-tool-denied",
 }
 
+# The isolation journey needs a positive row on each side, while the shared acme
+# tenant must stay empty (the first-login journey asserts that). Two dedicated
+# tenants keep both sides isolated; the manifest below is what the spec reads, so
+# a renamed fixture reaches the assertion instead of silently passing.
+TENANT_A_DOMAIN = "initech.com"
+TENANT_A_SLUG = "e2e-initech"
+TENANT_A_NAME = "租户 A 夹具"
+TENANT_A_USER_EMAIL = "eve@initech.com"
+TENANT_A_USER_NAME = "Eve"
+TENANT_A_AGENT_ID = "initech-agent-1"
+TENANT_A_AGENT_NAME = "租户 A 智能体"
+TENANT_A_AGENT_DESCRIPTION = "仅租户 A 可见的智能体"
+TENANT_A_DIFY_APP_ID = "initech-app-1"
+TENANT_A_CONVERSATION_ID = uuid.UUID("22222222-3333-4444-8555-666666666666")
+TENANT_A_CONVERSATION_TITLE = "租户 A 会话"
+
+TENANT_B_DOMAIN = "globex.com"
+TENANT_B_SLUG = "e2e-globex"
+TENANT_B_NAME = "租户 B 夹具"
+TENANT_B_USER_EMAIL = "mallory@globex.com"
+TENANT_B_USER_NAME = "Mallory"
+TENANT_B_AGENT_ID = "globex-agent-1"
+TENANT_B_AGENT_NAME = "租户 B 智能体"
+TENANT_B_AGENT_DESCRIPTION = "仅租户 B 可见的智能体"
+TENANT_B_DIFY_APP_ID = "globex-app-1"
+TENANT_B_CONVERSATION_ID = uuid.UUID("11111111-2222-4333-8444-555555555555")
+TENANT_B_CONVERSATION_TITLE = "租户 B 会话"
+
+# The real-stream journey registers probe agents in tenant A; the prefix lets
+# the seed drop a previous run's rows without touching anything else there.
+CONV_PROBE_AGENT_PREFIX = "e2e-conv01-"
+
 # The dashboard fixture: nine of today's runs split 1/3/5 across three agents so
 # the ranking order is unambiguous, every run 1200 ms so the average is exact,
 # and one failed run so the error rate is 1/9. The journeys assert 9 calls,
@@ -109,8 +142,10 @@ SPEC_FIXTURES: dict[str, frozenset[str]] = {
     "tc-tool-05": frozenset({"tools", "tasks"}),
     "tc-tool-07": frozenset({"tools", "tasks"}),
     "tc-ops-01": frozenset({"metrics"}),
+    "tc-sec-01": frozenset({"cross_tenant"}),
+    "tc-conv-01": frozenset({"cross_tenant"}),
 }
-ALL_FIXTURES = frozenset({"tools", "tasks", "metrics"})
+ALL_FIXTURES = frozenset({"tools", "tasks", "metrics", "cross_tenant"})
 
 
 def wanted_fixtures(spec: str | None) -> frozenset[str]:
@@ -431,6 +466,156 @@ async def _seed_metrics(session) -> dict[str, object]:
     }
 
 
+async def _reset_tenant_probe(
+    session,
+    *,
+    tenant: Tenant,
+    admin: User,
+    agent_id: str,
+    agent_name: str,
+    agent_description: str,
+    dify_app_id: str,
+    conversation_id: uuid.UUID,
+    conversation_title: str,
+) -> None:
+    """Replace one tenant's published agent and conversation with fixed rows."""
+    await session.execute(
+        delete(Conversation)
+        .where(Conversation.tenant_id == tenant.id)
+        .where(Conversation.id == conversation_id)
+        .execution_options(synchronize_session=False)
+    )
+    await session.execute(
+        delete(AgentRegistry)
+        .where(AgentRegistry.tenant_id == tenant.id)
+        .where(AgentRegistry.agent_id == agent_id)
+        .execution_options(synchronize_session=False)
+    )
+    session.add(
+        AgentRegistry(
+            tenant_id=tenant.id,
+            agent_id=agent_id,
+            dify_app_id=dify_app_id,
+            name=agent_name,
+            description=agent_description,
+            type="chat",
+            tags=[],
+            status="published",
+            version=1,
+            created_by=admin.id,
+        )
+    )
+    await session.flush()
+    session.add(
+        Conversation(
+            id=conversation_id,
+            tenant_id=tenant.id,
+            user_id=admin.id,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            title=conversation_title,
+            status="active",
+        )
+    )
+
+
+async def _seed_cross_tenant(session) -> dict[str, object]:
+    """Rebuild the two dedicated tenants the isolation journey reads.
+
+    Each side owns one published agent and one conversation, so tenant A's list
+    has a positive row to show beside the absence of tenant B's. The shared acme
+    tenant stays untouched. Row ids are fixed so the seed replaces only its own
+    rows, and the real-stream probes of a previous run are dropped by prefix.
+    """
+    tenant_a = await _ensure_tenant(
+        session, TENANT_A_DOMAIN, TENANT_A_SLUG, TENANT_A_NAME
+    )
+    admin_a = await _ensure_user(
+        session,
+        tenant_a,
+        TENANT_A_USER_EMAIL,
+        TENANT_A_USER_NAME,
+        "agent_admin",
+        "initech-admin",
+    )
+    tenant_b = await _ensure_tenant(
+        session, TENANT_B_DOMAIN, TENANT_B_SLUG, TENANT_B_NAME
+    )
+    admin_b = await _ensure_user(
+        session,
+        tenant_b,
+        TENANT_B_USER_EMAIL,
+        TENANT_B_USER_NAME,
+        "agent_admin",
+        "globex-admin",
+    )
+
+    # The real-stream journey registers throwaway agents in tenant A; drop a
+    # previous run's rows (and their conversations and run logs) by prefix. The
+    # run log carries the composite FK, so it goes first.
+    await _clear_tenant_run_logs(session, tenant_a)
+    probe_ids = (
+        select(AgentRegistry.agent_id)
+        .where(AgentRegistry.tenant_id == tenant_a.id)
+        .where(AgentRegistry.agent_id.like(f"{CONV_PROBE_AGENT_PREFIX}%"))
+    )
+    await session.execute(
+        delete(Conversation)
+        .where(Conversation.tenant_id == tenant_a.id)
+        .where(Conversation.agent_id.in_(probe_ids))
+        .execution_options(synchronize_session=False)
+    )
+    await session.execute(
+        delete(AgentRegistry)
+        .where(AgentRegistry.tenant_id == tenant_a.id)
+        .where(AgentRegistry.agent_id.like(f"{CONV_PROBE_AGENT_PREFIX}%"))
+        .execution_options(synchronize_session=False)
+    )
+
+    await _reset_tenant_probe(
+        session,
+        tenant=tenant_a,
+        admin=admin_a,
+        agent_id=TENANT_A_AGENT_ID,
+        agent_name=TENANT_A_AGENT_NAME,
+        agent_description=TENANT_A_AGENT_DESCRIPTION,
+        dify_app_id=TENANT_A_DIFY_APP_ID,
+        conversation_id=TENANT_A_CONVERSATION_ID,
+        conversation_title=TENANT_A_CONVERSATION_TITLE,
+    )
+    await _reset_tenant_probe(
+        session,
+        tenant=tenant_b,
+        admin=admin_b,
+        agent_id=TENANT_B_AGENT_ID,
+        agent_name=TENANT_B_AGENT_NAME,
+        agent_description=TENANT_B_AGENT_DESCRIPTION,
+        dify_app_id=TENANT_B_DIFY_APP_ID,
+        conversation_id=TENANT_B_CONVERSATION_ID,
+        conversation_title=TENANT_B_CONVERSATION_TITLE,
+    )
+    return {
+        "crossTenant": {
+            "tenantA": {
+                "email": TENANT_A_USER_EMAIL,
+                "agentId": TENANT_A_AGENT_ID,
+                "agentName": TENANT_A_AGENT_NAME,
+                "conversationId": str(TENANT_A_CONVERSATION_ID),
+                "conversationTitle": TENANT_A_CONVERSATION_TITLE,
+            },
+            "tenantB": {
+                "email": TENANT_B_USER_EMAIL,
+                "agentId": TENANT_B_AGENT_ID,
+                "agentName": TENANT_B_AGENT_NAME,
+                "agentDescription": TENANT_B_AGENT_DESCRIPTION,
+                "difyAppId": TENANT_B_DIFY_APP_ID,
+                "conversationId": str(TENANT_B_CONVERSATION_ID),
+                "conversationTitle": TENANT_B_CONVERSATION_TITLE,
+            },
+        }
+    }
+
+
 async def _seed(session, wanted: frozenset[str]) -> dict[str, object]:
     manifest: dict[str, object] = {"seeded": sorted(wanted)}
     if wanted & {"tools", "tasks"}:
@@ -443,6 +628,8 @@ async def _seed(session, wanted: frozenset[str]) -> dict[str, object]:
         }
     if "metrics" in wanted:
         manifest.update(await _seed_metrics(session))
+    if "cross_tenant" in wanted:
+        manifest.update(await _seed_cross_tenant(session))
     await session.commit()
     return manifest
 
