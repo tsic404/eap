@@ -1,10 +1,10 @@
 """Acceptance case for agent lifecycle transitions and unpublished-agent visibility.
 
-Covers the publish/offline state machine, the employee-facing visibility rules
-for unpublished agents, and the rule that taking an agent offline leaves the
-conversations already started against it usable: after the transition a further
-turn is still driven, on a mocked upstream Dify boundary while the SSE
-normalisation, framing and routers stay real.
+Covers the enter-testing, publish and offline transitions, the employee-facing
+visibility rules for unpublished agents, and the rule that taking an agent
+offline leaves the conversations already started against it usable: after the
+transition a further turn is still driven, on a mocked upstream Dify boundary
+while the SSE normalisation, framing and routers stay real.
 """
 
 from typing import Any
@@ -63,6 +63,121 @@ async def _published_detail(api, headers: dict[str, str], agent_id: str) -> dict
     resp = await api.client.get(f"/api/agents/{agent_id}", headers=headers)
     assert resp.status_code == 200
     return resp.json()["data"]
+
+
+@pytest.mark.asyncio
+async def test_start_testing_moves_a_draft_into_testing_and_bumps_the_version(api) -> None:
+    tenant, user = await api.seed(role="agent_admin")
+    await api.seed_agent(tenant, agent_id="bot-1", status="draft")
+    headers = api.auth(user, tenant)
+
+    resp = await api.client.post(
+        "/api/agents/bot-1/start-testing", headers=headers, json={"version": 1}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["status"] == "testing"
+    # C-33 fixes the arithmetic of this branch: a draft entering testing bumps
+    # the version by exactly one.
+    assert body["version"] == 2
+    # The action records neither publisher nor instant, and leaves the agent
+    # unpublished for employees (C-34).
+    assert body["publishedAt"] is None
+    assert body["publishedBy"] is None
+
+    detail = await _published_detail(api, headers, "bot-1")
+    assert detail["status"] == "testing"
+    assert detail["version"] == 2
+
+    employee = await api.seed_user(tenant, role="employee")
+    employee_headers = api.auth(employee, tenant)
+    listed = await api.client.get("/api/agents", headers=employee_headers)
+    assert listed.json()["data"]["items"] == []
+    hidden = await api.client.get("/api/agents/bot-1", headers=employee_headers)
+    assert hidden.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_repeated_start_testing_keeps_the_version_unchanged(api) -> None:
+    tenant, user = await api.seed(role="agent_admin")
+    await api.seed_agent(tenant, agent_id="bot-1", status="draft")
+    headers = api.auth(user, tenant)
+
+    first = await api.client.post(
+        "/api/agents/bot-1/start-testing", headers=headers, json={"version": 1}
+    )
+    assert first.status_code == 200
+    version = first.json()["data"]["version"]
+
+    second = await api.client.post(
+        "/api/agents/bot-1/start-testing", headers=headers, json={"version": version}
+    )
+
+    assert second.status_code == 200
+    assert second.json()["data"]["status"] == "testing"
+    # C-33's idempotent branch: unlike every other transition, re-entering the
+    # target state must not bump the version.
+    assert second.json()["data"]["version"] == version
+    assert (await _published_detail(api, headers, "bot-1"))["version"] == version
+
+
+@pytest.mark.parametrize("status", ["published", "offline"])
+@pytest.mark.asyncio
+async def test_start_testing_from_published_or_offline_returns_409_naming_the_status(
+    api, status: str
+) -> None:
+    tenant, user = await api.seed(role="agent_admin")
+    agent_id = f"{status}-bot"
+    await api.seed_agent(tenant, agent_id=agent_id, status=status)
+    headers = api.auth(user, tenant)
+
+    resp = await api.client.post(
+        f"/api/agents/{agent_id}/start-testing", headers=headers, json={"version": 1}
+    )
+
+    assert resp.status_code == 409
+    error = resp.json()["error"]
+    assert error["code"] == "INVALID_STATE"
+    assert status in error["message"]
+    assert (await _published_detail(api, headers, agent_id))["status"] == status
+
+
+@pytest.mark.parametrize("status", ["draft", "testing"])
+@pytest.mark.asyncio
+async def test_start_testing_with_a_stale_version_returns_409(api, status: str) -> None:
+    tenant, user = await api.seed(role="agent_admin")
+    agent_id = f"{status}-bot"
+    await api.seed_agent(tenant, agent_id=agent_id, status=status)
+    headers = api.auth(user, tenant)
+
+    resp = await api.client.post(
+        f"/api/agents/{agent_id}/start-testing", headers=headers, json={"version": 9}
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "CONFLICT"
+    detail = await _published_detail(api, headers, agent_id)
+    assert detail["status"] == status
+    assert detail["version"] == 1
+
+
+@pytest.mark.parametrize("role", ["employee", "auditor"])
+@pytest.mark.asyncio
+async def test_start_testing_requires_a_write_role(api, role: str) -> None:
+    tenant, admin = await api.seed(role="agent_admin")
+    reader = await api.seed_user(tenant, role=role)
+    await api.seed_agent(tenant, agent_id="bot-1", status="draft")
+
+    resp = await api.client.post(
+        "/api/agents/bot-1/start-testing",
+        headers=api.auth(reader, tenant),
+        json={"version": 1},
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "FORBIDDEN"
+    assert (await _published_detail(api, api.auth(admin, tenant), "bot-1"))["status"] == "draft"
 
 
 @pytest.mark.parametrize("status", ["draft", "testing", "published"])

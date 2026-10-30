@@ -23,6 +23,7 @@ from app.schemas.agent import (
     CreateAgentDto,
     DebugAgentMessageDto,
     PublishAgentDto,
+    StartTestingDto,
     UpdateAgentDto,
     agent_to_detail_dto,
     agent_to_dto,
@@ -135,6 +136,19 @@ async def update_agent(
     body: UpdateAgentDto,
 ) -> AgentDto:
     agent = await service.update(agent_id, body, tenant_id=tenant.id, actor_id=user.id)
+    return agent_to_dto(agent)
+
+
+@router.post("/{agent_id}/start-testing")
+async def start_testing_agent(
+    user: AgentAdmin,
+    tenant: ActiveTenant,
+    service: AgentServiceDep,
+    agent_id: str,
+    body: StartTestingDto,
+) -> AgentDto:
+    """Move a draft agent into testing (C-33's only entry path)."""
+    agent = await service.start_testing(agent_id, body.version, tenant_id=tenant.id)
     return agent_to_dto(agent)
 
 

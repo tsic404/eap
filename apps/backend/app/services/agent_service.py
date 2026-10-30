@@ -47,6 +47,10 @@ _DUPLICATE_AGENT_CONSTRAINTS = frozenset({"pk_agent_registry"})
 # than a missing resource. Unknown future states fail closed.
 _PUBLISHABLE_STATUSES = frozenset({"draft", "testing", "published"})
 
+# Entering testing is the one action that may not start from a published agent:
+# ``testing`` is only the idempotent repeat of itself (C-33).
+_TESTABLE_STATUSES = frozenset({"draft", "testing"})
+
 # camelCase DTO keys that differ from the ORM column name on ``AgentRegistry``.
 # ``update`` maps these before handing the payload to ``update_with_version`` so
 # SQLAlchemy never sees an unmapped attribute (e.g. ``modelId`` → ``model_id``).
@@ -213,6 +217,47 @@ class AgentService:
             # retry against the version it read.
             await self._session.rollback()
             raise
+        return updated
+
+    async def start_testing(
+        self, agent_id: str, version: int, *, tenant_id: uuid.UUID
+    ) -> AgentRegistry:
+        """Move a draft agent into ``testing`` — the only entry path (C-33).
+
+        A draft transition claims the version and bumps it; the repeat on a
+        ``testing`` agent is idempotent and leaves the version untouched. The
+        action records neither publisher nor instant and emits no event, so
+        employee-facing visibility is unchanged (C-34).
+        """
+        agent = await self._repo.find_by_id(tenant_id, agent_id)
+        if agent is None:
+            raise AppError(404, "NOT_FOUND", "Agent not found")
+
+        # A published or offline agent is a state conflict, not a missing
+        # resource, so clients can tell the two apart.
+        if agent.status not in _TESTABLE_STATUSES:
+            raise AppError(
+                409,
+                "INVALID_STATE",
+                f"Agent in status '{agent.status}' cannot enter testing",
+            )
+
+        if agent.status == "testing":
+            # Idempotent repeat: the target state is already reached, so the row
+            # stays exactly as read — including its version — but the caller's
+            # version still has to match, like every other lifecycle action.
+            if agent.version != version:
+                raise AppError(409, "CONFLICT", "Agent version conflict")
+            return agent
+
+        updated = await self._repo.update_with_version(
+            tenant_id, agent_id, version, status="testing"
+        )
+        if updated is None:
+            await self._session.rollback()
+            raise AppError(409, "CONFLICT", "Agent version conflict")
+
+        await self._session.commit()
         return updated
 
     async def publish(
