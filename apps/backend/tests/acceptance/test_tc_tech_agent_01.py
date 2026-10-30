@@ -1059,6 +1059,7 @@ async def test_agent_writes_are_limited_to_agent_and_platform_admins(api) -> Non
         ("PATCH", "/api/agents/bot-1", {"version": 1, "name": "Renamed"}),
         ("DELETE", "/api/agents/bot-1", {}),
         ("POST", "/api/agents/bot-1/publish", {"version": 1}),
+        ("POST", "/api/agents/bot-1/start-testing", {"version": 1}),
         ("POST", "/api/agents/bot-1/offline", {}),
     ]
     for method, path, body in denied:

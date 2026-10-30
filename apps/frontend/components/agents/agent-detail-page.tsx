@@ -23,6 +23,7 @@ import {
   isInvalidStateError,
   offlineAgent,
   publishAgent,
+  startTestingAgent,
 } from "@/lib/platform-service";
 import { useAgent } from "@/lib/use-agents";
 
@@ -105,6 +106,35 @@ export function AgentDetailPage() {
     }
   };
 
+  // C-33's only path into testing: the click is the action, so no confirm step.
+  const handleStartTesting = async () => {
+    if (!agent) return;
+    setPending(true);
+    try {
+      await startTestingAgent(agent.agentId, agent.version);
+      toast({ type: "success", title: "已开始测试" });
+      await mutate();
+    } catch (error) {
+      if (isConflictError(error)) {
+        setConflictOpen(true);
+      } else if (isInvalidStateError(error)) {
+        toast({
+          type: "error",
+          title: "无法开始测试",
+          description: "只有草稿智能体可以开始测试",
+        });
+      } else {
+        toast({
+          type: "error",
+          title: "操作失败",
+          description: extractApiErrorMessage(error),
+        });
+      }
+    } finally {
+      setPending(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="mx-auto max-w-4xl px-6 py-8">
@@ -157,6 +187,15 @@ export function AgentDetailPage() {
           </div>
         </div>
         <div className="flex gap-2">
+          {agent.status === "draft" && (
+            <Button
+              variant="outline"
+              disabled={pending}
+              onClick={() => void handleStartTesting()}
+            >
+              开始测试
+            </Button>
+          )}
           {isPublished && (
             <Button
               variant="outline"

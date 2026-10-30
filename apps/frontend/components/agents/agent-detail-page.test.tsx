@@ -1,4 +1,4 @@
-import { fireEvent, screen, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ToastProvider } from "@/components/ui/toast";
@@ -7,8 +7,9 @@ import * as platformServiceModule from "@/lib/platform-service";
 
 import { renderWithIntl } from "../test-utils";
 
-const { publishMock, mutateMock, agentStub } = vi.hoisted(() => ({
+const { publishMock, startTestingMock, mutateMock, agentStub } = vi.hoisted(() => ({
   publishMock: vi.fn(),
+  startTestingMock: vi.fn(),
   mutateMock: vi.fn(),
   agentStub: {
     agentId: "bot-1",
@@ -53,7 +54,7 @@ vi.mock("@/components/agents/agent-config-panel", () => ({
 
 vi.mock("@/lib/platform-service", async (importOriginal) => {
   const actual = await importOriginal<typeof platformServiceModule>();
-  return { ...actual, publishAgent: publishMock };
+  return { ...actual, publishAgent: publishMock, startTestingAgent: startTestingMock };
 });
 
 import { AgentDetailPage } from "./agent-detail-page";
@@ -83,14 +84,16 @@ async function publishViaDialog() {
 
 beforeEach(() => {
   publishMock.mockReset();
+  startTestingMock.mockReset();
   mutateMock.mockReset();
   agentStub.status = "draft";
 });
 
 describe("AgentDetailPage lifecycle entries", () => {
-  it("offers 发布 while the agent is a draft", () => {
+  it("offers 开始测试 and 发布 while the agent is a draft", () => {
     renderPage();
 
+    expect(screen.getByRole("button", { name: "开始测试" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "发布" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "下线" })).toBeNull();
   });
@@ -100,6 +103,7 @@ describe("AgentDetailPage lifecycle entries", () => {
     renderPage();
 
     expect(screen.getByRole("button", { name: "发布" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "开始测试" })).toBeNull();
   });
 
   it("offers 下线 and no 发布 once published", () => {
@@ -108,6 +112,7 @@ describe("AgentDetailPage lifecycle entries", () => {
 
     expect(screen.getByRole("button", { name: "下线" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "发布" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "开始测试" })).toBeNull();
   });
 
   it("offers no publish entry at all once offline", () => {
@@ -116,7 +121,45 @@ describe("AgentDetailPage lifecycle entries", () => {
 
     expect(screen.queryByRole("button", { name: "发布" })).toBeNull();
     expect(screen.queryByRole("button", { name: "下线" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "开始测试" })).toBeNull();
     expect(screen.getByRole("button", { name: "删除" })).toBeTruthy();
+  });
+});
+
+describe("AgentDetailPage start-testing action", () => {
+  it("starts testing on the click itself, using the current version", async () => {
+    startTestingMock.mockResolvedValueOnce(agentStub);
+    renderPage();
+
+    fireEvent.click(screen.getByRole("button", { name: "开始测试" }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(await screen.findByText("已开始测试")).toBeTruthy();
+    expect(startTestingMock).toHaveBeenCalledWith("bot-1", 2);
+    await waitFor(() => expect(mutateMock).toHaveBeenCalled());
+  });
+
+  it("keeps the version-conflict dialog for a 409 CONFLICT", async () => {
+    startTestingMock.mockRejectedValueOnce(
+      axiosError(409, "CONFLICT", "Agent version conflict"),
+    );
+    renderPage();
+
+    fireEvent.click(screen.getByRole("button", { name: "开始测试" }));
+
+    expect(await screen.findByText("版本冲突")).toBeTruthy();
+  });
+
+  it("reports a stale state without the conflict dialog for 409 INVALID_STATE", async () => {
+    startTestingMock.mockRejectedValueOnce(
+      axiosError(409, "INVALID_STATE", "Agent in status 'published' cannot enter testing"),
+    );
+    renderPage();
+
+    fireEvent.click(screen.getByRole("button", { name: "开始测试" }));
+
+    expect(await screen.findByText("只有草稿智能体可以开始测试")).toBeTruthy();
+    expect(screen.queryByText("版本冲突")).toBeNull();
   });
 });
 

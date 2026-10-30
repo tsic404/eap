@@ -86,6 +86,17 @@ export async function updateAgent(
   return response.data.data;
 }
 
+export async function startTestingAgent(
+  agentId: string,
+  version: number,
+): Promise<Agent> {
+  const response = await apiClient.post<ApiEnvelope<Agent>>(
+    `${API_ROUTES.agents}/${agentId}/start-testing`,
+    { version },
+  );
+  return response.data.data;
+}
+
 export async function publishAgent(
   agentId: string,
   version: number,

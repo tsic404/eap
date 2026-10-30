@@ -8,6 +8,7 @@
 | `TC-kb-01` | AC-15 | `test_tc_kb_01.test.tsx` |
 | `TC-kb-06` | AC-20 | `test_tc_kb_06.test.tsx` |
 | `TC-agent-04` | AC-11 | `test_tc_agent_04.test.tsx` |
+| `TC-agent-05` | AC-12 | `test_tc_agent_05.test.tsx` |
 | `TC-sec-02` | AC-43 | `test_tc_sec_02.test.tsx` |
 | `TC-tool-05` | AC-34 | `test_tc_tool_05.test.tsx` |
 | `TC-auth-02` | AC-02 | `test_tc_auth_02.test.tsx` |
@@ -37,6 +38,7 @@ pnpm acceptance --list           # 列出可用标识
 - `TC-conv-03`（AC-24）的删除撤销判据是界面用例、不在本套件（本套件按标识承载前端用例），其浏览器侧证据在 `e2e/journeys/conversation-delete-undo.spec.ts`，随 e2e 套件执行（单跑：`pnpm test:e2e e2e/journeys/conversation-delete-undo.spec.ts`）。
 - `TC-agent-01`：分步创建向导。向导、步骤指示器、绑定分组与预览表是真实组件，仅桩掉工具/知识库列表与创建调用，断言的是四步命名与当前步标记、第三步同时提供知识库与工具绑定、预览逐项回显实际配置（含知识库名与 Prompt），以及创建成功后落入详情页；后端 201 属后端套件，浏览器侧证据在 `e2e/journeys/tc-agent-01-agent-create-wizard.spec.ts`。
 - `TC-agent-06`：删除二次确认（AC-13）的 jsdom 证据驱动真实详情页、弹层与名称比较，桩掉的是数据来源与删除调用；浏览器侧证据在 `e2e/journeys/tc-agent-06-agent-delete-confirm.spec.ts`，以桩响应携带关联会话数量重放同一判据。上游删除语义（204 / 软删除 / 历史会话保留）属后端证据，不在此重复判定。
+- `TC-agent-05`：生命周期徽章与入口。详情页、徽章与动作入口是真实组件，`useAgent` 走真实 SWR 与服务层，仅桩掉共享 axios 实例；断言四态徽章的文案与语义色族（`bg-muted` / `bg-info-subtle` / `bg-success-subtle` / `bg-danger-subtle`）、草稿点「开始测试」不弹确认且以当前版本发出请求、成功后徽章转测试中，以及已下线不存在可操作的发布入口。实际渲染色调（hue/saturation）与员工广场可见性属浏览器与外后端证据，分别在 `e2e/journeys/tc-agent-05-agent-lifecycle.spec.ts` 与后端套件，不在此重复判定。
 
 ## 已知实现缺口
 

@@ -68,6 +68,12 @@ class PublishAgentDto(BaseModel):
     version: int = Field(ge=1)
 
 
+class StartTestingDto(BaseModel):
+    """Body of ``POST /api/agents/{id}/start-testing``; ``version`` enables optimistic locking."""
+
+    version: int = Field(ge=1)
+
+
 class DebugAgentMessageDto(BaseModel):
     """Body of ``POST /api/agents/{id}/debug`` (SSE streaming).
 
