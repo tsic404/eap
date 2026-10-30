@@ -56,7 +56,7 @@ describe("PasswordChangePage session gate", () => {
 
   it("mints a token through the refresh channel when none is held", async () => {
     getAccessTokenMock.mockReturnValue(null);
-    refreshAccessTokenMock.mockResolvedValue("fresh-token");
+    refreshAccessTokenMock.mockResolvedValue({ token: "fresh-token", sessionEnded: false });
 
     renderWithIntl(<PasswordChangePage />);
 
@@ -66,11 +66,25 @@ describe("PasswordChangePage session gate", () => {
 
   it("sends an unauthenticated visit to the login page", async () => {
     getAccessTokenMock.mockReturnValue(null);
-    refreshAccessTokenMock.mockResolvedValue(null);
+    refreshAccessTokenMock.mockResolvedValue({ token: null, sessionEnded: true });
 
     renderWithIntl(<PasswordChangePage />);
 
     await waitFor(() => expect(replaceMock).toHaveBeenCalledWith("/login"));
+    expect(screen.queryByText("改密表单")).toBeNull();
+  });
+
+  it("holds the page when the refresh ended inside the conflict window", async () => {
+    // Unresolved, not refused: the credential was never rejected, so the page
+    // neither signs out nor opens a form on a session it cannot renew.
+    getAccessTokenMock.mockReturnValue(null);
+    refreshAccessTokenMock.mockResolvedValue({ token: null, sessionEnded: false });
+
+    renderWithIntl(<PasswordChangePage />);
+
+    await waitFor(() => expect(refreshAccessTokenMock).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(replaceMock).not.toHaveBeenCalled();
     expect(screen.queryByText("改密表单")).toBeNull();
   });
 

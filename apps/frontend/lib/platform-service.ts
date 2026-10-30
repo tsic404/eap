@@ -148,7 +148,7 @@ export async function postAgentDebug(
   const response = await send(getAccessToken());
   if (response.status !== 401) return response;
 
-  const refreshed = await refreshAccessToken();
+  const { token: refreshed } = await refreshAccessToken();
   if (refreshed === null) return response;
 
   // The rejected body is never read; release it before the replay.

@@ -15,7 +15,7 @@ import { CallbackHandler } from "./callback-handler";
  * otherwise win the race against the guidance (C-15 / C-113).
  */
 export function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isPasswordChangeRequired, isLoading } = useAuth();
+  const { isAuthenticated, isPasswordChangeRequired, isLoading, isSessionUnresolved } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
@@ -24,12 +24,17 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
       router.replace(ROUTES.password);
       return;
     }
+    // A renewal that ended inside C-25's window without a token is not a
+    // sign-out: the role cookie stays, recovery waits for the next document,
+    // and this one deliberately retries nothing — another loop here would only
+    // add conflict pressure inside the same window.
+    if (isSessionUnresolved) return;
     if (!isAuthenticated) {
       router.replace(ROUTES.login);
     }
-  }, [isAuthenticated, isLoading, isPasswordChangeRequired, router]);
+  }, [isAuthenticated, isLoading, isPasswordChangeRequired, isSessionUnresolved, router]);
 
-  if (isLoading || !isAuthenticated) {
+  if (isLoading || isSessionUnresolved || !isAuthenticated) {
     return <CallbackHandler />;
   }
 

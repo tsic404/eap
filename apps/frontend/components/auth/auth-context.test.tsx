@@ -92,7 +92,7 @@ afterEach(() => {
 
 describe("AuthProvider logout", () => {
   it("clears the role cookie and redirects when the backend logout fails", async () => {
-    refreshAccessTokenMock.mockResolvedValue(null);
+    refreshAccessTokenMock.mockResolvedValue({ token: null, sessionEnded: true });
     apiGetMock.mockResolvedValue({ data: { code: 0, data: null, message: "" } });
     apiPostMock.mockRejectedValue(new Error("backend down"));
 
@@ -191,8 +191,8 @@ describe("AuthProvider loadUser", () => {
     });
   });
 
-  it("clears a stale role cookie when the bootstrap refresh fails", async () => {
-    refreshAccessTokenMock.mockResolvedValue(null);
+  it("clears a stale role cookie when the backend refuses the session", async () => {
+    refreshAccessTokenMock.mockResolvedValue({ token: null, sessionEnded: true });
     document.cookie = `${ROLE_COOKIE}=agent_admin; path=/`;
 
     render(
@@ -204,6 +204,22 @@ describe("AuthProvider loadUser", () => {
     await waitFor(() => {
       expect(document.cookie).toBe("");
     });
+  });
+
+  it("keeps the role cookie when the refresh ended without an answer", async () => {
+    // A document replaced mid-attempt loses the promise, not the request: that
+    // says nothing about the session, so the shared role must outlive it.
+    refreshAccessTokenMock.mockResolvedValue({ token: null, sessionEnded: false });
+    document.cookie = `${ROLE_COOKIE}=agent_admin; path=/`;
+
+    render(
+      <AuthProvider>
+        <div />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => expect(refreshAccessTokenMock).toHaveBeenCalled());
+    expect(document.cookie).toContain(`${ROLE_COOKIE}=agent_admin`);
   });
 
   it("clears the role cookie when /api/me fails with a non-401 error", async () => {
@@ -259,7 +275,7 @@ describe("AuthProvider local account login", () => {
     const { assign } = stubLocation();
     // The mount bootstrap finds no session; the refresh issued after the login
     // is the one that mints the access token.
-    refreshAccessTokenMock.mockResolvedValueOnce(null).mockResolvedValue("fresh-token");
+    refreshAccessTokenMock.mockResolvedValueOnce({ token: null, sessionEnded: true }).mockResolvedValue({ token: "fresh-token", sessionEnded: false });
     loginWithLocalAccountMock.mockResolvedValue({ mustChangePassword: false });
     apiGetMock.mockResolvedValue({
       data: {
@@ -302,7 +318,7 @@ describe("AuthProvider local account login", () => {
 
   it("establishes no session when the credentials are rejected", async () => {
     const { assign } = stubLocation();
-    refreshAccessTokenMock.mockResolvedValue(null);
+    refreshAccessTokenMock.mockResolvedValue({ token: null, sessionEnded: true });
     loginWithLocalAccountMock.mockRejectedValue({
       isAxiosError: true,
       response: { status: 401, data: { error: { code: "INVALID_CREDENTIALS" } } },
@@ -364,7 +380,7 @@ describe("AuthProvider forced password change", () => {
 
   it("sends a forced-change account to the password page without loading the profile", async () => {
     const { assign } = stubLocation();
-    refreshAccessTokenMock.mockResolvedValueOnce(null).mockResolvedValue("fresh-token");
+    refreshAccessTokenMock.mockResolvedValueOnce({ token: null, sessionEnded: true }).mockResolvedValue({ token: "fresh-token", sessionEnded: false });
     loginWithLocalAccountMock.mockResolvedValue({ mustChangePassword: true });
 
     render(

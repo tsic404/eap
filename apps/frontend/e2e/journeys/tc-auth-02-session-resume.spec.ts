@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, request, test, type Page } from "@playwright/test";
 
 import { LOCAL_ACCOUNT_PASSWORD, LOCAL_ACCOUNTS } from "../helpers/accounts.cjs";
 import { PROXY_ORIGIN } from "../helpers/api";
@@ -81,4 +81,81 @@ test("TC-auth-02 登录页: 已登录直接进入工作区而不过身份提供�
 
   await page.waitForURL("**/user");
   await expect(page.getByText(ACCOUNT.email)).toBeVisible();
+});
+
+test("TC-auth-02 连续整页重载: 每次重载都在上一次的刷新在途窗口内发生，会话不被丢弃", async ({
+  page,
+  context,
+}) => {
+  const refreshStatuses = trackRefresh(page);
+  await signIn(page);
+  await page.goto("/admin/tools");
+  await expect(page.getByRole("heading", { name: "工具", level: 1 })).toBeVisible();
+
+  // The anonymous landing is answered 401 UNAUTHORIZED before anyone signs in;
+  // from here on every refresh answer belongs to the live session.
+  refreshStatuses.length = 0;
+
+  for (let round = 0; round < 10; round += 1) {
+    // Each reload is aimed at the bootstrap refresh the document just issued:
+    // the document dies while its rotation is in flight, so the next document
+    // owns the handoff. Landing anywhere but the target page is the defect.
+    const inFlight = nextRefreshRequest(page);
+    await page.goto("/admin/tools");
+    await inFlight;
+    await page.goto("/admin/tools");
+  }
+
+  await expect(page.getByRole("heading", { name: "工具", level: 1 })).toBeVisible();
+  const roleCookie = (await context.cookies()).find((cookie) => cookie.name === "eap_role");
+  expect(roleCookie?.value).toBe("agent_admin");
+  expect(refreshStatuses.filter((status) => status === 409)).toEqual([]);
+  // A replay beyond C-25's window revokes the whole family; the session must
+  // never reach it (the answer carries TOKEN_REUSE_DETECTED).
+  expect(refreshStatuses.filter((status) => status === 401)).toEqual([]);
+  await expect(page.getByRole("heading", { name: "工具", level: 1 })).toBeVisible();
+});
+
+test("TC-auth-02 凭据被外部消费: 后继 Cookie 未落地时连续重载不丢会话", async ({ page, context }) => {
+  const refreshStatuses = trackRefresh(page);
+  await signIn(page);
+  await page.goto("/admin/tools");
+  await expect(page.getByRole("heading", { name: "工具", level: 1 })).toBeVisible();
+  refreshStatuses.length = 0;
+
+  // Take the browser's credential and rotate it outside the browser: the
+  // successor never reaches this cookie jar, which is the page's unrecoverable
+  // case — every later submit is answered with the C-25 conflict.
+  const held = (await context.cookies()).find((cookie) => cookie.name === "refresh_token");
+  expect(held?.value).toBeTruthy();
+  const consumer = await request.newContext();
+  const rotated = await consumer.post(`${PROXY_ORIGIN}/api/auth/refresh`, {
+    headers: { cookie: `refresh_token=${held?.value}` },
+  });
+  expect(rotated.status()).toBe(200);
+  const successor = /refresh_token=([^;]+)/.exec(rotated.headers()["set-cookie"] ?? "")?.[1];
+  expect(successor).toBeTruthy();
+
+  for (let round = 0; round < 10; round += 1) {
+    await page.goto("/admin/tools");
+    expect(new URL(page.url()).pathname).toBe("/admin/tools");
+  }
+
+  // Let the last document finish its bounded attempt: what it decides after
+  // the window runs out is the whole point of this case.
+  await page.waitForTimeout(4_000);
+
+  const roleCookie = (await context.cookies()).find((cookie) => cookie.name === "eap_role");
+  expect(roleCookie?.value).toBe("agent_admin");
+  // A conflict is not a refusal: the channel gives up inside the window and
+  // the next document tries again — it never replays past the window.
+  expect(refreshStatuses.filter((status) => status === 401)).toEqual([]);
+  expect(new URL(page.url()).pathname).toBe("/admin/tools");
+
+  // The backend never ended the session: the successor still mints a pair.
+  const replay = await consumer.post(`${PROXY_ORIGIN}/api/auth/refresh`, {
+    headers: { cookie: `refresh_token=${successor}` },
+  });
+  expect(replay.status()).toBe(200);
+  await consumer.dispose();
 });
