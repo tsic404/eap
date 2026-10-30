@@ -170,7 +170,7 @@ make qa-down   # 停止并移除全部服务（保留数据卷）
 说明：
 
 - `make qa-up` 幂等：JWT 密钥（`deploy/qa/keys/`）与栈密钥（`deploy/qa/qa.env`）首次生成后复用，均已在 gitignore 内；仓库不落密钥。移除了 `deploy/qa/qa.env` 时须连同数据卷一起清理（`down -v`）再重建，否则引擎控制台账号与生成值不再匹配。
-- `db-seed` 在种入租户 / 账号后调用 `deploy/qa/dify_bootstrap.py`：创建引擎控制台账号、安装固定版本的 OpenAI 兼容模型插件，并把 `mock-idp` 容器内确定性模型注册为工作区模型。它的一次性退出码属于就绪基线（C-88），引擎配置不完整时不会伪装成就绪。工作区模型为 `langgenius/openai_api_compatible/openai_api_compatible` / `mock-gpt`，创建智能体时直接引用。
+- `db-seed` 在种入租户 / 账号后调用 `deploy/qa/dify_bootstrap.py`：创建引擎控制台账号、安装固定版本的 OpenAI 兼容模型插件，并把 `mock-idp` 容器内确定性模型注册为工作区模型。它的一次性退出码属于就绪基线（C-88），引擎配置不完整时不会伪装成就绪。引擎迁移由 `dify-api` 独占、在对外服务前完成，`dify-worker` 与 `db-seed` 的引擎阶段都等它健康后才开始，因此 setup 不会撞上尚未迁移的库；引擎阶段注册的确定性模型由桩容器提供，`db-seed` 因而也等桩健康，`make e2e` 把桩的重建放在整栈启动之前，重建空窗不会落在引导期间。setup 之后另建会话登录，配置不落在 setup 调用的客户端上。工作区模型为 `langgenius/openai_api_compatible/openai_api_compatible` / `mock-gpt`，创建智能体时直接引用。
 - 容器化后浏览器与后端分处不同网络视角：后端经 `OIDC_DISCOVERY_URL` 走 compose 网络访问 IdP 的 token/userinfo/JWKS，同时按浏览器侧 `OIDC_ISSUER` 校验 id_token（对应 `mock-idp.mjs` 的 `MOCK_IDP_ISSUER` / `MOCK_IDP_BACKEND_BASE`）。
 - 连数据卷一起彻底清理：`docker compose --env-file deploy/qa/qa.env -f docker-compose.qa.yml down -v`。
 

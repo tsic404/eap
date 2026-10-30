@@ -90,6 +90,44 @@ trap restore_login_throttle EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+STUB_SERVICE=mock-idp
+# The stub IdP also serves the deterministic model endpoint the one-shot seed
+# registers, and its source is a bind-mounted file Node reads once at start. A
+# stack that outlives an edit to that file would keep answering without the new
+# routes, so the stub is recreated on every run — before the rest of the stack,
+# because replacing it after `up` leaves its network alias unresolvable for the
+# seconds the new container takes to start, and the seed registers that model.
+BRING_UP_STEPS=(stub-recreate stack-up)
+
+run_bring_up_step() {
+  case "$1" in
+    stub-recreate)
+      "${COMPOSE[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 120 "${STUB_SERVICE}"
+      ;;
+    stack-up)
+      "${COMPOSE[@]}" up -d --build
+      ;;
+    *)
+      echo "e2e: unknown bring-up step: $1" >&2
+      exit 1
+      ;;
+  esac
+}
+
+run_bring_up() {
+  local step
+  for step in "${BRING_UP_STEPS[@]}"; do
+    run_bring_up_step "${step}"
+  done
+}
+
+# The order above is part of the deploy acceptance case: print it instead of
+# bringing the stack up, so the ordering can be asserted without Docker.
+if [[ "${1:-}" == "--print-bring-up" ]]; then
+  printf '%s\n' "${BRING_UP_STEPS[@]}"
+  exit 0
+fi
+
 # 1. Bring the QA stack up (idempotent) and wait for the readiness baseline:
 # every resident service with a healthcheck reports healthy, the one-shot
 # bootstrap exits 0, and the entry point answers through the reverse proxy.
@@ -100,12 +138,7 @@ trap 'exit 143' TERM
 # on a backend having existed beforehand (see the trap).
 PRE_BACKEND_ID="$("${COMPOSE[@]}" ps -a -q backend 2>/dev/null || true)"
 STACK_STARTED=1
-"${COMPOSE[@]}" up -d --build
-# The stub IdP container also serves the tool upstream the approval journeys
-# point at, and its source is a bind-mounted file Node reads once at start. A
-# stack that outlives an edit to that file would keep answering without the new
-# routes, so the stub is recreated explicitly on every run.
-"${COMPOSE[@]}" up -d --no-deps --force-recreate mock-idp
+run_bring_up
 STACK_UP_COMPLETE=1
 
 stack_ready() {

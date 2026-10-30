@@ -238,7 +238,11 @@ services:
   # One-shot: seeds the tenant / identities (app.bootstrap) and then configures
   # the engine's console account, model provider and deterministic model. Its
   # exit code is part of the C-88 readiness baseline, so a half-configured
-  # engine cannot read as ready.
+  # engine cannot read as ready. The engine phase starts only once dify-api is
+  # healthy — the api runs the migration before it serves, and it is the only
+  # migrator — so `/console/api/setup` cannot meet a schema behind head. It also
+  # waits for the stub, whose deterministic model endpoint the engine phase
+  # registers: a stub recreated mid-run would answer with an unresolvable alias.
   db-seed:
     image: eap-backend:qa-local
     build:
@@ -266,6 +270,10 @@ services:
       dify-api:
         condition: service_healthy
       plugin-daemon:
+        condition: service_healthy
+      # The engine phase registers the deterministic model the stub serves, so
+      # the seed must not start while the stub is being replaced.
+      mock-idp:
         condition: service_healthy
     restart: "no"
 
@@ -305,9 +313,16 @@ services:
     environment:
       <<: *dify-env
       MODE: worker
+      # Only the api migrates: `flask upgrade-db` skips while another process
+      # holds its non-blocking lock and still exits 0, so a concurrent migrator
+      # would let the api read healthy on a schema that is behind head — the
+      # state the one-shot seed's setup call cannot survive.
+      MIGRATION_ENABLED: "false"
     volumes:
       - qa_dify_api_storage:/app/api/storage
     depends_on:
+      dify-api:
+        condition: service_healthy
       dify-db-init:
         condition: service_completed_successfully
       init_permissions:
