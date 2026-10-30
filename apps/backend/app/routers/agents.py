@@ -22,6 +22,7 @@ from app.schemas.agent import (
     AgentDto,
     CreateAgentDto,
     DebugAgentMessageDto,
+    OfflineAgentDto,
     PublishAgentDto,
     StartTestingDto,
     UpdateAgentDto,
@@ -170,8 +171,9 @@ async def offline_agent(
     tenant: ActiveTenant,
     service: AgentServiceDep,
     agent_id: str,
+    body: OfflineAgentDto,
 ) -> AgentDto:
-    agent = await service.offline(agent_id, tenant_id=tenant.id, actor_id=user.id)
+    agent = await service.offline(agent_id, body.version, tenant_id=tenant.id, actor_id=user.id)
     return agent_to_dto(agent)
 
 

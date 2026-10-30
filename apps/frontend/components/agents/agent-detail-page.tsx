@@ -73,7 +73,7 @@ export function AgentDetailPage() {
           toast({ type: "success", title: "已发布" });
           break;
         case "offline":
-          await offlineAgent(agent.agentId);
+          await offlineAgent(agent.agentId, agent.version);
           toast({ type: "success", title: "已下线" });
           break;
         case "delete":

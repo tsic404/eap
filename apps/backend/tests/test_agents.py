@@ -386,7 +386,7 @@ async def test_publish_offline_agent_raises_409_invalid_state(session_factory) -
             tenant_id=tenant.id,
             actor_id=user.id,
         )
-        await service.offline(agent.agent_id, tenant_id=tenant.id, actor_id=user.id)
+        await service.offline(agent.agent_id, agent.version, tenant_id=tenant.id, actor_id=user.id)
 
         published_events: list[dict[str, object]] = []
 
@@ -559,7 +559,9 @@ async def test_offline_and_delete_emit_events(session_factory) -> None:  # type:
         event_bus.subscribe(AGENT_OFFLINE, on_offline)
         event_bus.subscribe(AGENT_DELETED, on_deleted)
 
-        offlined = await service.offline(agent.agent_id, tenant_id=tenant.id, actor_id=user.id)
+        offlined = await service.offline(
+            agent.agent_id, agent.version, tenant_id=tenant.id, actor_id=user.id
+        )
         assert offlined.status == "offline"
         assert len(offline_events) == 1
 

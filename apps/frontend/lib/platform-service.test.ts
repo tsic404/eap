@@ -113,12 +113,12 @@ describe("agent lifecycle calls", () => {
     expect(result.agentId).toBe("bot-1");
   });
 
-  it("offlines without a body", async () => {
+  it("offlines with the current version", async () => {
     postMock.mockResolvedValueOnce({ data: envelope(agentStub("bot-1")) });
 
-    await offlineAgent("bot-1");
+    await offlineAgent("bot-1", 3);
 
-    expect(postMock).toHaveBeenCalledWith("/agents/bot-1/offline");
+    expect(postMock).toHaveBeenCalledWith("/agents/bot-1/offline", { version: 3 });
   });
 
   it("deletes via DELETE", async () => {

@@ -1060,7 +1060,7 @@ async def test_agent_writes_are_limited_to_agent_and_platform_admins(api) -> Non
         ("DELETE", "/api/agents/bot-1", {}),
         ("POST", "/api/agents/bot-1/publish", {"version": 1}),
         ("POST", "/api/agents/bot-1/start-testing", {"version": 1}),
-        ("POST", "/api/agents/bot-1/offline", {}),
+        ("POST", "/api/agents/bot-1/offline", {"version": 1}),
     ]
     for method, path, body in denied:
         resp = await api.client.request(

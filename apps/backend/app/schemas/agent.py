@@ -74,6 +74,12 @@ class StartTestingDto(BaseModel):
     version: int = Field(ge=1)
 
 
+class OfflineAgentDto(BaseModel):
+    """Body of ``POST /api/agents/{id}/offline``; ``version`` enables optimistic locking."""
+
+    version: int = Field(ge=1)
+
+
 class DebugAgentMessageDto(BaseModel):
     """Body of ``POST /api/agents/{id}/debug`` (SSE streaming).
 

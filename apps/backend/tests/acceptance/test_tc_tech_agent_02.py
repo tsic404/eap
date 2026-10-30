@@ -257,12 +257,17 @@ async def test_offline_reaches_offline_from_any_state(api, status: str) -> None:
     await api.seed_agent(tenant, agent_id=agent_id, status=status)
     headers = api.auth(user, tenant)
 
-    resp = await api.client.post(f"/api/agents/{agent_id}/offline", headers=headers)
+    resp = await api.client.post(
+        f"/api/agents/{agent_id}/offline", headers=headers, json={"version": 1}
+    )
 
     assert resp.status_code == 200
     assert resp.json()["data"]["status"] == "offline"
+    version = resp.json()["data"]["version"]
 
-    again = await api.client.post(f"/api/agents/{agent_id}/offline", headers=headers)
+    again = await api.client.post(
+        f"/api/agents/{agent_id}/offline", headers=headers, json={"version": version}
+    )
 
     assert again.status_code == 200
     assert again.json()["data"]["status"] == "offline"
@@ -278,17 +283,11 @@ async def test_offline_with_stale_version_returns_409(api) -> None:
 
     resp = await api.client.post("/api/agents/bot-1/offline", headers=headers, json={"version": 9})
 
-    if resp.status_code == 200:
-        # The offline route takes no body at all today, so the version that the
-        # clause requires is never compared; that gap is registered rather than
-        # asserted as expected behaviour. Restricting the registration to the
-        # target state keeps any other failure of this case red.
-        pytest.xfail(
-            "C-33 offline version mismatch -> 409 CONFLICT not implemented at main@68ad4b5"
-        )
     assert resp.status_code == 409, resp.text
     assert resp.json()["error"]["code"] == "CONFLICT"
-    assert (await _published_detail(api, headers, "bot-1"))["status"] == "published"
+    detail = await _published_detail(api, headers, "bot-1")
+    assert detail["status"] == "published"
+    assert detail["version"] == 1
 
 
 @pytest.mark.asyncio
@@ -297,7 +296,9 @@ async def test_publish_after_offline_returns_409_naming_the_current_status(api) 
     await api.seed_agent(tenant, agent_id="bot-1", status="published")
     headers = api.auth(user, tenant)
 
-    offline = await api.client.post("/api/agents/bot-1/offline", headers=headers)
+    offline = await api.client.post(
+        "/api/agents/bot-1/offline", headers=headers, json={"version": 1}
+    )
     assert offline.status_code == 200
     version = offline.json()["data"]["version"]
 
@@ -403,7 +404,9 @@ async def test_offline_does_not_affect_existing_conversations(api, monkeypatch) 
     assert before.status_code == 200
     assert _frame_names(before.text)[-1] == "message_end"
 
-    offline = await api.client.post("/api/agents/live-bot/offline", headers=api.auth(admin, tenant))
+    offline = await api.client.post(
+        "/api/agents/live-bot/offline", headers=api.auth(admin, tenant), json={"version": 1}
+    )
     assert offline.status_code == 200
     assert offline.json()["data"]["status"] == "offline"
 
