@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getMock, postMock, deleteMock } = vi.hoisted(() => ({
+const { getMock, postMock, deleteMock, refreshMock } = vi.hoisted(() => ({
   getMock: vi.fn(),
   postMock: vi.fn(),
   deleteMock: vi.fn(),
+  refreshMock: vi.fn(),
 }));
 
 vi.mock("./http-client", () => ({
@@ -12,6 +13,10 @@ vi.mock("./http-client", () => ({
     post: postMock,
     delete: deleteMock,
   },
+}));
+
+vi.mock("./refresh-channel", () => ({
+  refreshAccessToken: refreshMock,
 }));
 
 import type { Agent } from "./agent-types";
@@ -24,8 +29,10 @@ import {
   isInvalidStateError,
   listAllAgents,
   offlineAgent,
+  postAgentDebug,
   publishAgent,
 } from "./platform-service";
+import { setAccessToken } from "./token-store";
 
 function envelope<T>(data: T) {
   return { code: 0, data, message: "" };
@@ -120,6 +127,49 @@ describe("agent lifecycle calls", () => {
     await deleteAgent("bot-1");
 
     expect(deleteMock).toHaveBeenCalledWith("/agents/bot-1");
+  });
+});
+
+describe("postAgentDebug", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    refreshMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+    setAccessToken("stale-token");
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    setAccessToken(null);
+  });
+
+  it("renews an expired access token and replays the turn once", async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(
+        new Response(null, { status: 200, headers: { "content-type": "text/event-stream" } }),
+      );
+    refreshMock.mockResolvedValueOnce("fresh-token");
+
+    const response = await postAgentDebug("bot-1", "你好", new AbortController().signal);
+
+    expect(response.status).toBe(200);
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe("Bearer stale-token");
+    expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe("Bearer fresh-token");
+  });
+
+  it("surfaces the 401 when the session cannot be renewed", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 401 }));
+    refreshMock.mockResolvedValueOnce(null);
+
+    const response = await postAgentDebug("bot-1", "你好", new AbortController().signal);
+
+    expect(response.status).toBe(401);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

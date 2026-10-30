@@ -68,6 +68,25 @@ class PublishAgentDto(BaseModel):
     version: int = Field(ge=1)
 
 
+class DebugAgentMessageDto(BaseModel):
+    """Body of ``POST /api/agents/{id}/debug`` (SSE streaming).
+
+    The debug turn is a single test message; its length bound mirrors the
+    conversation message body so the same upstream limits apply.
+    """
+
+    query: str = Field(min_length=1, max_length=10000)
+
+    @field_validator("query")
+    @classmethod
+    def _require_non_blank(cls, value: str) -> str:
+        # A whitespace-only message is an empty turn; reject it before the
+        # stream starts rather than spending a model call on nothing.
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+
 class KnowledgeBindingDto(BaseModel):
     kbId: str
     name: str | None = None

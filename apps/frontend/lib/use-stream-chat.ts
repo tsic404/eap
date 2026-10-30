@@ -4,9 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { historyToChatMessages } from "./chat-history";
 import { applySseEvent, initialChatStreamState } from "./chat-stream-state";
-import type { ChatStreamState, HistoryMessage, MessageFile, RateLimitInfo } from "./conversation-types";
+import type { ChatStreamState, HistoryMessage, MessageFile } from "./conversation-types";
 import { listMessages, postMessage } from "./conversation-service";
 import { SseDecoder } from "./sse-decoder";
+import {
+  decodeErrorEnvelope,
+  describeHttpError,
+  describeStreamError,
+  isAbortError,
+} from "./stream-errors";
 import { toast } from "./toast-bus";
 
 const HEARTBEAT_TIMEOUT_MS = 30_000;
@@ -15,33 +21,6 @@ const RATE_LIMIT_COOLDOWN_SECONDS = 60;
 const HISTORY_PAGE_SIZE = 100;
 
 type StreamOutcome = "completed" | "aborted" | "timeout" | "disconnected" | "terminal";
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === "AbortError";
-}
-
-interface ErrorEnvelope {
-  error?: { code?: string; message?: string };
-}
-
-async function decodeErrorEnvelope(response: Response): Promise<RateLimitInfo> {
-  const body = (await response.json().catch(() => null)) as ErrorEnvelope | null;
-  return { code: body?.error?.code ?? null, message: body?.error?.message ?? null };
-}
-
-async function describeHttpError(response: Response, contentType: string): Promise<string> {
-  if (contentType.includes("application/json")) {
-    const info = await decodeErrorEnvelope(response);
-    if (info.message) return info.message;
-  }
-  return `请求失败（HTTP ${response.status}）`;
-}
-
-function describeStreamError(data: Record<string, unknown>): string {
-  const message = typeof data.message === "string" ? data.message : null;
-  const code = typeof data.code === "string" ? data.code : null;
-  return message ?? code ?? "对话生成出错";
-}
 
 /** Follow the history cursor to its end, accumulating newest-first items. */
 async function fetchMessageHistory(conversationId: string): Promise<HistoryMessage[]> {

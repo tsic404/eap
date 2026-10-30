@@ -20,8 +20,10 @@ import type {
 } from "./agent-types";
 import type { ApiEnvelope } from "./auth-types";
 import { extractApiErrorCode } from "./api-error";
-import { API_ROUTES } from "./api-routes";
+import { API_BASE_URL, API_ROUTES } from "./api-routes";
 import { apiClient } from "./http-client";
+import { refreshAccessToken } from "./refresh-channel";
+import { getAccessToken } from "./token-store";
 
 export async function listAgents(
   params?: AgentListParams,
@@ -104,6 +106,42 @@ export async function offlineAgent(agentId: string): Promise<Agent> {
 
 export async function deleteAgent(agentId: string): Promise<void> {
   await apiClient.delete(`${API_ROUTES.agents}/${agentId}`);
+}
+
+/**
+ * POST one debug message and return the raw SSE `Response` (C-127). Raw `fetch`
+ * because axios cannot expose a `ReadableStream`; the caller owns the stream
+ * lifecycle and the JSON-error branch of a failed preparation.
+ *
+ * The access token lives in memory for minutes only, so a turn sent after it
+ * expires must renew and replay like the axios client does (C-2) — otherwise
+ * resending from the panel keeps replaying the dead token.
+ */
+export async function postAgentDebug(
+  agentId: string,
+  query: string,
+  signal: AbortSignal,
+): Promise<Response> {
+  const url = `${API_BASE_URL}${API_ROUTES.agents}/${agentId}/debug`;
+  const send = (token: string | null): Promise<Response> =>
+    fetch(url, {
+      method: "POST",
+      signal,
+      headers: token
+        ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
+        : { "Content-Type": "application/json" },
+      body: JSON.stringify({ query }),
+    });
+
+  const response = await send(getAccessToken());
+  if (response.status !== 401) return response;
+
+  const refreshed = await refreshAccessToken();
+  if (refreshed === null) return response;
+
+  // The rejected body is never read; release it before the replay.
+  await response.body?.cancel();
+  return send(refreshed);
 }
 
 export async function listTools(): Promise<Tool[]> {

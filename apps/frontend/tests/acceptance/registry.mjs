@@ -19,6 +19,7 @@ export const TECH_TC_IDS = [
   "TC-tool-05",
   "TC-auth-02",
   "TC-agent-01",
+  "TC-agent-04",
   "TC-agent-06",
 ];
 
