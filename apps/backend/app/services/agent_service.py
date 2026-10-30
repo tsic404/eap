@@ -299,14 +299,21 @@ class AgentService:
         return updated
 
     async def offline(
-        self, agent_id: str, *, tenant_id: uuid.UUID, actor_id: uuid.UUID
+        self, agent_id: str, version: int, *, tenant_id: uuid.UUID, actor_id: uuid.UUID
     ) -> AgentRegistry:
+        """Move an agent of any live status to ``offline`` (C-33).
+
+        Any starting status reaches ``offline``; the caller's version is the
+        guard, so a stale write is a 409 ``CONFLICT`` and leaves the row
+        untouched. Repeating the action on an already offline agent stamps the
+        same target state again and stays 200.
+        """
         agent = await self._repo.find_by_id(tenant_id, agent_id)
         if agent is None:
             raise AppError(404, "NOT_FOUND", "Agent not found")
 
         updated = await self._repo.update_with_version(
-            tenant_id, agent_id, agent.version, status="offline"
+            tenant_id, agent_id, version, status="offline"
         )
         if updated is None:
             await self._session.rollback()

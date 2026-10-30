@@ -108,9 +108,10 @@ export async function publishAgent(
   return response.data.data;
 }
 
-export async function offlineAgent(agentId: string): Promise<Agent> {
+export async function offlineAgent(agentId: string, version: number): Promise<Agent> {
   const response = await apiClient.post<ApiEnvelope<Agent>>(
     `${API_ROUTES.agents}/${agentId}/offline`,
+    { version },
   );
   return response.data.data;
 }

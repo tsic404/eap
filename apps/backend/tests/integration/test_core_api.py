@@ -163,6 +163,7 @@ async def test_offline_agent_sets_offline(api) -> None:
     resp = await api.client.post(
         "/api/agents/bot-1/offline",
         headers=api.auth(user, tenant),
+        json={"version": 1},
     )
 
     assert resp.status_code == 200
