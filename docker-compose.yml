@@ -155,6 +155,10 @@ services:
     working_dir: /app
     volumes:
       - ./apps/frontend/e2e/mock-idp.mjs:/app/mock-idp.mjs:ro
+      # Imported unconditionally by mock-idp.mjs, so leaving it out makes the
+      # container die on import; its model listener starts only when
+      # MOCK_MODEL_PORT is set (the QA variant sets it).
+      - ./apps/frontend/e2e/mock-model.mjs:/app/mock-model.mjs:ro
     environment:
       MOCK_IDP_PORT: "${MOCK_IDP_PORT:-4000}"
       MOCK_IDP_ISSUER: http://localhost:${MOCK_IDP_PORT:-4000}
