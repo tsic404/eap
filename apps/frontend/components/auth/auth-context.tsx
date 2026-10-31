@@ -27,6 +27,12 @@ export interface AuthContextValue {
   isAuthenticated: boolean;
   /** The session is usable only for the forced password change (C-113). */
   isPasswordChangeRequired: boolean;
+  /**
+   * The last renewal attempt ended inside C-25's concurrency window without a
+   * token. The session is neither confirmed nor over: the page must not send
+   * the user to the login page, and the next document tries again.
+   */
+  isSessionUnresolved: boolean;
   error: string | null;
   login: (provider: string) => void;
   loginWithPassword: (email: string, password: string) => Promise<void>;
@@ -45,6 +51,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isPasswordChangeRequired, setIsPasswordChangeRequired] = useState(false);
+  const [isSessionUnresolved, setIsSessionUnresolved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadUser = useCallback(async (): Promise<CurrentUser | null> => {
@@ -61,6 +68,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(currentUser);
       setTenant(currentUser ? { id: currentUser.tenantId } : null);
       setIsPasswordChangeRequired(false);
+      setIsSessionUnresolved(false);
       setError(null);
       return currentUser;
     } catch (err) {
@@ -89,11 +97,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       try {
         if (!getAccessToken()) {
-          const token = await refreshAccessToken();
-          // A failed refresh leaves no session; drop any stale role cookie so
-          // the middleware gate falls back to least privilege.
+          const { token, sessionEnded } = await refreshAccessToken();
           if (!token) {
-            clearRoleCookie();
+            // Only a refusal ends the session. C-25 keeps it through the
+            // concurrency window, and a document replaced mid-attempt learns
+            // nothing at all — either way the shared role and the page stay.
+            if (sessionEnded) {
+              clearRoleCookie();
+            } else if (!cancelled) {
+              setIsSessionUnresolved(true);
+            }
             return;
           }
         }
@@ -138,7 +151,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // The login response carries the refresh cookie and no access token, so
       // the session is opened exactly like the SSO landing: refresh channel
       // first, then the profile.
-      const token = await refreshAccessToken();
+      const { token } = await refreshAccessToken();
       if (!token) {
         throw new Error("Local login succeeded but the refresh channel returned no access token");
       }
@@ -164,6 +177,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(null);
       setTenant(null);
       setIsPasswordChangeRequired(false);
+      setIsSessionUnresolved(false);
       setError(null);
       setAccessToken(null);
       clearRoleCookie();
@@ -173,11 +187,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const refreshToken = useCallback(async () => {
-    const token = await refreshAccessToken();
+    const { token, sessionEnded } = await refreshAccessToken();
     if (token) {
       await loadUser();
-    } else {
+    } else if (sessionEnded) {
       clearRoleCookie();
+    } else {
+      setIsSessionUnresolved(true);
     }
     return token;
   }, [loadUser]);
@@ -189,6 +205,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       isLoading,
       isAuthenticated: user !== null,
       isPasswordChangeRequired,
+      isSessionUnresolved,
       error,
       login,
       loginWithPassword,
@@ -200,6 +217,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       tenant,
       isLoading,
       isPasswordChangeRequired,
+      isSessionUnresolved,
       error,
       login,
       loginWithPassword,

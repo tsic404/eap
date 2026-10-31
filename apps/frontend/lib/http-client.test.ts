@@ -93,7 +93,7 @@ describe("request interceptor", () => {
 
 describe("response interceptor", () => {
   it("replays a 401 request after refreshing", async () => {
-    refreshMock.mockResolvedValueOnce("fresh-token");
+    refreshMock.mockResolvedValueOnce({ token: "fresh-token", sessionEnded: false });
 
     const onRejected = responseUse.mock.calls[0][1];
     const headersSet = vi.fn();
@@ -109,7 +109,7 @@ describe("response interceptor", () => {
   });
 
   it("redirects to login when the refresh fails", async () => {
-    refreshMock.mockResolvedValueOnce(null);
+    refreshMock.mockResolvedValueOnce({ token: null, sessionEnded: true });
     const { assign } = stubLocation("/user");
 
     const onRejected = responseUse.mock.calls[0][1];
@@ -117,6 +117,21 @@ describe("response interceptor", () => {
 
     await expect(onRejected({ config, response: { status: 401 } })).rejects.toBeTruthy();
     expect(assign).toHaveBeenCalledWith("/login");
+  });
+
+  it("holds the page when the refresh ended inside the conflict window", async () => {
+    // C-25 keeps the session through TOKEN_REFRESH_IN_PROGRESS: a conflict that
+    // outlasted the retries is not a sign-out, so the rejected call surfaces to
+    // its caller and nothing navigates.
+    refreshMock.mockResolvedValueOnce({ token: null, sessionEnded: false });
+    const { assign } = stubLocation("/user");
+
+    const onRejected = responseUse.mock.calls[0][1];
+    const config = { url: "/me", headers: { set: vi.fn() } };
+    const error = { config, response: { status: 401 } };
+
+    await expect(onRejected(error)).rejects.toBe(error);
+    expect(assign).not.toHaveBeenCalled();
   });
 
   it("does not refresh auth endpoints on 401", async () => {
@@ -179,7 +194,7 @@ describe("response interceptor forced password change", () => {
   });
 
   it("refreshes and replays a 401 from the password change route", async () => {
-    refreshMock.mockResolvedValueOnce("fresh-token");
+    refreshMock.mockResolvedValueOnce({ token: "fresh-token", sessionEnded: false });
 
     const onRejected = responseUse.mock.calls[0][1];
     const headersSet = vi.fn();

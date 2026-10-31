@@ -151,7 +151,7 @@ describe("postAgentDebug", () => {
       .mockResolvedValueOnce(
         new Response(null, { status: 200, headers: { "content-type": "text/event-stream" } }),
       );
-    refreshMock.mockResolvedValueOnce("fresh-token");
+    refreshMock.mockResolvedValueOnce({ token: "fresh-token", sessionEnded: false });
 
     const response = await postAgentDebug("bot-1", "你好", new AbortController().signal);
 
@@ -164,7 +164,7 @@ describe("postAgentDebug", () => {
 
   it("surfaces the 401 when the session cannot be renewed", async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 401 }));
-    refreshMock.mockResolvedValueOnce(null);
+    refreshMock.mockResolvedValueOnce({ token: null, sessionEnded: true });
 
     const response = await postAgentDebug("bot-1", "你好", new AbortController().signal);
 

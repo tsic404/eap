@@ -43,6 +43,11 @@ const ALICE = {
 
 const fetchMock = vi.fn();
 
+// The stamp a document leaves while its rotation is in flight; the bootstrap of
+// the next document reads it out of the storage the browser shares across
+// navigations.
+const LEASE_KEY = "eap-auth-refresh-lease";
+
 interface AdapterReply {
   status: number;
   body: unknown;
@@ -115,6 +120,8 @@ beforeEach(() => {
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
   setAccessToken(null);
+  document.cookie = "";
+  sessionStorage.clear();
   installAdapter(({ path }) => {
     if (path === "/api/me") return { status: 200, body: profileEnvelope() };
     if (path === "/api/auth/capabilities") return { status: 200, body: capabilitiesEnvelope() };
@@ -156,16 +163,34 @@ describe("TC-auth-02 refresh conflict", () => {
     expect(getAccessToken()).toBe("successor-token");
   });
 
-  it("falls back to the login page after a bounded number of conflicts", async () => {
+  it("keeps the session and its role when the rotation window runs out", async () => {
+    // The window is a conflict, not a refusal: another holder rotated and the
+    // successor may still land. Ending the session here is what sent reloads
+    // to the login page while the backend still held it (C-25).
+    document.cookie = "eap_role=agent_admin; path=/";
     fetchMock.mockImplementation(async () => conflictResponse());
 
     protectedPage();
 
-    await waitFor(() => expect(replaceMock).toHaveBeenCalledWith("/login"), { timeout: 6_000 });
-    // Retrying is bounded: a longer loop would outlive C-25's 30-second window
-    // and be answered with a whole-family revocation.
-    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(5);
+    // Wait for the bounded retry sequence to settle before judging the session:
+    // a longer loop would outlive C-25's 30-second window and be answered with
+    // a whole-family revocation.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(6), { timeout: 15_000 });
+    expect(replaceMock).not.toHaveBeenCalledWith("/login");
+    expect(document.cookie).toContain("eap_role=agent_admin");
     expect(screen.queryByText("工作区内容")).toBeNull();
+  }, 15_000);
+
+  it("drops the role and sends the user to login when the backend refuses the session", async () => {
+    document.cookie = "eap_role=agent_admin; path=/";
+    fetchMock.mockResolvedValue(
+      jsonResponse(401, { error: { code: "TOKEN_REUSE_DETECTED", message: "Refresh token reuse" } }),
+    );
+
+    protectedPage();
+
+    await waitFor(() => expect(replaceMock).toHaveBeenCalledWith("/login"));
+    expect(document.cookie).not.toContain("eap_role=agent_admin");
   });
 });
 
@@ -191,6 +216,40 @@ describe("TC-auth-02 silent renewal", () => {
 
     expect(response.data.data).toEqual({ ok: true });
     expect(seenTokens).toEqual(["Bearer stale-token", "Bearer renewed-token"]);
+    expect(replaceMock).not.toHaveBeenCalledWith("/login");
+  });
+});
+
+describe("TC-auth-02 cross-document rotation", () => {
+  it("enters the workspace when the previous document's rotation is still unaccounted", async () => {
+    // A document destroyed with its refresh in flight (reload, navigation) is
+    // gone but its rotation may still be landing. The bootstrap must wait it
+    // out: presenting the credential early is answered with a conflict.
+    sessionStorage.setItem(LEASE_KEY, JSON.stringify({ owner: "predecessor", at: Date.now() - 50 }));
+    fetchMock.mockResolvedValueOnce(tokenResponse("recovered-token"));
+
+    protectedPage();
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    expect(await screen.findByText("工作区内容")).toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(document.cookie).toContain("eap_role=agent_admin");
+    expect(replaceMock).not.toHaveBeenCalledWith("/login");
+  });
+
+  it("keeps the role of the session when a conflict is retried into a success", async () => {
+    fetchMock
+      .mockResolvedValueOnce(conflictResponse())
+      .mockResolvedValueOnce(tokenResponse("successor-token"));
+
+    protectedPage();
+
+    expect(await screen.findByText("工作区内容")).toBeTruthy();
+    // C-25 keeps the session through the conflict window: the gate still sees
+    // the signed-in role on the next navigation.
+    expect(document.cookie).toContain("eap_role=agent_admin");
     expect(replaceMock).not.toHaveBeenCalledWith("/login");
   });
 });

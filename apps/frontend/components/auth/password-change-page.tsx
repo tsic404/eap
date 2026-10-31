@@ -38,7 +38,12 @@ export function PasswordChangePage() {
     (async () => {
       let token = getAccessToken();
       if (!token) {
-        token = await refreshAccessToken();
+        const outcome = await refreshAccessToken();
+        token = outcome.token;
+        if (!token && !outcome.sessionEnded) {
+          // Unresolved, not refused: hold the page instead of signing out.
+          return;
+        }
       }
       if (cancelled) return;
       if (!token) {

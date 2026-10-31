@@ -60,12 +60,14 @@ apiClient.interceptors.response.use(
       // Never attempt to refresh the auth endpoints themselves — that would loop.
       if (!isAuthRequest) {
         config._retried = true;
-        const token = await refreshAccessToken();
+        const { token, sessionEnded } = await refreshAccessToken();
         if (token) {
           config.headers.set("Authorization", `Bearer ${token}`);
           return apiClient(config);
         }
-        redirectToLogin();
+        // A conflict inside C-25's window is not a sign-out; navigating away
+        // would strand a session the backend still holds.
+        if (sessionEnded) redirectToLogin();
       }
     }
     if (status === 403 && !isAuthRequest) {
