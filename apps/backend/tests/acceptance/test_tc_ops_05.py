@@ -19,6 +19,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import posixpath
 import re
 import socket
 import subprocess
@@ -205,6 +206,52 @@ def test_qa_stack_resident_service_declares_a_healthcheck(service: str) -> None:
         service,
         "resident service must declare a healthcheck",
     )
+
+
+# The stub's entry script is the source of truth for what the container has to
+# carry: it references its siblings by relative specifier, resolved against its
+# own mounted location. A sibling left out of the bind mounts makes the resident
+# container exit on import, so compose can never report it healthy.
+_STUB_ENTRY = _REPO_ROOT / "apps" / "frontend" / "e2e" / "mock-idp.mjs"
+# Every position Node resolves a module from — `from "./x"`, side-effect
+# `import "./x"`, dynamic `import("./x")` — for both quote styles and both
+# relative prefixes. A specifier no form matches would slip past the guard.
+_STUB_RELATIVE_SPECIFIER = re.compile(
+    r"""(?:\bfrom\s+|\bimport\s*\(\s*|\bimport\s+)['"](?P<specifier>\.{1,2}/[^'"]+)['"]"""
+)
+
+
+@pytest.mark.parametrize("compose", [_COMPOSE_LOCAL, _COMPOSE_QA], ids=["local", "qa"])
+def test_stub_container_mounts_every_module_its_entry_script_resolves(compose: Path) -> None:
+    """The stub's entry script references its siblings, so the container must see them.
+
+    An unresolved specifier is what breaks the all-healthy baseline: the
+    container exits on the import and restarts instead of answering its
+    healthcheck. The specifiers come from the committed entry script and resolve
+    against the entry's own mount target, so the test follows the code rather
+    than a hand-kept file list. Both local-family shapes are guarded: either one
+    losing a mount breaks the baseline the same way.
+    """
+    specifiers = _STUB_RELATIVE_SPECIFIER.findall(_STUB_ENTRY.read_text(encoding="utf-8"))
+    assert specifiers, "the stub entry script references no relative module"
+
+    volumes = _compose_json(compose, _ENV_TEMPLATE)["services"]["mock-idp"]["volumes"]
+    mounts = {
+        volume["target"]: Path(volume["source"]) for volume in volumes if volume["type"] == "bind"
+    }
+    entry_target = next(
+        target for target, source in mounts.items() if source.name == _STUB_ENTRY.name
+    )
+
+    for specifier in specifiers:
+        target = posixpath.normpath(posixpath.join(posixpath.dirname(entry_target), specifier))
+        assert target in mounts, (
+            f"{compose.name} mounts no {target}",
+            "the stub exits on the unresolved module and never turns healthy",
+        )
+        assert mounts[target].resolve() == (_STUB_ENTRY.parent / specifier).resolve(), (
+            f"{target} must be the repo's own {specifier}, not a second implementation",
+        )
 
 
 def test_local_stack_one_shot_containers_exit_without_restart() -> None:
