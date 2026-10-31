@@ -24,13 +24,14 @@ export function LoginPage() {
   const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLocalLoginEnabled, setIsLocalLoginEnabled] = useState(false);
-  const [queryError, setQueryError] = useState<string | null>(null);
+  const [hasCallbackError, setHasCallbackError] = useState(false);
   const t = useTranslations("login");
 
+  // C-24: the callback's failure code is machine-readable, not copy — every
+  // code lands on one friendly line, and the card survives a failed profile
+  // read instead of being replaced by its message.
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      setQueryError(new URLSearchParams(window.location.search).get("error"));
-    }
+    setHasCallbackError(new URLSearchParams(window.location.search).has("error"));
   }, []);
 
   // A live session skips the identity provider entirely (AC-02): bootstrap
@@ -61,7 +62,7 @@ export function LoginPage() {
     login(DEFAULT_SSO_PROVIDER);
   };
 
-  const displayError = error ?? queryError;
+  const displayError = hasCallbackError ? t("errors.callbackFailed") : error;
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-muted px-4">
