@@ -66,6 +66,7 @@
       "tenantAmbiguous": "该邮箱匹配到多个租户，请联系管理员",
       "validation": "请填写邮箱与口令",
       "capabilityClosed": "本地账号登录当前不可用",
+      "callbackFailed": "认证失败，请重试",
       "generic": "登录失败，请稍后重试"
     }
   },
