@@ -10,17 +10,16 @@ import { envelope, PROXY_ORIGIN } from "../helpers/api";
 // once, the answer arrives character by character from the backend's stream, and
 // the finished turn exposes a copyable trace id.
 //
-// Prerequisite, not mocked here: a full stack with a Dify workspace provider.
-// The debug turn is a real inference call; replaying it at the browser edge
-// would prove nothing about streaming. Executable with:
+// Prerequisite, not mocked here: a stack whose readiness probe reports the
+// inference engine as ok. The QA variant supplies it (deterministic model stub
+// behind a real engine); the journey skips only when that provider is absent,
+// because replaying the stream at the browser edge would prove nothing.
 //
-//   docker compose up -d --build          # full stack, DIFY_* configured in .env
 //   make e2e E2E_SPEC=e2e/journeys/tc-agent-04-agent-debug.spec.ts
 //
 // The tabs journey replays the agent metadata so it does not depend on how the
-// fixture agent was created. The debug journey reads the agent through the
-// page's own session: if `bot-1` is missing, the journey fails instead of
-// skipping, so only the absence of a Dify provider can hide it.
+// agent was created. The debug journey creates its own draft agent through the
+// page's authenticated session, so a fresh stack needs no seeded fixture.
 
 const TC_ID = "TC-agent-04";
 
@@ -59,6 +58,46 @@ async function signInAsAgentAdmin(page: Page): Promise<void> {
   await page.getByRole("button", { name: "登录", exact: true }).click();
   await page.waitForURL("**/user");
   await expect(page.getByText(admin.email)).toBeVisible();
+}
+
+/** The admin's live bearer token, read off the page's own authenticated calls. */
+function captureAccessToken(page: Page): () => string {
+  let token = "";
+  page.on("request", (request) => {
+    const header = request.headers()["authorization"];
+    if (header?.startsWith("Bearer ")) token = header.slice("Bearer ".length);
+  });
+  return () => token;
+}
+
+/** A unique id per run: the QA stack is long-lived and shared. */
+function uniqueKey(): string {
+  return `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e4)}`;
+}
+
+/**
+ * Create the agent whose debug turn the journey drives. The turn needs a real
+ * Dify app and model, so the journey makes its own fixture instead of assuming
+ * a seeded row exists on a fresh stack.
+ */
+async function createAgent(
+  page: Page,
+  token: string,
+  agentId: string,
+  name: string,
+): Promise<void> {
+  const created = await page.request.post("/api/agents", {
+    headers: { Authorization: `Bearer ${token}` },
+    data: {
+      agentId,
+      name,
+      type: "chat",
+      modelProvider: "openai_api_compatible",
+      modelId: "mock-gpt",
+      modelName: "Mock GPT",
+    },
+  });
+  expect(created.status()).toBe(201);
 }
 
 // The debug turn is a real inference call. Without a Dify workspace provider
@@ -116,39 +155,75 @@ test(`${TC_ID} debug: 发送测试消息后气泡即时、回答逐字流式并�
   await context.grantPermissions(["clipboard-read", "clipboard-write"], {
     origin: PROXY_ORIGIN,
   });
+  const token = captureAccessToken(page);
   await signInAsAgentAdmin(page);
   const missing = await debugPrecondition(page);
   if (missing !== null) test.skip(true, missing);
-  await page.goto("/admin/agents/bot-1");
+  expect(token()).not.toBe("");
+  const agentId = `e2e-debug-${uniqueKey()}`;
+  await createAgent(page, token(), agentId, `调试用例-${agentId}`);
+  await page.goto(`/admin/agents/${agentId}`);
   await page.getByRole("tab", { name: "调试" }).click();
 
   const panel = page.getByRole("tabpanel");
   const input = panel.getByRole("textbox");
   await expect(input).toBeVisible();
 
-  // Record every text mutation of the answer so "character by character" is
-  // judged from the rendered stream, not from a single final snapshot.
-  await panel.evaluate((node) => {
-    const target = node as HTMLElement & { __samples?: string[] };
+  const QUERY = "请用一句话介绍你自己";
+  // Record, in the page's own clock, when the user bubble mounts and when the
+  // answer first becomes non-empty, alongside every answer mutation for the
+  // character-by-character judgement. "立即出现" is the ordering of those two
+  // moments; a bubble found visible ten seconds later proves nothing.
+  await panel.evaluate((node, query) => {
+    const target = node as HTMLElement & {
+      __samples?: string[];
+      __bubbleAt?: number | null;
+      __answerAt?: number | null;
+    };
     target.__samples = [];
+    target.__bubbleAt = null;
+    target.__answerAt = null;
     const observer = new MutationObserver(() => {
+      const now = performance.now();
+      if (target.__bubbleAt === null) {
+        const bubble = Array.from(target.querySelectorAll("p")).find(
+          (element) => element.textContent?.trim() === query,
+        );
+        if (bubble) target.__bubbleAt = now;
+      }
       const answer = target.querySelector("[data-role='assistant-message']");
       const text = answer?.textContent?.trim() ?? "";
-      if (text.length > 0 && text !== target.__samples?.at(-1)) {
-        target.__samples?.push(text);
+      if (text.length > 0) {
+        if (target.__answerAt === null) target.__answerAt = now;
+        if (text !== target.__samples?.at(-1)) target.__samples?.push(text);
       }
     });
     observer.observe(node, { childList: true, subtree: true, characterData: true });
-  });
+  }, QUERY);
 
-  await input.fill("请用一句话介绍你自己");
+  await input.fill(QUERY);
   await input.press("Enter");
-
-  // The user bubble is on screen before the answer is complete.
-  await expect(panel.getByText("请用一句话介绍你自己")).toBeVisible();
 
   const answer = panel.locator("[data-role='assistant-message']");
   await expect(answer).not.toHaveText("", { timeout: 60_000 });
+  await expect(panel.getByText(QUERY, { exact: true })).toBeVisible();
+
+  const timing = await panel.evaluate((node) => {
+    const target = node as HTMLElement & {
+      __bubbleAt?: number | null;
+      __answerAt?: number | null;
+    };
+    return { bubbleAt: target.__bubbleAt ?? null, answerAt: target.__answerAt ?? null };
+  });
+  expect(timing.bubbleAt, "user bubble mounted").not.toBeNull();
+  expect(timing.answerAt, "answer text started").not.toBeNull();
+  if (timing.bubbleAt === null || timing.answerAt === null) {
+    throw new Error("turn timing was not observed");
+  }
+  expect(
+    timing.bubbleAt,
+    "the user bubble mounts before the first answer text",
+  ).toBeLessThanOrEqual(timing.answerAt);
   const samples = await panel.evaluate(
     (node) => ((node as HTMLElement & { __samples?: string[] }).__samples ?? []),
   );

@@ -304,6 +304,49 @@ jobs:
           E2E_PSQL_DSN: postgresql://eap:eap_password@localhost:5432/eap_e2e
           E2E_DATABASE_URL: postgresql+asyncpg://eap:eap_password@localhost:5432/eap_e2e
 
+  e2e-stack:
+    name: E2E (agent journeys on the compose stack)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # The stack pulls the inference engine (~7 GB of images) and builds the
+      # application images on top; the stock runner disk cannot hold both.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          docker system df
+
+      # These journeys need the real inference engine, which the host harness
+      # used by the `e2e` job does not provide. `make e2e` brings up the QA
+      # variant (engine + deterministic model stub) and drives one spec against
+      # it; the host suite ignores these two files.
+      - name: Agent debug journey (real stream)
+        env:
+          E2E_STACK_TIMEOUT: "2400"
+        run: |
+          set -o pipefail
+          make e2e E2E_SPEC=e2e/journeys/tc-agent-04-agent-debug.spec.ts 2>&1 | tee /tmp/tc-agent-04.log
+          # Without a provider this journey skips and still exits 0; require the
+          # real turn to have executed.
+          grep -qE "✓.*TC-agent-04 debug" /tmp/tc-agent-04.log
+
+      - name: Agent lifecycle journey (real transitions)
+        env:
+          E2E_STACK_TIMEOUT: "2400"
+        run: make e2e E2E_SPEC=e2e/journeys/tc-agent-05-agent-lifecycle.spec.ts
+
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-stack-artifacts
+          path: |
+            artifacts/playwright/report
+            artifacts/playwright/test-results
+          retention-days: 7
+
   docker:
     name: Docker (build + push)
     runs-on: ubuntu-latest

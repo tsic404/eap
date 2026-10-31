@@ -45,6 +45,14 @@ const BACKEND_PYTHON =
 
 export default defineConfig({
   testDir: "./e2e",
+  // These journeys drive the real inference engine. The host harness starts no
+  // provider, so the host suite would only fail or skip them; the `e2e-stack`
+  // CI job runs them on the compose stack, and locally they run through
+  // `make e2e E2E_SPEC=...`.
+  testIgnore: [
+    "**/journeys/tc-agent-04-agent-debug.spec.ts",
+    "**/journeys/tc-agent-05-agent-lifecycle.spec.ts",
+  ],
   timeout: 60_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
