@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   mutate: vi.fn(),
   fetchAuthCapabilities: vi.fn(),
   setMemberStatus: vi.fn(),
+  setMemberRole: vi.fn(),
   toast: vi.fn(),
 }));
 
@@ -25,6 +26,7 @@ vi.mock("@/lib/auth-service", () => ({
 vi.mock("@/lib/member-service", async (importOriginal) => ({
   ...(await importOriginal<typeof MemberServiceModule>()),
   setMemberStatus: (...args: unknown[]) => mocks.setMemberStatus(...args),
+  setMemberRole: (...args: unknown[]) => mocks.setMemberRole(...args),
 }));
 
 vi.mock("@/components/ui/toast", () => ({
@@ -88,6 +90,7 @@ describe("MemberListPage roster", () => {
     });
     mocks.fetchAuthCapabilities.mockResolvedValue({ localLoginEnabled: true });
     mocks.setMemberStatus.mockReset();
+    mocks.setMemberRole.mockReset();
     mocks.toast.mockReset();
     mocks.mutate.mockReset();
   });
@@ -121,6 +124,8 @@ describe("MemberListPage roster", () => {
     expect(await screen.findByText("new-member@acme.com")).toBeTruthy();
     const localRow = screen.getByRole("row", { name: /new-member@acme\.com/ });
     expect(within(localRow).getByRole("button", { name: "停用" })).toBeTruthy();
+    // Role adjustment is not a local-account capability, so it stays offered (C-28/C-110).
+    expect(within(localRow).getByRole("button", { name: "调整角色" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "新建本地账号" })).toBeNull();
     expect(within(localRow).queryByRole("button", { name: "重置口令" })).toBeNull();
   });
@@ -187,6 +192,66 @@ describe("MemberListPage roster", () => {
     await waitFor(() =>
       expect(mocks.toast).toHaveBeenCalledWith(
         expect.objectContaining({ type: "error", title: "不能停用最后一个平台管理员" }),
+      ),
+    );
+    expect(mocks.mutate).not.toHaveBeenCalled();
+  });
+
+  it("adjusts a member's role from the roster and refreshes it", async () => {
+    mocks.setMemberRole.mockResolvedValue({ ...SSO_MEMBER, role: "employee" });
+    renderPage("platform_admin");
+
+    await screen.findByText("alice@acme.com");
+    const ssoRow = screen.getByRole("row", { name: /alice@acme\.com/ });
+    fireEvent.click(within(ssoRow).getByRole("button", { name: "调整角色" }));
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("角色"), {
+      target: { value: "employee" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() =>
+      expect(mocks.setMemberRole).toHaveBeenCalledWith("u-sso", "employee"),
+    );
+    await waitFor(() => expect(mocks.mutate).toHaveBeenCalled());
+    expect(mocks.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "success", title: "成员角色已更新" }),
+    );
+  });
+
+  it("surfaces the last-administrator refusal when a role demotion is refused", async () => {
+    mocks.setMemberRole.mockRejectedValue(axiosError(409, "LAST_ADMIN"));
+    renderPage("platform_admin");
+
+    await screen.findByText("alice@acme.com");
+    const ssoRow = screen.getByRole("row", { name: /alice@acme\.com/ });
+    fireEvent.click(within(ssoRow).getByRole("button", { name: "调整角色" }));
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("角色"), {
+      target: { value: "employee" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveProperty(
+      "textContent",
+      "不能降级最后一个平台管理员",
+    );
+    expect(mocks.mutate).not.toHaveBeenCalled();
+  });
+
+  it("reports a self-disable refusal instead of pretending the switch landed", async () => {
+    mocks.setMemberStatus.mockRejectedValue(axiosError(409, "SELF_DISABLE"));
+    renderPage("platform_admin");
+
+    await screen.findByText("new-member@acme.com");
+    const localRow = screen.getByRole("row", { name: /new-member@acme\.com/ });
+    fireEvent.click(within(localRow).getByRole("button", { name: "停用" }));
+
+    await waitFor(() =>
+      expect(mocks.toast).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", title: "不能停用当前登录的账号" }),
       ),
     );
     expect(mocks.mutate).not.toHaveBeenCalled();

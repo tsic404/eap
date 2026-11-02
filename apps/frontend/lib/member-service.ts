@@ -15,6 +15,7 @@ import type {
   Member,
   MemberListParams,
   MemberPage,
+  MemberRole,
   MemberStatus,
 } from "./member-types";
 
@@ -55,6 +56,18 @@ export async function setMemberStatus(
   const response = await apiClient.patch<ApiEnvelope<Member>>(
     `${API_ROUTES.members}/${memberId}`,
     { status },
+  );
+  return response.data.data;
+}
+
+/** Switch a member's role; the backend enforces the C-29 invariants. */
+export async function setMemberRole(
+  memberId: string,
+  role: MemberRole,
+): Promise<Member> {
+  const response = await apiClient.patch<ApiEnvelope<Member>>(
+    `${API_ROUTES.members}/${memberId}`,
+    { role },
   );
   return response.data.data;
 }
@@ -116,6 +129,11 @@ export function isLastAdminError(error: unknown): boolean {
 /** An account cannot disable itself (409 `SELF_DISABLE`). */
 export function isSelfDisableError(error: unknown): boolean {
   return isMemberError(error, 409, "SELF_DISABLE");
+}
+
+/** The requested role or status is outside its allowed set (422, C-29). */
+export function isMemberValidationError(error: unknown): boolean {
+  return isMemberError(error, 422, "VALIDATION_ERROR");
 }
 
 /** The caller's role is not allowed on this surface (403 `FORBIDDEN`). */
