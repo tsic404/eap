@@ -9,6 +9,7 @@ error code in the body, and follow-up reads through the same API.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -22,6 +23,7 @@ import redis.asyncio as aioredis
 from app.auth.revocation import revoked_jti_key
 from app.models.tenant import Tenant
 from app.models.user import User
+from app.services.member_service import MemberService
 
 # The imports above must precede every other statement; the case identifier
 # leads the module body from here on.
@@ -30,20 +32,10 @@ TC_ID = "TC-tech-auth-02"
 _AGENTS = "/api/agents"
 _MEMBERS = "/api/users"
 _CREATE_AGENT_BODY = {"agentId": "demo-agent", "name": "Demo Agent"}
-# C-28/C-29: the roster and the status switch are served by ``/api/users``; the
-# switch moves between the two status values the admin console exposes.
+# C-28/C-29: the roster serves ``/api/users``; a member adjustment moves the
+# role along the five-role ladder or between the two status values the admin
+# console exposes.
 _DEACTIVATED = "disabled"
-# The roster and the status switch are implemented; only the role adjustment the
-# same contract describes is absent — the PATCH body carries a status and refuses
-# every other field, so no request can issue a role change or exercise the
-# role-ladder validation. Those three cases stay registered against that gap.
-_ROLE_ADJUSTMENT_XFAIL = pytest.mark.xfail(
-    reason=(
-        "C-28 role adjustment is not implemented: PATCH /api/users/{id} accepts "
-        "status only and refuses a role field, so a role change has no request path"
-    ),
-    strict=True,
-)
 
 
 # ── seeding and signing helpers ─────────────────────────────────────────────
@@ -357,41 +349,61 @@ async def test_member_role_outside_the_role_ladder_is_a_validation_error(api) ->
         headers=_bearer(_sign(api, admin, tenant)),
         json={"role": "superuser"},
     )
-    if response.status_code == 422:
-        # Registered against the role-adjustment gap, not asserted as the ladder's
-        # verdict: the status-only body refuses the role field before any value is
-        # looked at, so this 422 does not evidence C-29's role-set validation.
-        pytest.xfail(
-            "C-28 role adjustment is absent: a status-only PATCH refuses the role "
-            "field as unknown, so the role-set validation has no path to observe"
-        )
+    assert response.status_code == 422, response.text
+    assert _code(response) == "VALIDATION_ERROR"
+
+    read = await api.client.get(
+        f"{_MEMBERS}/{employee.id}", headers=_bearer(_sign(api, admin, tenant))
+    )
+    assert read.status_code == 200, read.text
+    assert read.json()["data"]["role"] == "employee"
+
+
+@pytest.mark.asyncio
+async def test_member_update_naming_no_field_is_refused(api) -> None:
+    tenant, admin = await _seed_tenant_user(api, role="platform_admin")
+    employee = await _seed_member(api, tenant, role="employee")
+    response = await api.client.patch(
+        f"{_MEMBERS}/{employee.id}",
+        headers=_bearer(_sign(api, admin, tenant)),
+        json={},
+    )
     assert response.status_code == 422, response.text
     assert _code(response) == "VALIDATION_ERROR"
 
 
 @pytest.mark.asyncio
-@_ROLE_ADJUSTMENT_XFAIL
 async def test_demoting_the_last_platform_admin_is_refused(api) -> None:
     tenant, admin = await _seed_tenant_user(api, role="platform_admin")
+    headers = _bearer(_sign(api, admin, tenant))
     response = await api.client.patch(
         f"{_MEMBERS}/{admin.id}",
-        headers=_bearer(_sign(api, admin, tenant)),
+        headers=headers,
         json={"role": "employee"},
     )
     assert response.status_code == 409, response.text
     assert _code(response) == "LAST_ADMIN"
 
+    read = await api.client.get(f"{_MEMBERS}/{admin.id}", headers=headers)
+    assert read.status_code == 200, read.text
+    assert read.json()["data"]["role"] == "platform_admin"
+
 
 @pytest.mark.asyncio
 async def test_disabling_the_last_platform_admin_is_refused(api) -> None:
     tenant, admin = await _seed_tenant_user(api, role="platform_admin")
+    headers = _bearer(_sign(api, admin, tenant))
     response = await api.client.patch(
         f"{_MEMBERS}/{admin.id}",
-        headers=_bearer(_sign(api, admin, tenant)),
+        headers=headers,
         json={"status": _DEACTIVATED},
     )
     assert response.status_code == 409, response.text
     assert _code(response) == "LAST_ADMIN"
+
+    read = await api.client.get(f"{_MEMBERS}/{admin.id}", headers=headers)
+    assert read.status_code == 200, read.text
+    assert read.json()["data"]["status"] == "active"
 
 
 @pytest.mark.asyncio
@@ -400,17 +412,21 @@ async def test_disabling_oneself_is_refused(api) -> None:
     # A second platform admin keeps the tenant's last-admin invariant out of
     # the way, so the refusal can only come from the self-deactivation rule.
     await _seed_member(api, tenant, role="platform_admin")
+    headers = _bearer(_sign(api, admin, tenant))
     response = await api.client.patch(
         f"{_MEMBERS}/{admin.id}",
-        headers=_bearer(_sign(api, admin, tenant)),
+        headers=headers,
         json={"status": _DEACTIVATED},
     )
     assert response.status_code == 409, response.text
     assert _code(response) == "SELF_DISABLE"
 
+    read = await api.client.get(f"{_MEMBERS}/{admin.id}", headers=headers)
+    assert read.status_code == 200, read.text
+    assert read.json()["data"]["status"] == "active"
+
 
 @pytest.mark.asyncio
-@_ROLE_ADJUSTMENT_XFAIL
 async def test_platform_admin_changes_a_member_role(api) -> None:
     tenant, admin = await _seed_tenant_user(api, role="platform_admin")
     employee = await _seed_member(api, tenant, role="employee")
@@ -420,10 +436,103 @@ async def test_platform_admin_changes_a_member_role(api) -> None:
         f"{_MEMBERS}/{employee.id}", headers=headers, json={"role": "auditor"}
     )
     assert changed.status_code == 200, changed.text
+    assert changed.json()["data"]["role"] == "auditor"
 
     read = await api.client.get(f"{_MEMBERS}/{employee.id}", headers=headers)
     assert read.status_code == 200, read.text
     assert read.json()["data"]["role"] == "auditor"
+
+
+@pytest.mark.asyncio
+async def test_platform_admin_demotes_itself_when_another_admin_remains(api) -> None:
+    tenant, admin = await _seed_tenant_user(api, role="platform_admin")
+    # The second platform admin keeps the tenant staffed, so a self-demotion is
+    # an ordinary role change rather than the last-admin refusal.
+    await _seed_member(api, tenant, role="platform_admin")
+    headers = _bearer(_sign(api, admin, tenant))
+
+    changed = await api.client.patch(
+        f"{_MEMBERS}/{admin.id}", headers=headers, json={"role": "employee"}
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["data"]["role"] == "employee"
+
+    # The new role governs the very next request: member management is the
+    # platform administrator's alone (C-28).
+    refused = await api.client.get(_MEMBERS, headers=headers)
+    assert refused.status_code == 403, refused.text
+    assert _code(refused) == "FORBIDDEN"
+
+
+@pytest.mark.asyncio
+async def test_a_self_adjustment_judges_the_member_row_read_after_the_lock(
+    api, monkeypatch
+) -> None:
+    """A concurrent change to the caller's own row does not produce a stale verdict.
+
+    Identity resolution has already loaded the caller's row into the request
+    session, so an adjustment of that same row must judge what is committed
+    after the tenant lock, not the values read on the way in. Here a second
+    adjustment demotes the caller while this request waits for the lock; the
+    same change embedded in this request is then already in force and must
+    answer 200 instead of taking the departing administrator for the last one.
+    """
+    tenant, admin = await _seed_tenant_user(api, role="platform_admin")
+    # A second administrator keeps the tenant staffed once the caller is
+    # demoted, so the only verdict under test is the stale one.
+    await _seed_member(api, tenant, role="platform_admin")
+    headers = _bearer(_sign(api, admin, tenant))
+
+    arrived = asyncio.Event()
+    proceed = asyncio.Event()
+    serialise = MemberService._serialise_member_change
+
+    async def gated(session, current_tenant):  # type: ignore[no-untyped-def]
+        arrived.set()
+        await proceed.wait()
+        await serialise(session, current_tenant)
+
+    monkeypatch.setattr(MemberService, "_serialise_member_change", staticmethod(gated))
+
+    adjustment = asyncio.create_task(
+        api.client.patch(f"{_MEMBERS}/{admin.id}", headers=headers, json={"role": "employee"})
+    )
+    try:
+        await asyncio.wait_for(arrived.wait(), timeout=5)
+        # The concurrent adjustment commits while the request above holds no
+        # lock yet and its identity map still carries the caller as an
+        # administrator.
+        async with api.db.session() as session:
+            caller = await session.get(User, admin.id, populate_existing=True)
+            caller.role = "employee"
+            await session.commit()
+    finally:
+        proceed.set()
+
+    response = await adjustment
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["role"] == "employee"
+
+
+@pytest.mark.asyncio
+async def test_adjusting_another_tenants_member_is_not_found(api) -> None:
+    tenant, admin = await _seed_tenant_user(api, role="platform_admin")
+    other_tenant, other_admin = await _seed_tenant_user(api, role="platform_admin")
+
+    response = await api.client.patch(
+        f"{_MEMBERS}/{other_admin.id}",
+        headers=_bearer(_sign(api, admin, tenant)),
+        json={"role": "employee"},
+    )
+    assert response.status_code == 404, response.text
+    assert _code(response) == "NOT_FOUND"
+
+    untouched = await api.client.get(
+        f"{_MEMBERS}/{other_admin.id}",
+        headers=_bearer(_sign(api, other_admin, other_tenant)),
+    )
+    assert untouched.status_code == 200, untouched.text
+    assert untouched.json()["data"]["role"] == "platform_admin"
 
 
 # ── C-13 ⑥⑦⑧: the model provider list ──────────────────────────────────────

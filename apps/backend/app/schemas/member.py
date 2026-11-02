@@ -10,9 +10,13 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.models.user import User
+
+# The platform's five-role ladder (C-12); a member's role is one of these only.
+MemberRole = Literal["platform_admin", "agent_admin", "knowledge_admin", "auditor", "employee"]
+MemberStatus = Literal["active", "disabled"]
 
 
 class MemberDto(BaseModel):
@@ -38,12 +42,24 @@ class MemberPageDto(BaseModel):
     total: int
 
 
-class MemberStatusUpdate(BaseModel):
-    """A status switch; any other field — a role change included — is refused."""
+class MemberUpdate(BaseModel):
+    """A member adjustment: the role, the status, or both.
+
+    Only the fields being changed travel; a body that names neither changes
+    nothing and is refused. A role outside the five-role ladder is refused by
+    the field type before the service sees it (C-29).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    status: Literal["active", "disabled"]
+    role: MemberRole | None = None
+    status: MemberStatus | None = None
+
+    @model_validator(mode="after")
+    def _names_a_change(self) -> MemberUpdate:
+        if self.role is None and self.status is None:
+            raise ValueError("At least one of role or status is required")
+        return self
 
 
 def member_to_dto(user: User) -> MemberDto:

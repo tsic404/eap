@@ -1,8 +1,8 @@
 """Member management: the platform-administrator surface over accounts (C-28).
 
-Building the roster, creating local accounts, switching a member's status and
-resetting a password. Every path is tenant-scoped: another tenant's member
-identifier reads as absent (C-29), and the status switch protects the last
+Building the roster, creating local accounts, adjusting a member's role and
+status, and resetting a password. Every path is tenant-scoped: another tenant's
+member identifier reads as absent (C-29), and an adjustment protects the last
 platform administrator and refuses self-disable.
 """
 
@@ -31,11 +31,11 @@ STATUS_ACTIVE = "active"
 STATUS_DISABLED = "disabled"
 # The role the last-administrator invariant protects.
 PLATFORM_ADMIN_ROLE = "platform_admin"
-# Role a created local account starts on; role changes are outside this surface.
+# Role a created local account starts on.
 DEFAULT_ROLE = "employee"
 # Advisory-lock namespace of the tenant's member invariants; the lock key is
-# this namespace plus the tenant, so switches in other tenants never wait.
-_STATUS_LOCK_NAMESPACE = "eap:member_status"
+# this namespace plus the tenant, so adjustments in other tenants never wait.
+_MEMBER_LOCK_NAMESPACE = "eap:member_invariants"
 
 
 class MemberService:
@@ -136,27 +136,42 @@ class MemberService:
         await session.refresh(user, attribute_names=["created_at"])
         return user
 
-    async def set_status(
+    async def update_member(
         self,
         session: AsyncSession,
         tenant: Tenant,
         actor: User,
         member_id: str,
         *,
-        status: str,
+        role: str | None,
+        status: str | None,
     ) -> User:
-        """Switch a member's status, enforcing the C-29 invariants on disable."""
-        if status == STATUS_DISABLED:
-            await self._serialise_status_switch(session, tenant)
+        """Adjust a member's role and/or status, enforcing the C-29 invariants."""
+        # Both the role demotion and the disable can take away an active
+        # administrator, so either one joins the tenant's serialised section.
+        if role is not None or status == STATUS_DISABLED:
+            await self._serialise_member_change(session, tenant)
         member = await self.get_member(session, tenant, member_id)
-        if status == STATUS_DISABLED and member.status != STATUS_DISABLED:
-            if member.role == PLATFORM_ADMIN_ROLE and await self._admins_left(session, tenant) <= 1:
-                raise AppError(
-                    409, "LAST_ADMIN", "The last platform administrator cannot be disabled"
-                )
+        next_role = member.role if role is None else role
+        next_status = member.status if status is None else status
+
+        becomes_non_admin = (
+            member.role == PLATFORM_ADMIN_ROLE
+            and member.status == STATUS_ACTIVE
+            and (next_role != PLATFORM_ADMIN_ROLE or next_status != STATUS_ACTIVE)
+        )
+        if becomes_non_admin and await self._admins_left(session, tenant) <= 1:
+            raise AppError(
+                409,
+                "LAST_ADMIN",
+                "The last platform administrator cannot be demoted or disabled",
+            )
+        if next_status == STATUS_DISABLED and member.status != STATUS_DISABLED:
             if member.id == actor.id:
                 raise AppError(409, "SELF_DISABLE", "An account cannot disable itself")
-        member.status = status
+
+        member.role = next_role
+        member.status = next_status
         await session.commit()
         await session.refresh(member, attribute_names=["updated_at"])
         return member
@@ -205,28 +220,31 @@ class MemberService:
             select(User)
             .where(User.id == member_uuid, User.tenant_id == tenant.id)
             .options(noload("*"))
+            # Judge committed values, not the row identity resolution cached
+            # before the tenant lock: the caller's own row is that same row.
+            .execution_options(populate_existing=True)
         )
         if member is None:
             raise AppError(404, "NOT_FOUND", "Member not found")
         return member
 
     @staticmethod
-    async def _serialise_status_switch(session: AsyncSession, tenant: Tenant) -> None:
-        """Serialise the tenant's status switches for the rest of this unit of work.
+    async def _serialise_member_change(session: AsyncSession, tenant: Tenant) -> None:
+        """Serialise the tenant's member adjustments for the rest of this unit of work.
 
-        The last-administrator rule reads a count and then writes a status, so
-        two switches running at once each count the other's target as active and
-        both commit, leaving the tenant without an administrator (C-29). The
-        transaction-scoped lock is released by the commit or rollback that ends
-        the switch, and the count behind it runs after the lock, so it sees the
-        switch that went first.
+        The last-administrator rule reads a count and then writes a role or a
+        status, so two adjustments running at once each count the other's target
+        as an active administrator and both commit, leaving the tenant without
+        one (C-29). The transaction-scoped lock is released by the commit or
+        rollback that ends the adjustment, and the count behind it runs after the
+        lock, so it sees the adjustment that went first.
         """
         await session.execute(
             text(
                 "SELECT pg_advisory_xact_lock("
                 "hashtext(:namespace), hashtext(CAST(:tenant AS text)))"
             ),
-            {"namespace": _STATUS_LOCK_NAMESPACE, "tenant": str(tenant.id)},
+            {"namespace": _MEMBER_LOCK_NAMESPACE, "tenant": str(tenant.id)},
         )
 
     @staticmethod

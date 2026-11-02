@@ -20,6 +20,7 @@ export interface MemberTableProps {
   /** Prompt shown for an empty roster; the closed capability gets a create-free one (C-110). */
   emptyDescription: string;
   busyMemberId: string | null;
+  onChangeRole: (member: Member) => void;
   onChangeStatus: (member: Member, status: MemberStatus) => void;
   onResetPassword: (member: Member) => void;
 }
@@ -30,6 +31,7 @@ export function MemberTable({
   canResetPassword,
   emptyDescription,
   busyMemberId,
+  onChangeRole,
   onChangeStatus,
   onResetPassword,
 }: MemberTableProps) {
@@ -83,6 +85,14 @@ export function MemberTable({
       header: t("columns.actions"),
       cell: (row) => (
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busyMemberId === row.id}
+            onClick={() => onChangeRole(row)}
+          >
+            {t("roleChange")}
+          </Button>
           {row.status === "active" ? (
             <Button
               variant="outline"

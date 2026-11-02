@@ -23,10 +23,11 @@ import { useMembers } from "@/lib/use-members";
 import { CreateMemberDialog } from "./create-member-dialog";
 import { MemberTable } from "./member-table";
 import { ResetPasswordDialog } from "./reset-password-dialog";
+import { RoleChangeDialog } from "./role-change-dialog";
 
 const PAGE_SIZE = 20;
 
-/** Platform administrator's roster: filters, local-account actions, status switches. */
+/** Platform administrator's roster: filters, role/status adjustments, local-account actions. */
 export function MemberManagement() {
   const t = useTranslations("members");
   const { toast } = useToast();
@@ -37,6 +38,7 @@ export function MemberManagement() {
   const [roleFilter, setRoleFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [roleTarget, setRoleTarget] = useState<Member | null>(null);
   const [resetTarget, setResetTarget] = useState<Member | null>(null);
   const [busyMemberId, setBusyMemberId] = useState<string | null>(null);
   const [isLocalLoginEnabled, setIsLocalLoginEnabled] = useState(false);
@@ -102,6 +104,12 @@ export function MemberManagement() {
   const handleCreated = () => {
     setIsCreateOpen(false);
     toast({ type: "success", title: t("created") });
+    void mutate();
+  };
+
+  const handleRoleChanged = () => {
+    setRoleTarget(null);
+    toast({ type: "success", title: t("roleChanged") });
     void mutate();
   };
 
@@ -195,6 +203,7 @@ export function MemberManagement() {
               isLocalLoginEnabled ? t("empty.description") : t("empty.descriptionClosed")
             }
             busyMemberId={busyMemberId}
+            onChangeRole={setRoleTarget}
             onChangeStatus={(member, status) => void handleStatusChange(member, status)}
             onResetPassword={setResetTarget}
           />
@@ -227,6 +236,11 @@ export function MemberManagement() {
         open={isCreateOpen}
         onClose={() => setIsCreateOpen(false)}
         onCreated={handleCreated}
+      />
+      <RoleChangeDialog
+        member={roleTarget}
+        onClose={() => setRoleTarget(null)}
+        onChanged={handleRoleChanged}
       />
       <ResetPasswordDialog
         member={resetTarget}
