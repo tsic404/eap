@@ -1,4 +1,12 @@
-import { expect, test, type Page } from "@playwright/test";
+import { setTimeout as sleep } from "node:timers/promises";
+
+import {
+  expect,
+  test,
+  type APIRequestContext,
+  type APIResponse,
+  type Page,
+} from "@playwright/test";
 
 import { LOCAL_ACCOUNTS, LOCAL_ACCOUNT_PASSWORD } from "../helpers/accounts.cjs";
 
@@ -12,6 +20,15 @@ const REFRESH_COOKIE = "refresh_token";
 const ADMIN = LOCAL_ACCOUNTS.admin;
 const EMPLOYEE = LOCAL_ACCOUNTS.employee;
 
+// The login throttle is one shared bucket per client IP (C-10), and every
+// sign-in in this file spends from it. The lockout case needs six fresh
+// attempts of its own, so it waits out the bucket's own refusal instead of
+// turning it into a failure or depending on what the earlier cases left.
+// At the contract 10/min one token returns every 6 s, and the lockout counter
+// still advances only on real 401 answers (C-112).
+const LOGIN_REFILL_MS = 6_500;
+const THROTTLE_RETRIES = 10;
+
 async function signIn(
   page: Page,
   email: string,
@@ -21,6 +38,26 @@ async function signIn(
   await page.getByLabel("邮箱").fill(email);
   await page.getByLabel("口令").fill(password);
   await page.getByRole("button", { name: "登录", exact: true }).click();
+}
+
+/** Post one wrong-password attempt, waiting out the shared client-IP throttle. */
+async function postWrongPassword(request: APIRequestContext, email: string): Promise<APIResponse> {
+  for (let retry = 0; ; retry += 1) {
+    const response = await request.post("/api/auth/login/local", {
+      data: { email, password: "wrong-password" },
+    });
+    if (response.status() !== 429) {
+      return response;
+    }
+    const body = (await response.json()) as { error?: { code?: string } };
+    if (body.error?.code !== "RATE_LIMITED") {
+      return response;
+    }
+    if (retry === THROTTLE_RETRIES) {
+      throw new Error("the login throttle did not refill for the lockout case");
+    }
+    await sleep(LOGIN_REFILL_MS);
+  }
 }
 
 test("TC-auth-08 landing: 本地账号登录成功并落地用户工作区", async ({ page }) => {
@@ -98,15 +135,34 @@ test("TC-auth-08 errors: 凭据与租户错误给出可读提示", async ({ page
 });
 
 test("TC-auth-08 lockout: 连续失败后锁定并给出 15 分钟口径", async ({ page, request }) => {
-  const email = "lock-me@acme.com";
+  // An empty bucket stretches this case to one refill wait per token.
+  test.setTimeout(180_000);
+
+  // A fresh identifier per run: the lock lasts 15 minutes, so a long-lived
+  // stack must not hand the next run an address an earlier run already locked.
+  const email = `lock-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}@acme.com`;
+
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    const response = await request.post("/api/auth/login/local", {
-      data: { email, password: "wrong-password" },
-    });
+    const response = await postWrongPassword(request, email);
     expect(response.status()).toBe(401);
   }
 
-  await signIn(page, email);
+  // The identifier is locked, so every granted attempt answers LOGIN_LOCKED;
+  // the bucket's own refusal may arrive first while it refills (C-10, C-112).
+  const alert = page.locator("form").getByRole("alert");
+  for (let retry = 0; ; retry += 1) {
+    await signIn(page, email);
+    await expect(alert).toBeVisible();
+    const message = (await alert.textContent())?.trim() ?? "";
+    if (message.includes("15 分钟")) {
+      break;
+    }
+    expect(message).toBe("登录尝试过于频繁，请稍后再试");
+    if (retry === THROTTLE_RETRIES) {
+      throw new Error("the login throttle did not refill for the lockout case");
+    }
+    await sleep(LOGIN_REFILL_MS);
+  }
 
-  await expect(page.locator("form").getByRole("alert")).toContainText("15 分钟");
+  await expect(alert).toContainText("15 分钟");
 });
