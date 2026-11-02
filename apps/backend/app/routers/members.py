@@ -18,7 +18,7 @@ from app.db import get_session
 from app.dependencies import get_active_tenant, require_roles
 from app.models.tenant import Tenant
 from app.models.user import User
-from app.schemas.member import MemberDto, MemberPageDto, MemberStatusUpdate, member_to_dto
+from app.schemas.member import MemberDto, MemberPageDto, MemberUpdate, member_to_dto
 from app.services.member_service import MemberService
 
 router = APIRouter(prefix="/api/users", tags=["members"])
@@ -91,14 +91,16 @@ async def create_member(
 @router.patch("/{member_id}", response_model=MemberDto)
 async def update_member(
     member_id: str,
-    payload: MemberStatusUpdate,
+    payload: MemberUpdate,
     service: Annotated[MemberService, Depends(get_member_service)],
     tenant: ActiveTenant,
     actor: PlatformAdmin,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> MemberDto:
-    """Switch a member's status, enforcing the C-29 invariants on disable."""
-    member = await service.set_status(session, tenant, actor, member_id, status=payload.status)
+    """Adjust a member's role and/or status under the C-29 invariants."""
+    member = await service.update_member(
+        session, tenant, actor, member_id, role=payload.role, status=payload.status
+    )
     return member_to_dto(member)
 
 

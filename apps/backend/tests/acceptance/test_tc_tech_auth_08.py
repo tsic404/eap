@@ -179,7 +179,7 @@ async def test_another_member_keeps_working(session_factory) -> None:  # type: i
 
 @pytest.mark.asyncio
 async def test_the_disable_invariants(session_factory) -> None:  # type: ignore[no-untyped-def]
-    """Last-admin, self-disable, tenancy, role and body rules all hold (C-29)."""
+    """Last-admin, self-disable, tenancy and body rules all hold (C-29)."""
     tenant = await seed_tenant(session_factory)
     other = await seed_tenant(session_factory, domain="other.com", name="Other")
     admin = await seed_admin(session_factory, tenant)
@@ -207,14 +207,15 @@ async def test_the_disable_invariants(session_factory) -> None:  # type: ignore[
         assert absent.status_code == 404, absent.text
         assert error_code(absent) == "NOT_FOUND"
 
-        # Only the two status values are accepted, and no other field is.
+        # The status switch still accepts only its two values, and an
+        # adjustment body carries no field outside role and status.
         paused = await harness.http.patch(
             f"{MEMBERS_PATH}/{employee.id}", json={"status": "paused"}, headers=admin_headers
         )
-        role = await harness.http.patch(
-            f"{MEMBERS_PATH}/{employee.id}", json={"role": "employee"}, headers=admin_headers
+        unsupported = await harness.http.patch(
+            f"{MEMBERS_PATH}/{employee.id}", json={"name": "Renamed"}, headers=admin_headers
         )
-        for response in (paused, role):
+        for response in (paused, unsupported):
             assert response.status_code == 422, response.text
             assert error_code(response) == "VALIDATION_ERROR"
 
