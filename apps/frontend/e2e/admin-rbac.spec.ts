@@ -49,5 +49,5 @@ test("employee completes OIDC and is served the forbidden notice", async ({
   expect(cookie!.value).toBe("employee");
 
   await page.goto("/admin");
-  await expect(page.getByText("无管理权限")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "无管理权限" })).toBeVisible();
 });
