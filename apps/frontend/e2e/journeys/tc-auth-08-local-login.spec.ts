@@ -67,9 +67,11 @@ test("TC-auth-08 landing: 本地账号登录成功并落地用户工作区", asy
   await expect(page.getByText(ADMIN.email)).toBeVisible();
   // The name renders in the profile card and its containers — assert the first match.
   await expect(page.getByText(ADMIN.name).first()).toBeVisible();
-  // The header offers the workspaces this account's role admits.
-  await page.getByRole("button", { name: "用户工作区" }).click();
-  await expect(page.getByRole("menuitem", { name: "管理工作区" })).toBeVisible();
+  // The header offers the single admin entry this account's role admits.
+  await expect(page.getByRole("link", { name: "管理端" })).toHaveAttribute(
+    "href",
+    "/admin",
+  );
 });
 
 test("TC-auth-08 role: 登录方式不改变角色对应入口", async ({ page }) => {
@@ -78,10 +80,9 @@ test("TC-auth-08 role: 登录方式不改变角色对应入口", async ({ page }
   await page.waitForURL("**/user");
   await expect(page.getByText(EMPLOYEE.email)).toBeVisible();
 
-  // An employee gets no admin workspace entry, and the admin route still serves
-  // the friendly permission notice — the same judgement the SSO path makes.
-  await page.getByRole("button", { name: "用户工作区" }).click();
-  await expect(page.getByRole("menuitem", { name: "管理工作区" })).toHaveCount(0);
+  // An employee gets no admin entry, and the admin route still serves the
+  // friendly permission notice — the same judgement the SSO path makes.
+  await expect(page.getByRole("link", { name: "管理端" })).toHaveCount(0);
 
   await page.goto("/admin");
   await expect(page.getByRole("heading", { name: "无管理权限" })).toBeVisible();
