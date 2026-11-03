@@ -6,7 +6,7 @@ import { useTranslations } from "next-intl";
 import { useAuth } from "@/components/auth/auth-context";
 import { useRole } from "@/components/auth/role-context";
 import { Breadcrumb } from "@/components/layout/breadcrumb";
-import { WorkspaceSwitcher } from "@/components/layout/workspace-switcher";
+import { WorkspaceEntry } from "@/components/layout/workspace-entry";
 import { Button } from "@/components/ui/button";
 import { Dropdown, type DropdownItem } from "@/components/ui/dropdown";
 
@@ -53,7 +53,7 @@ export function Header({ onMenuToggle }: HeaderProps) {
       )}
       <span className="text-sm font-semibold text-foreground">EAP</span>
       <Breadcrumb />
-      <WorkspaceSwitcher role={role} />
+      <WorkspaceEntry role={role} />
       <div className="ml-auto flex items-center gap-1">
         <Button variant="ghost" size="sm" className="h-9 w-9 p-0" aria-label={t("notification")}>
           <Bell className="h-4 w-4" />

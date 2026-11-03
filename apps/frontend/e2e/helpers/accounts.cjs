@@ -12,6 +12,14 @@ const LOCAL_ACCOUNTS = {
   // The member-management journeys sign in as a platform administrator; no
   // other seeded account carries that role.
   platformAdmin: { email: "root@acme.com", name: "Root", role: "platform_admin" },
+  // The admin-entry journey signs in as every non-employee role, so the two
+  // read-only roles have their own accounts.
+  knowledgeAdmin: {
+    email: "grace@acme.com",
+    name: "Grace",
+    role: "knowledge_admin",
+  },
+  auditor: { email: "heidi@acme.com", name: "Heidi", role: "auditor" },
   // Reset target: seeded NOT needing a change, so a password reset must flip
   // the flag the member list reports.
   resetTarget: { email: "frank@acme.com", name: "Frank", role: "employee" },

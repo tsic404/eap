@@ -25,7 +25,7 @@ import { ToastProvider, useToast } from "@/components/ui/toast";
 import { AdminSidebar } from "@/components/layout/admin-sidebar";
 import { Header } from "@/components/layout/header";
 import { UserSidebar } from "@/components/layout/user-sidebar";
-import { WorkspaceSwitcher } from "@/components/layout/workspace-switcher";
+import { WorkspaceEntry } from "@/components/layout/workspace-entry";
 import { RoleProvider } from "@/components/auth/role-context";
 
 interface AgentRow {
@@ -149,7 +149,7 @@ function Showcase() {
               <AdminSidebar active="dashboard" />
             </div>
             <div className="flex items-start p-4">
-              <WorkspaceSwitcher role="platform_admin" />
+              <WorkspaceEntry role="platform_admin" />
             </div>
           </div>
         </div>

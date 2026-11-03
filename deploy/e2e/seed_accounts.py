@@ -32,6 +32,8 @@ ACCOUNTS = (
     ("admin", "carol@acme.com", "Carol", "agent_admin", False),
     ("employee", "dave@acme.com", "Dave", "employee", False),
     ("platformAdmin", "root@acme.com", "Root", "platform_admin", False),
+    ("knowledgeAdmin", "grace@acme.com", "Grace", "knowledge_admin", False),
+    ("auditor", "heidi@acme.com", "Heidi", "auditor", False),
     ("resetTarget", "frank@acme.com", "Frank", "employee", False),
     ("pending", "erin@acme.com", "Erin", "employee", True),
 )
