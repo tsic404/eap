@@ -43,10 +43,10 @@ test("TC-auth-11 create: 管理员创建的本地账号出现在成员列表且�
   const email = `local-${Date.now()}@acme.com`;
   await signIn(page, PLATFORM_ADMIN.email);
 
-  // The sidebar's user entry is the real member-management route, not a placeholder.
+  // The sidebar's members entry is the real member-management route, not a placeholder.
   await page.goto("/admin/users");
   await waitForSession(page, PLATFORM_ADMIN.name);
-  await expect(page.getByRole("link", { name: "用户管理" })).toHaveAttribute(
+  await expect(page.getByRole("link", { name: "成员管理" })).toHaveAttribute(
     "href",
     "/admin/users",
   );
@@ -102,7 +102,7 @@ test("TC-auth-11 denied: 非平台管理员无成员管理入口且被拒", asyn
 
   await page.goto("/admin");
   await waitForSession(page, LOCAL_ACCOUNTS.admin.name);
-  await expect(page.getByRole("link", { name: "用户管理" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "成员管理" })).toHaveCount(0);
 
   await page.goto("/admin/users");
   await expect(page.getByRole("heading", { name: "无管理权限" })).toBeVisible();
