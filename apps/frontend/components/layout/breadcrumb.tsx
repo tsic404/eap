@@ -13,6 +13,8 @@ const SEGMENT_LABEL_KEYS: Record<string, string> = {
   settings: "settings",
   admin: "admin",
   tasks: "tasks",
+  "run-logs": "runLogs",
+  users: "users",
 };
 
 /** Path-derived breadcrumb: `首页 / <segment…>`. */

@@ -23,6 +23,7 @@ export const TECH_TC_IDS = [
   "TC-agent-04",
   "TC-agent-05",
   "TC-agent-06",
+  "TC-auth-15",
 ];
 
 export function modulePath(tcId) {
