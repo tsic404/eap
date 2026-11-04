@@ -47,7 +47,7 @@ async function signIn(
 
 /** No two-item workspace switch and no control that only rewrites its label. */
 async function expectNoWorkspaceSwitch(page: Page): Promise<void> {
-  const header = page.locator("header");
+  const header = page.getByRole("banner");
   await expect(header.getByRole("button", { name: "用户工作区" })).toHaveCount(0);
   await expect(header.getByRole("button", { name: "管理工作区" })).toHaveCount(0);
   await expect(header.getByRole("menuitem", { name: "管理工作区" })).toHaveCount(0);
@@ -61,9 +61,10 @@ for (const { account, landing, heading } of ADMIN_ENTRIES) {
     test.setTimeout(120_000);
     await signIn(page, account.email);
 
-    // The name stays in the top bar and the entry names its destination.
-    const header = page.locator("header");
-    await expect(header.getByTitle(account.name)).toBeVisible();
+    // The name is visible text in the top bar, not only a hover title, and the
+    // entry names its destination.
+    const header = page.getByRole("banner");
+    await expect(header.getByText(account.name, { exact: true })).toBeVisible();
     const entry = header.getByRole("link", { name: "管理端" });
     await expect(entry).toHaveAttribute("href", landing);
     await expectNoWorkspaceSwitch(page);
@@ -98,8 +99,8 @@ test("TC-auth-14 employee: 不呈现管理端入口且直访管理端被改写",
   const employee = LOCAL_ACCOUNTS.employee;
   await signIn(page, employee.email);
 
-  const header = page.locator("header");
-  await expect(header.getByTitle(employee.name)).toBeVisible();
+  const header = page.getByRole("banner");
+  await expect(header.getByText(employee.name, { exact: true })).toBeVisible();
   await expect(header.getByRole("link", { name: "管理端" })).toHaveCount(0);
   await expectNoWorkspaceSwitch(page);
 

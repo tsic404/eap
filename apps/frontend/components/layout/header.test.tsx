@@ -27,6 +27,20 @@ const user = {
 };
 
 describe("Header", () => {
+  it("renders the user's name as text in the top bar", () => {
+    useAuthMock.mockReturnValue({ user, logout: vi.fn() });
+    renderWithIntl(<Header />);
+
+    expect(screen.getByText("张三")).toBeTruthy();
+  });
+
+  it("names the user menu by the name alone, not the avatar initial", () => {
+    useAuthMock.mockReturnValue({ user, logout: vi.fn() });
+    renderWithIntl(<Header />);
+
+    expect(screen.getByRole("button", { name: "张三" })).toBeTruthy();
+  });
+
   it("shows the authenticated user and a logout menu item", () => {
     useAuthMock.mockReturnValue({ user, logout: vi.fn() });
     renderWithIntl(<Header />);
