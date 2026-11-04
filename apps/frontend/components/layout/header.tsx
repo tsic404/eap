@@ -62,11 +62,15 @@ export function Header({ onMenuToggle }: HeaderProps) {
           align="right"
           triggerClassName="rounded-full"
           trigger={
-            <span
-              className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-sm font-medium text-primary-foreground"
-              title={displayName}
-            >
-              {avatarText}
+            <span className="flex items-center gap-2">
+              <span
+                aria-hidden="true"
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-sm font-medium text-primary-foreground"
+                title={displayName}
+              >
+                {avatarText}
+              </span>
+              <span className="text-sm text-foreground">{displayName}</span>
             </span>
           }
           items={menuItems}
