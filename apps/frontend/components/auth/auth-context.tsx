@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 
+import { SessionRoleProvider } from "@/components/auth/role-context";
 import { API_ROUTES, AUTH_ROUTES, ROUTES } from "@/lib/api-routes";
 import { publishAuthSignal, subscribeAuthSignal } from "@/lib/auth-channel";
 import { isPasswordChangeRequiredError, loginWithLocalAccount } from "@/lib/auth-service";
@@ -226,7 +227,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     ],
   );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <SessionRoleProvider role={user ? resolveRole(user.role) : null}>
+      <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+    </SessionRoleProvider>
+  );
 }
 
 export function useAuth(): AuthContextValue {
