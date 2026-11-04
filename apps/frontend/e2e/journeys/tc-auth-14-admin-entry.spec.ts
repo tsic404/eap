@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { loginViaSso } from "../helpers/api";
 import { LOCAL_ACCOUNTS, LOCAL_ACCOUNT_PASSWORD } from "../helpers/accounts.cjs";
 
 // TC-auth-14 (AC-49): the top bar carries one entry per area — the user
@@ -93,6 +94,18 @@ for (const { account, landing, heading } of ADMIN_ENTRIES) {
     await expect(page.getByRole("heading", { name: "用户工作区" })).toBeVisible();
   });
 }
+
+// TC-auth-14 reads "after signing in", so the SSO landing counts: the document
+// the redirect delivers must already carry the entry. Reloading first would
+// mask a top bar that renders without the role written client-side after login.
+test("TC-auth-14 SSO: 登录落地即出现管理端入口，不依赖 reload", async ({ page }) => {
+  test.setTimeout(120_000);
+  await loginViaSso(page);
+
+  const entry = page.getByRole("banner").getByRole("link", { name: "管理端" });
+  await expect(entry).toBeVisible();
+  await expect(entry).toHaveAttribute("href", "/admin");
+});
 
 test("TC-auth-14 employee: 不呈现管理端入口且直访管理端被改写", async ({ page }) => {
   test.setTimeout(120_000);
