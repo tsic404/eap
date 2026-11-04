@@ -44,6 +44,7 @@ vi.mock("@/lib/auth-channel", () => ({
 }));
 
 import { AuthProvider, useAuth } from "./auth-context";
+import { RoleProvider, useRole } from "./role-context";
 import { getAccessToken, setAccessToken } from "@/lib/token-store";
 
 const LEGACY_COOKIE = "eap_access_token";
@@ -78,6 +79,11 @@ function LogoutTrigger() {
 function AuthProbe() {
   const { user, isAuthenticated } = useAuth();
   return <span>{isAuthenticated ? user?.email : "anonymous"}</span>;
+}
+
+/** What a role-driven surface (the top bar) renders from the role context. */
+function RoleProbe() {
+  return <span data-testid="role">{useRole()}</span>;
 }
 
 const originalLocation = window.location;
@@ -188,6 +194,27 @@ describe("AuthProvider loadUser", () => {
 
     await waitFor(() => {
       expect(document.cookie).toContain(`${ROLE_COOKIE}=agent_admin`);
+    });
+  });
+
+  it("hands the profile read's role to role-driven surfaces without a reload", async () => {
+    // SSO lands on a document whose cookie still says employee (the browser
+    // writes eap_role only after this read answers); only the wiring below
+    // can put the account's own role in front of the top bar.
+    setAccessToken("test-token");
+    apiGetMock.mockResolvedValue(ALICE);
+
+    render(
+      <AuthProvider>
+        <RoleProvider role="employee">
+          <RoleProbe />
+        </RoleProvider>
+      </AuthProvider>,
+    );
+
+    expect(screen.getByTestId("role").textContent).toBe("employee");
+    await waitFor(() => {
+      expect(screen.getByTestId("role").textContent).toBe("agent_admin");
     });
   });
 
