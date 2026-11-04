@@ -17,6 +17,7 @@ export const TECH_TC_IDS = [
   "TC-kb-06",
   "TC-sec-02",
   "TC-tool-05",
+  "TC-auth-01",
   "TC-auth-02",
   "TC-auth-03",
   "TC-agent-01",
