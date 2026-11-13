@@ -104,8 +104,11 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       DIFY_API_BASE_URL: ${DIFY_API_BASE_URL:-http://dify-api:5001}
       DIFY_API_KEY: ${DIFY_API_KEY:-}
-      DIFY_CONSOLE_EMAIL: ${DIFY_CONSOLE_EMAIL:-}
-      DIFY_CONSOLE_PASSWORD: ${DIFY_CONSOLE_PASSWORD:-}
+      # C-131: the local family establishes the console account from these
+      # values, and readiness logs in with the same ones. Missing or empty is a
+      # configuration error, not an engine that quietly degrades.
+      DIFY_CONSOLE_EMAIL: ${DIFY_CONSOLE_EMAIL:?DIFY_CONSOLE_EMAIL must be set in .env}
+      DIFY_CONSOLE_PASSWORD: ${DIFY_CONSOLE_PASSWORD:?DIFY_CONSOLE_PASSWORD must be set in .env}
       # SSO: the MOCK_IDP_* trio (x-oidc-* above) picks between the stub and the
       # OIDC block; the redirect URI and the origin allow-list derive from the
       # URL the browser actually uses — NGINX_PORT only maps the published port,
@@ -140,8 +143,11 @@ services:
         ]
       interval: 10s
       timeout: 3s
-      start_period: 10s
-      retries: 5
+      # A fresh volume runs the whole Alembic chain before the app serves; on a
+      # loaded host that outlasts the default window, and the container must not
+      # read unhealthy mid-migration — `db-seed` waits on this health.
+      start_period: 300s
+      retries: 12
     restart: unless-stopped
 
   # Local-dev SSO: the same stub IdP the e2e/QA stacks use, serving discovery /
@@ -157,7 +163,7 @@ services:
       - ./apps/frontend/e2e/mock-idp.mjs:/app/mock-idp.mjs:ro
       # Imported unconditionally by mock-idp.mjs, so leaving it out makes the
       # container die on import; its model listener starts only when
-      # MOCK_MODEL_PORT is set (the QA variant sets it).
+      # MOCK_MODEL_PORT is set.
       - ./apps/frontend/e2e/mock-model.mjs:/app/mock-model.mjs:ro
     environment:
       MOCK_IDP_PORT: "${MOCK_IDP_PORT:-4000}"
@@ -166,16 +172,19 @@ services:
       # Same value as the backend: the stub signs id_tokens with this aud, so
       # the two have to agree (x-oidc-client-id above).
       OIDC_CLIENT_ID: *oidc-client-id
+      # The deterministic model endpoint the engine's provider points at
+      # (C-131). Kept off the host: only the compose network consumes it.
+      MOCK_MODEL_PORT: "4100"
+      MOCK_MODEL_NAME: mock-gpt
     command: ["node", "mock-idp.mjs"]
     ports:
       - "${MOCK_IDP_PORT:-4000}:${MOCK_IDP_PORT:-4000}"
     healthcheck:
+      # Both listeners, because `db-seed` registers the model this stub serves.
       test:
         [
-          "CMD",
-          "wget",
-          "-qO-",
-          "http://127.0.0.1:${MOCK_IDP_PORT:-4000}/.well-known/openid-configuration",
+          "CMD-SHELL",
+          "wget -qO- http://127.0.0.1:${MOCK_IDP_PORT:-4000}/.well-known/openid-configuration >/dev/null && wget -qO- http://127.0.0.1:4100/healthz >/dev/null",
         ]
       interval: 10s
       timeout: 3s
@@ -186,8 +195,13 @@ services:
   # domain (sso_domain), so the `acme.com` tenant and alice's agent_admin user
   # must exist before the first SSO login. With local login enabled (this stack
   # declares it on) the same container seeds the first platform administrator
-  # as a local account that must change its password (C-117). Idempotent;
-  # waits for the backend so the migrated schema is in place.
+  # as a local account that must change its password (C-117). Its second phase
+  # (app.dify_bootstrap) establishes the engine prerequisites of C-131 — console
+  # account, model plugin, deterministic workspace provider — from this stack's
+  # own env file, so no deployment has to supply engine credentials. Idempotent;
+  # waits for the backend so the migrated schema is in place, and for the
+  # engine, its plugin daemon and the stub so the model it registers is
+  # answerable.
   db-seed:
     image: eap-backend:local
     build:
@@ -199,9 +213,30 @@ services:
       LOCAL_LOGIN_ENABLED: "true"
       LOCAL_ADMIN_EMAIL: ${LOCAL_ADMIN_EMAIL:-admin@acme.com}
       LOCAL_ADMIN_PASSWORD: ${LOCAL_ADMIN_PASSWORD:-Local-Admin-1}
-    command: ["python", "-m", "app.bootstrap"]
+      DIFY_API_BASE_URL: ${DIFY_API_BASE_URL:-http://dify-api:5001}
+      DIFY_CONSOLE_EMAIL: ${DIFY_CONSOLE_EMAIL:?DIFY_CONSOLE_EMAIL must be set in .env}
+      DIFY_CONSOLE_PASSWORD: ${DIFY_CONSOLE_PASSWORD:?DIFY_CONSOLE_PASSWORD must be set in .env}
+      # The credential slot for the workspace model the in-stack stub serves;
+      # mock-model.mjs ignores its value.
+      DIFY_MODEL_API_KEY: ${DIFY_MODEL_API_KEY:?DIFY_MODEL_API_KEY must be set in .env}
+      DIFY_MODEL_NAME: mock-gpt
+      DIFY_EMBEDDING_NAME: mock-embedding
+      DIFY_MODEL_BASE_URL: http://mock-idp:4100/v1
+      # Read only when the console rejects the env file's password (a
+      # regenerated or restored .env): the account row is aligned with it.
+      DIFY_DB_URL: ${DIFY_DB_URL:-postgresql://${POSTGRES_USER:-eap}:${POSTGRES_PASSWORD:-eap_password}@postgres:5432/dify}
+      DIFY_BOOTSTRAP_TIMEOUT: "900"
+    command: ["sh", "-c", "python -m app.bootstrap && python -m app.dify_bootstrap"]
     depends_on:
       backend:
+        condition: service_healthy
+      # C-131: the engine phase needs the engine's schema at head (the api is
+      # the only migrator), its plugin daemon, and the stub the model points at.
+      dify-api:
+        condition: service_healthy
+      plugin-daemon:
+        condition: service_healthy
+      mock-idp:
         condition: service_healthy
     restart: "no"
 
@@ -392,7 +427,12 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-eap} -d ${POSTGRES_DB:-eap}"]
+      # -h 127.0.0.1, not the socket: the image's entrypoint serves a temporary
+      # unix-socket-only server while it initialises a fresh volume, and a
+      # socket probe marks the container healthy seconds before the real server
+      # starts — the one-shots then meet "connection refused" and the bring-up
+      # aborts on a fresh checkout.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-eap} -d ${POSTGRES_DB:-eap}"]
       interval: 10s
       timeout: 5s
       retries: 5

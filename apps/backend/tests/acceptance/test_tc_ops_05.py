@@ -16,7 +16,6 @@ detail, including per-dependency flagging and the time caps, is TC-tech-ops-01).
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import posixpath
@@ -28,6 +27,8 @@ from typing import Any, cast
 
 import httpx
 import pytest
+
+from app import dify_bootstrap
 
 TC_ID = "TC-ops-05"
 
@@ -135,6 +136,16 @@ def _env_missing(tmp_path: Path, key: str) -> Path:
     path = tmp_path / f"missing-{key}.env"
     path.write_text("\n".join(kept) + "\n", encoding="utf-8")
     return path
+
+
+def _template_values() -> dict[str, str]:
+    """The values the committed template assigns, as compose reads them."""
+    template_keys = {
+        line.split("=", 1)[0].strip(): line.split("=", 1)[1].strip()
+        for line in _ENV_TEMPLATE.read_text(encoding="utf-8").splitlines()
+        if re.match(r"^[ \t]*[A-Z][A-Z0-9_]*[ \t]*=", line)
+    }
+    return template_keys
 
 
 # ── ① compose container baseline (resident 10, one-shot 3) ──────────────────
@@ -289,25 +300,153 @@ def test_engine_api_is_the_only_migrator_and_gates_the_worker(compose: Path) -> 
     assert services["dify-worker"]["depends_on"]["dify-api"]["condition"] == "service_healthy"
 
 
-def test_qa_seed_starts_only_on_a_healthy_engine_api() -> None:
-    """The seed's setup call is the one that fails on a schema behind head, so
-    its dependency on the api's health is what turns "migrated" into its
-    precondition."""
-    services = _compose_json(_COMPOSE_QA, _ENV_TEMPLATE)["services"]
-    assert services["db-seed"]["depends_on"]["dify-api"]["condition"] == "service_healthy"
+@pytest.mark.parametrize("compose", [_COMPOSE_LOCAL, _COMPOSE_QA], ids=["local", "qa"])
+def test_local_family_seed_establishes_the_engine_in_the_same_one_shot(compose: Path) -> None:
+    """C-131: the engine prerequisites travel in the existing seed container.
 
-
-def test_qa_seed_starts_only_on_a_healthy_stub_identity_provider() -> None:
-    """The engine phase registers the deterministic model the stub serves.
-
-    A stub recreated while the seed runs leaves `mock-idp` unresolvable for the
-    seconds its replacement takes to start, and the registration fails with a
-    400 that nothing else in the stack observes. The dependency is what keeps
-    compose from releasing the seed into that window.
+    Both local-family shapes create the console account and the workspace
+    provider from their own env file, so a plain bring-up yields an engine the
+    platform can create agents and knowledge bases against. No container is
+    added: the one-shot keeps its tenant/admin seed first and runs the engine
+    phase second, and still exits instead of being supervised.
     """
-    services = _compose_json(_COMPOSE_QA, _ENV_TEMPLATE)["services"]
-    dependencies = services["db-seed"]["depends_on"]
-    assert dependencies.get("mock-idp", {}).get("condition") == "service_healthy"
+    service = _compose_json(compose, _ENV_TEMPLATE)["services"]["db-seed"]
+    command = " ".join(service["command"])
+    assert "app.bootstrap" in command, compose.name
+    assert "app.dify_bootstrap" in command, compose.name
+    assert command.index("app.bootstrap") < command.index("app.dify_bootstrap"), compose.name
+    assert service["restart"] == "no"
+
+
+@pytest.mark.parametrize("compose", [_COMPOSE_LOCAL, _COMPOSE_QA], ids=["local", "qa"])
+def test_local_family_seed_starts_only_on_a_ready_engine(compose: Path) -> None:
+    """The engine phase needs a migrated engine, its plugin daemon and the stub.
+
+    The seed's setup call is the one that fails on a schema behind head, so the
+    health of `dify-api` (the only migrator) is what turns "migrated" into a
+    precondition; the daemon holds the model plugin; and a stub recreated while
+    the seed runs leaves the registered model endpoint unresolvable for the
+    seconds its replacement takes to start. Each missing dependency fails the
+    one-shot on a window nothing else in the stack observes.
+    """
+    dependencies = _compose_json(compose, _ENV_TEMPLATE)["services"]["db-seed"]["depends_on"]
+    for service in ("dify-api", "plugin-daemon", "mock-idp"):
+        assert dependencies.get(service, {}).get("condition") == "service_healthy", (
+            compose.name,
+            service,
+        )
+
+
+@pytest.mark.parametrize("compose", [_COMPOSE_LOCAL, _COMPOSE_QA], ids=["local", "qa"])
+def test_local_family_stub_serves_the_model_the_seed_registers(compose: Path) -> None:
+    """The provider is the deterministic stub, answering where the seed points.
+
+    The seed registers `http://mock-idp:<port>/v1`, so the stub has to listen on
+    that port and its health has to cover the model endpoint — otherwise the
+    dependency above watches the identity listener only and the registration can
+    land on nothing listening. Both shapes carry the one stub implementation.
+    """
+    services = _compose_json(compose, _ENV_TEMPLATE)["services"]
+    stub = services["mock-idp"]["environment"]
+    port = stub["MOCK_MODEL_PORT"]
+    seed = services["db-seed"]["environment"]
+    assert seed["DIFY_MODEL_NAME"] == stub["MOCK_MODEL_NAME"], compose.name
+    assert seed["DIFY_MODEL_BASE_URL"] == f"http://mock-idp:{port}/v1", compose.name
+    probe = " ".join(services["mock-idp"]["healthcheck"]["test"])
+    assert f"127.0.0.1:{port}/healthz" in probe, compose.name
+
+
+@pytest.mark.parametrize("compose", [_COMPOSE_LOCAL, _COMPOSE_QA], ids=["local", "qa"])
+def test_local_family_console_credentials_are_the_env_file_values(compose: Path) -> None:
+    """C-131: the account is created from the env file, readiness reads the same.
+
+    The seed creates (or aligns) the console account and the backend's readiness
+    probe logs in with it; both must resolve to the same env-file values, or the
+    probe judges an account nobody established.
+    """
+    values = _template_values()
+    services = _compose_json(compose, _ENV_TEMPLATE)["services"]
+    for service in ("backend", "db-seed"):
+        environment = services[service]["environment"]
+        assert environment["DIFY_CONSOLE_EMAIL"] == values["DIFY_CONSOLE_EMAIL"], (
+            compose.name,
+            service,
+        )
+        assert environment["DIFY_CONSOLE_PASSWORD"] == values["DIFY_CONSOLE_PASSWORD"], (
+            compose.name,
+            service,
+        )
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["DIFY_CONSOLE_EMAIL", "DIFY_CONSOLE_PASSWORD", "DIFY_MODEL_API_KEY"],
+)
+def test_local_family_fails_by_name_when_an_engine_key_is_missing(
+    tmp_path: Path, key: str
+) -> None:
+    """A missing engine key fails the resolution instead of booting without it.
+
+    Empty console credentials leave the ready probe reporting an error the
+    operator has to trace, and leave the seed nothing to create the account
+    from; the local family therefore declares them fail-if-missing like its
+    other required keys. Only the key under test is dropped, so compose has to
+    name it.
+    """
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "--env-file",
+            str(_env_missing(tmp_path, key)),
+            "-f",
+            str(_COMPOSE_LOCAL),
+            "config",
+            "-q",
+        ],
+        cwd=_REPO_ROOT,
+        env=_compose_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0, "the local stack must not resolve without an engine key"
+    assert key in result.stderr
+
+
+def test_template_console_password_satisfies_the_engine_rule() -> None:
+    """A plain copy of the template must be able to establish the console account.
+
+    The engine's setup validator requires at least 8 characters with a letter
+    and a digit (``libs/password.py`` in the pinned image). A placeholder outside
+    that rule turns the documented `cp .env.example .env` + `up` path into a
+    seed that fails on the engine's answer, with no account created.
+    """
+    password = _template_values()["DIFY_CONSOLE_PASSWORD"]
+    assert re.fullmatch(r"(?=.*[a-zA-Z])(?=.*\d).{8,}", password), password
+
+
+def test_non_local_orchestrations_carry_no_engine_bootstrap() -> None:
+    """C-90/C-131: outside the local family nothing establishes an engine account.
+
+    Production keeps the deployment-supplied console account and model
+    providers; the stub's credential slot, the engine-phase timeout and the
+    account-alignment database path are local-family values and must not resolve
+    there, nor may the production shape run the bootstrap.
+    """
+    resolved = json.dumps(_compose_json(_COMPOSE_PROD, _ENV_TEMPLATE))
+    text = _COMPOSE_PROD.read_text(encoding="utf-8")
+    assert "app.dify_bootstrap" not in text
+    for key in (
+        "DIFY_DB_URL",
+        "DIFY_MODEL_API_KEY",
+        "DIFY_MODEL_BASE_URL",
+        "DIFY_MODEL_NAME",
+        "DIFY_EMBEDDING_NAME",
+        "DIFY_BOOTSTRAP_TIMEOUT",
+    ):
+        assert key not in text, key
+        assert key not in resolved, key
 
 
 _E2E_SCRIPT = _REPO_ROOT / "scripts" / "e2e.sh"
@@ -446,10 +585,9 @@ def test_production_shape_rejects_an_empty_env_file() -> None:
     assert result.stderr
 
 
-# ── ④ QA bring-up bootstrap scripts ─────────────────────────────────────────
+# ── ④ local-family bring-up bootstrap ───────────────────────────────────────
 
 _QA_SECRETS_SCRIPT = _REPO_ROOT / "scripts" / "gen-qa-secrets.sh"
-_QA_DIFY_BOOTSTRAP = _REPO_ROOT / "deploy" / "qa" / "dify_bootstrap.py"
 _ENV_ASSIGNMENT = re.compile(r"^[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)$")
 
 
@@ -526,45 +664,56 @@ def test_qa_compose_rejects_a_secret_file_missing_a_required_key(tmp_path: Path)
     kept = [
         line
         for line in env_file.read_text(encoding="utf-8").splitlines()
-        if not line.startswith("QA_MODEL_API_KEY=")
+        if not line.startswith("DIFY_MODEL_API_KEY=")
     ]
     env_file.write_text("\n".join(kept) + "\n", encoding="utf-8")
 
     result = _qa_compose_config(env_file)
 
     assert result.returncode != 0
-    assert "QA_MODEL_API_KEY" in result.stderr
+    assert "DIFY_MODEL_API_KEY" in result.stderr
 
 
 class _EngineConsole:
-    """The console calls ``ensure_model`` makes, answering per step."""
+    """The console calls the model steps make, answering per step and recording
+    the payloads the engine would persist."""
 
     def __init__(
-        self, *, provider: str, model: str, enable_status: int, default_status: int
+        self,
+        *,
+        provider: str,
+        models: tuple[str, ...],
+        enable_status: int,
+        default_status: int,
     ) -> None:
-        self._provider = provider
-        self._model = model
+        self.provider = provider
+        self.models = models
+        self.requests: list[tuple[str, str, dict[str, object]]] = []
         self._enable_status = enable_status
         self._default_status = default_status
 
-    def request(self, method: str, path: str, **_kwargs: object) -> httpx.Response:
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, object] | None = None,
+        **_kwargs: object,
+    ) -> httpx.Response:
+        self.requests.append((method, path, json_body or {}))
         if path.endswith("/models/enable"):
             return httpx.Response(self._enable_status, text="enable rejected")
         if path.endswith("/default-model"):
             return httpx.Response(self._default_status, text="default rejected")
+        if path.endswith("/models/credentials"):
+            return httpx.Response(201, json={})
         if path.endswith("/model-providers"):
-            return httpx.Response(200, json={"data": [{"provider": self._provider}]})
+            return httpx.Response(200, json={"data": [{"provider": self.provider}]})
         if path.endswith("/models"):
-            return httpx.Response(200, json={"data": [{"model": self._model}]})
+            return httpx.Response(
+                200, json={"data": [{"model": name} for name in self.models]}
+            )
         raise AssertionError(f"unexpected console call: {method} {path}")
-
-
-def _load_dify_bootstrap() -> Any:
-    spec = importlib.util.spec_from_file_location("qa_dify_bootstrap", _QA_DIFY_BOOTSTRAP)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 @pytest.mark.parametrize(
@@ -575,32 +724,193 @@ def _load_dify_bootstrap() -> Any:
         pytest.param(200, 500, "default model", id="default-rejected"),
     ],
 )
-def test_qa_engine_bootstrap_exits_non_zero_when_a_model_step_is_rejected(
-    enable_status: int, default_status: int, expected: str
+def test_engine_bootstrap_exits_non_zero_when_a_model_step_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, enable_status: int, default_status: int, expected: str
 ) -> None:
     """The one-shot's exit code is part of the readiness baseline (C-88), so a
     rejected enable / default-model step must fail the bootstrap. Both are
     configuration later requests depend on: finishing 0 would publish a stack
     that only fails at the first knowledge-base or app call."""
-    module = _load_dify_bootstrap()
+    monkeypatch.setattr(dify_bootstrap, "MODEL_API_KEY", "test-model-key")
     console = _EngineConsole(
-        provider=str(module.MODEL_PROVIDER),
-        model=str(module.MODEL_NAME),
+        provider=str(dify_bootstrap.MODEL_PROVIDER),
+        models=(),
         enable_status=enable_status,
         default_status=default_status,
     )
 
     if not expected:
-        module.ensure_model(console)
+        dify_bootstrap.ensure_models(console)  # type: ignore[arg-type]
         return
 
     with pytest.raises(SystemExit) as caught:
-        module.ensure_model(console)
+        dify_bootstrap.ensure_models(console)  # type: ignore[arg-type]
     assert caught.value.code not in (None, 0)
     assert expected in str(caught.value.code)
 
 
-def test_qa_engine_bootstrap_logs_in_on_a_client_created_after_setup(
+def test_engine_bootstrap_registers_and_defaults_the_chat_and_embedding_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C-131: one usable provider, with the models the platform resolves.
+
+    The app path resolves the default LLM and a `high_quality` knowledge base
+    resolves the default embedding model before the engine creates the dataset;
+    a provider carrying only the chat model leaves knowledge-base creation
+    failing after the seed reported success. Both are the deterministic stub's
+    models, registered under the one provider.
+    """
+    monkeypatch.setattr(dify_bootstrap, "MODEL_API_KEY", "test-model-key")
+    console = _EngineConsole(
+        provider=str(dify_bootstrap.MODEL_PROVIDER),
+        models=(),
+        enable_status=200,
+        default_status=200,
+    )
+
+    dify_bootstrap.ensure_models(console)  # type: ignore[arg-type]
+
+    added = [
+        body
+        for method, path, body in console.requests
+        if method == "POST" and path.endswith("/models/credentials")
+    ]
+    assert {(body["model"], body["model_type"]) for body in added} == {
+        (dify_bootstrap.MODEL_NAME, "llm"),
+        (dify_bootstrap.EMBEDDING_NAME, "text-embedding"),
+    }
+    defaults = next(
+        body for method, path, body in console.requests if path.endswith("/default-model")
+    )
+    default_settings = defaults["model_settings"]
+    assert isinstance(default_settings, list)
+    assert {setting["model_type"] for setting in default_settings} == {
+        "llm",
+        "text-embedding",
+    }
+
+
+class _RecordingSetupConsole:
+    """The setup call's request, answering from a scripted status."""
+
+    def __init__(self, step: str, setup_status: int, setup_body: str) -> None:
+        self._step = step
+        self._setup_status = setup_status
+        self._setup_body = setup_body
+        self.calls: list[tuple[str, str]] = []
+
+    def request(self, method: str, path: str, **_kwargs: object) -> httpx.Response:
+        self.calls.append((method, path))
+        if method == "GET" and path.endswith("/setup"):
+            return httpx.Response(200, json={"step": self._step})
+        return httpx.Response(self._setup_status, text=self._setup_body)
+
+
+def test_engine_bootstrap_fails_when_the_engine_rejects_the_setup_call() -> None:
+    """An unusable console password has to fail the one-shot.
+
+    The engine validates the password before it creates the account; treating a
+    rejected setup as "already done" would leave the stack reporting ready with
+    no account to log in with.
+    """
+    console = _RecordingSetupConsole(
+        "not_started", 400, "Password must contain letters and numbers"
+    )
+
+    with pytest.raises(SystemExit) as caught:
+        dify_bootstrap.ensure_setup(console)  # type: ignore[arg-type]
+    assert caught.value.code not in (None, 0)
+    assert "console setup failed" in str(caught.value.code)
+
+
+def test_engine_bootstrap_keeps_the_console_password_equal_to_the_env_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C-131: a re-run after the env file changed ends logged in, not rejected.
+
+    The engine compares a password only at login and changes it behind a call
+    that needs the current one, so an env file regenerated after the account was
+    created (``make setup-env`` rotating the value, a restored file) cannot log
+    in on its own. The bootstrap aligns the account and retries once; finishing
+    without a session would leave readiness reporting what the seed had already
+    seen.
+    """
+    events: list[str] = []
+    outcomes: list[Exception | None] = [
+        dify_bootstrap.ConsoleCredentialRejected(401, "Invalid email or password."),
+        None,
+    ]
+
+    class ScriptedConsole:
+        def login(self) -> None:
+            events.append("login")
+            outcome = outcomes.pop(0)
+            if outcome is not None:
+                raise outcome
+
+    monkeypatch.setattr(
+        dify_bootstrap, "align_console_password", lambda: events.append("align")
+    )
+
+    dify_bootstrap.ensure_console_session(ScriptedConsole())  # type: ignore[arg-type]
+
+    assert events == ["login", "align", "login"]
+
+
+def test_engine_bootstrap_fails_when_the_aligned_password_is_still_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The retry is the last word: a still-rejected login fails the one-shot.
+
+    Silently continuing would leave the plugin and model steps answering 401 and
+    publish a stack whose readiness item is negative for a reason the operator
+    was never shown.
+    """
+    monkeypatch.setattr(dify_bootstrap, "align_console_password", lambda: None)
+
+    class RejectingConsole:
+        def login(self) -> None:
+            raise dify_bootstrap.ConsoleCredentialRejected(401, "Invalid email or password.")
+
+    with pytest.raises(SystemExit) as caught:
+        dify_bootstrap.ensure_console_session(RejectingConsole())  # type: ignore[arg-type]
+    assert caught.value.code not in (None, 0)
+    assert "DIFY_CONSOLE_EMAIL" in str(caught.value.code)
+
+
+def test_engine_bootstrap_refuses_to_align_without_the_engine_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Alignment without its database would report a password it did not set."""
+    monkeypatch.setattr(dify_bootstrap, "DIFY_DB_URL", "")
+
+    with pytest.raises(SystemExit) as caught:
+        dify_bootstrap.align_console_password()
+    assert "DIFY_DB_URL" in str(caught.value.code)
+
+
+def test_engine_bootstrap_refuses_to_register_a_model_without_its_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing model credential must fail the bootstrap, not register nothing.
+
+    C-131 requires the workspace to hold at least one usable provider before the
+    one-shot exits 0; skipping the registration would leave exactly the state
+    this container exists to remove."""
+    monkeypatch.setattr(dify_bootstrap, "MODEL_API_KEY", "")
+    console = _EngineConsole(
+        provider=str(dify_bootstrap.MODEL_PROVIDER),
+        models=(),
+        enable_status=200,
+        default_status=200,
+    )
+
+    with pytest.raises(SystemExit) as caught:
+        dify_bootstrap.ensure_models(console)  # type: ignore[arg-type]
+    assert "DIFY_MODEL_API_KEY" in str(caught.value.code)
+
+
+def test_engine_bootstrap_logs_in_on_a_client_created_after_setup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The engine's working session is established after setup, on its own client.
@@ -611,7 +921,6 @@ def test_qa_engine_bootstrap_logs_in_on_a_client_created_after_setup(
     then answers 401; a session obtained afterwards is the one the remaining
     steps can rely on.
     """
-    module = _load_dify_bootstrap()
     events: list[str] = []
     clients: list[int] = []
 
@@ -629,27 +938,36 @@ def test_qa_engine_bootstrap_logs_in_on_a_client_created_after_setup(
         def login(self) -> None:
             events.append(f"login:{self.index}")
 
-    monkeypatch.setattr(module, "Console", RecordingConsole)
-    monkeypatch.setattr(module, "wait_for_engine", lambda: events.append("wait"))
+    monkeypatch.setattr(dify_bootstrap, "Console", RecordingConsole)
+    monkeypatch.setattr(dify_bootstrap, "wait_for_engine", lambda: events.append("wait"))
     monkeypatch.setattr(
-        module, "ensure_setup", lambda console: events.append(f"setup:{console.index}")
+        dify_bootstrap,
+        "ensure_setup",
+        lambda console: events.append(f"setup:{console.index}"),
     )
     monkeypatch.setattr(
-        module,
+        dify_bootstrap,
+        "ensure_console_session",
+        lambda console: events.append(f"session:{console.index}"),
+    )
+    monkeypatch.setattr(
+        dify_bootstrap,
         "ensure_model_plugin",
         lambda console: events.append(f"plugin:{console.index}"),
     )
     monkeypatch.setattr(
-        module, "ensure_model", lambda console: events.append(f"model:{console.index}")
+        dify_bootstrap,
+        "ensure_models",
+        lambda console: events.append(f"model:{console.index}"),
     )
 
-    module.main()
+    dify_bootstrap.main()
 
     assert events == [
         "wait",
         "setup:0",
         "close:0",
-        "login:1",
+        "session:1",
         "plugin:1",
         "model:1",
         "close:1",

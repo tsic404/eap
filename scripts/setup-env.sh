@@ -21,7 +21,6 @@ RANDOM_SECRETS=(
   JWT_PRIVATE_KEY
   JWT_PUBLIC_KEY
   DIFY_SECRET_KEY
-  DIFY_CONSOLE_PASSWORD
   PLUGIN_DAEMON_KEY
   PLUGIN_DIFY_INNER_API_KEY
 )
@@ -96,6 +95,11 @@ random_issuer() { printf 'https://%s.invalid' "$(openssl rand -hex 16)"; }
 
 random_console_email() { printf 'dify-console-%s@example.com' "$(openssl rand -hex 8)"; }
 
+# Dify's setup validator requires at least 8 characters with a letter and a
+# digit; a plain hex secret may miss the digit, and the local seed would then
+# fail on the rule instead of creating the console account.
+random_console_password() { printf 'Dify%s' "$(openssl rand -hex 16)"; }
+
 if [[ ! -f "${ENV_FILE}" ]]; then
   cp "${ENV_EXAMPLE}" "${ENV_FILE}"
 fi
@@ -106,5 +110,6 @@ done
 
 fill_placeholder OIDC_ISSUER random_issuer
 fill_placeholder DIFY_CONSOLE_EMAIL random_console_email
+fill_placeholder DIFY_CONSOLE_PASSWORD random_console_password
 
 echo ".env ready: template placeholders replaced where empty or left as shipped."
