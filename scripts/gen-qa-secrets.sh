@@ -58,7 +58,7 @@ ensure_value WEAVIATE_API_KEY random_secret
 ensure_value PLUGIN_DAEMON_KEY random_secret
 ensure_value PLUGIN_DIFY_INNER_API_KEY random_secret
 ensure_value DIFY_CONSOLE_PASSWORD random_console_password
-ensure_value QA_MODEL_API_KEY random_secret
+ensure_value DIFY_MODEL_API_KEY random_secret
 
 if [[ -z "$(file_value DIFY_CONSOLE_EMAIL)" ]]; then
   write_value DIFY_CONSOLE_EMAIL qa-console@example.com

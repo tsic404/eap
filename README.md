@@ -40,9 +40,11 @@ docker compose up -d
 `make setup-env` 幂等：`.env` 不存在时从 `.env.example` 复制，否则原地替换仍为空、或仍是
 `.env.example` 占位值（`replace-me-*`）的项——`WEAVIATE_API_KEY` / `DIFY_SECRET_KEY` /
 `PLUGIN_DAEMON_KEY` / `PLUGIN_DIFY_INNER_API_KEY` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` /
-`DIFY_CONSOLE_PASSWORD` / `JWT_PRIVATE_KEY` / `JWT_PUBLIC_KEY` 用 `openssl rand -hex 32` 生成，
-`OIDC_ISSUER` 与 `DIFY_CONSOLE_EMAIL` 生成随机不可解析值；面向外部系统的生成值（IdP、Dify 控制台、
-签名密钥）故意不可用，生产须按部署清单换成真实值。
+`JWT_PRIVATE_KEY` / `JWT_PUBLIC_KEY` 用 `openssl rand -hex 32` 生成，
+`OIDC_ISSUER` 与 `DIFY_CONSOLE_EMAIL` 生成随机不可解析值，`DIFY_CONSOLE_PASSWORD` 生成满足
+引擎口令规则（字母 + 数字、至少 8 位）的随机值；面向外部系统的生成值（IdP、Dify 控制台、
+签名密钥）故意不可用，生产须按部署清单换成真实值。本地族不同：`db-seed` 用文件里的
+控制台凭据实际建号，所以本地复制模板后即可登录引擎控制台。
 `make setup-env` 另外生成 RS256 JWT 密钥对到 `deploy/keys/`（gitignored，compose 以只读 secret
 挂载给 backend，本地签名用它，不读 `.env` 里的 PEM 槽位）；已填写/已生成的值不会被覆盖。
 不要跳过这一步：占位值能让 compose 的 `${VAR:?}` 校验通过，但 Weaviate / Dify / plugin-daemon
@@ -70,9 +72,15 @@ prod 占位值不参与；单机 `docker compose up -d` 即可用 `alice@acme.co
 - `dify-db-init`：幂等创建 `dify` 与 `dify_plugin` 两个库（后者供 plugin daemon 使用），
   每次 `up` 都跑，因此旧数据卷也能补建。
 - `init_permissions`：把 plugin daemon 存储卷 chown 给 uid 1001（该镜像以非 root 运行）。
-- `db-seed`：以 backend 镜像运行 `app.bootstrap`，幂等种入 mock IdP 身份映射的
+- `db-seed`：以 backend 镜像先运行 `app.bootstrap`，幂等种入 mock IdP 身份映射的
   `acme.com` 租户与 `alice@acme.com`（agent_admin）；本地登录开启时还种入首个平台管理员
-  （本地账号、须改密），平台已有平台管理员时不创建。在 backend healthy（schema 迁移完成）后执行。
+  （本地账号、须改密），平台已有平台管理员时不创建。随后运行 `app.dify_bootstrap` 建立
+  C-131 的引擎前提：用 `.env` 的 `DIFY_CONSOLE_EMAIL` / `DIFY_CONSOLE_PASSWORD` 创建引擎
+  控制台账号（重复引导时把口令对齐到文件当前值）、安装固定版本的 OpenAI 兼容模型插件、
+  把 `mock-idp` 内的确定性对话模型与嵌入模型注册为工作区默认模型（知识库的
+  `high_quality` 索引解析默认嵌入模型）。任一步失败即引导失败，就绪判定不达。
+  它在 backend（schema 迁移完成）、`dify-api`（引擎迁移唯一执行者）、`plugin-daemon` 与
+  `mock-idp`（模型端点所在桩）全部 healthy 后执行。
 
 Dify 1.x 的模型/工具插件不在 api 进程内，而由 `plugin-daemon` 托管，并使用独立的
 `dify_plugin` 库；api / worker 通过 `PLUGIN_DAEMON_URL` + `PLUGIN_DAEMON_KEY` 访问它，
@@ -169,8 +177,8 @@ make qa-down   # 停止并移除全部服务（保留数据卷）
 
 说明：
 
-- `make qa-up` 幂等：JWT 密钥（`deploy/qa/keys/`）与栈密钥（`deploy/qa/qa.env`）首次生成后复用，均已在 gitignore 内；仓库不落密钥。移除了 `deploy/qa/qa.env` 时须连同数据卷一起清理（`down -v`）再重建，否则引擎控制台账号与生成值不再匹配。
-- `db-seed` 在种入租户 / 账号后调用 `deploy/qa/dify_bootstrap.py`：创建引擎控制台账号、安装固定版本的 OpenAI 兼容模型插件，并把 `mock-idp` 容器内确定性模型注册为工作区模型。它的一次性退出码属于就绪基线（C-88），引擎配置不完整时不会伪装成就绪。引擎迁移由 `dify-api` 独占、在对外服务前完成，`dify-worker` 与 `db-seed` 的引擎阶段都等它健康后才开始，因此 setup 不会撞上尚未迁移的库；引擎阶段注册的确定性模型由桩容器提供，`db-seed` 因而也等桩健康，`make e2e` 把桩的重建放在整栈启动之前，重建空窗不会落在引导期间。setup 之后另建会话登录，配置不落在 setup 调用的客户端上。工作区模型为 `langgenius/openai_api_compatible/openai_api_compatible` / `mock-gpt`，创建智能体时直接引用。
+- `make qa-up` 幂等：JWT 密钥（`deploy/qa/keys/`）与栈密钥（`deploy/qa/qa.env`）首次生成后复用，均已在 gitignore 内；仓库不落密钥。控制台口令与生成值不一致时（重生成或恢复了 `qa.env`），下一次引导会把账号口令对齐到文件当前值；引擎会话密钥等仍由数据卷保管，丢弃 `qa.env` 后这些值无法还原，需连同数据卷一起清理（`down -v`）再重建。
+- `db-seed` 在种入租户 / 账号后运行 `app.dify_bootstrap`（与本地主栈同一个模块）：创建引擎控制台账号、安装固定版本的 OpenAI 兼容模型插件，并把 `mock-idp` 容器内确定性对话与嵌入模型注册为工作区默认模型。它的一次性退出码属于就绪基线（C-88），引擎配置不完整时不会伪装成就绪。引擎迁移由 `dify-api` 独占、在对外服务前完成，`dify-worker` 与 `db-seed` 的引擎阶段都等它健康后才开始，因此 setup 不会撞上尚未迁移的库；引擎阶段注册的确定性模型由桩容器提供，`db-seed` 因而也等桩健康，`make e2e` 把桩的重建放在整栈启动之前，重建空窗不会落在引导期间。setup 之后另建会话登录，配置不落在 setup 调用的客户端上。工作区模型为 `langgenius/openai_api_compatible/openai_api_compatible` / `mock-gpt`，创建智能体时直接引用。
 - 容器化后浏览器与后端分处不同网络视角：后端经 `OIDC_DISCOVERY_URL` 走 compose 网络访问 IdP 的 token/userinfo/JWKS，同时按浏览器侧 `OIDC_ISSUER` 校验 id_token（对应 `mock-idp.mjs` 的 `MOCK_IDP_ISSUER` / `MOCK_IDP_BACKEND_BASE`）。
 - 连数据卷一起彻底清理：`docker compose --env-file deploy/qa/qa.env -f docker-compose.qa.yml down -v`。
 
